@@ -1,0 +1,54 @@
+{
+  "api": {
+    "host": "127.0.0.1",
+    "port": 30022,
+    "corsOrigins": [
+      "http://127.0.0.1:5173",
+      "http://127.0.0.1:5174",
+      "http://localhost:5173",
+      "http://localhost:5174"
+    ],
+    "jsonLimit": "20mb",
+    "caseDataDir": "data/cases",
+    "uploadFieldName": "pcap",
+    "payloadTrim": {
+      "enabled": true,
+      "editcapCommand": "editcap",
+      "snaplen": 128
+    },
+    "packetParserMcp": {
+      "command": "npm",
+      "args": ["run", "dev", "-w", "mcp/packet-parser"]
+    },
+    "packetNormalizerMcp": {
+      "command": "npm",
+      "args": ["run", "dev", "-w", "mcp/packet-normalizer"]
+    },
+    "chainBuilderMcp": {
+      "command": "npm",
+      "args": ["run", "dev", "-w", "mcp/chain-builder"]
+    },
+    "caseGraphMcp": {
+      "command": "npm",
+      "args": ["run", "dev", "-w", "mcp/case-graph"]
+    }
+  },
+  "llm": {
+    "baseURL": "https://ark.cn-beijing.volces.com/api/coding/v3",
+    "model": "doubao-seed-2.0-pro",
+    "useResponses": false,
+    "traceIncludeSensitiveData": false
+  },
+  "mcp": {
+    "packetParser": {
+      "tsharkCommand": "tshark",
+      "maxBufferBytes": 10485760
+    }
+  },
+  "web": {
+    "host": "127.0.0.1",
+    "port": 5173,
+    "apiTarget": "http://127.0.0.1:30022",
+    "defaultQuestion": "最可能的断点在哪里？"
+  }
+}
