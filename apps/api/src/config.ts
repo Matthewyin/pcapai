@@ -42,15 +42,42 @@ const defaults = JSON.parse(readFileSync(configPath, "utf8")) as {
       editcapCommand: string;
       snaplen: number;
     };
-    packetParserMcp: {
+    query: {
+      candidateGroupLimit: number;
+      queryPacketLimit: number;
+      conversationPacketLimit: number;
+      retainedQueryRunLimit: number;
+    };
+    diagnosis: {
+      shortConversationPacketThreshold: number;
+      retransmissionBurstThreshold: number;
+      duplicateAckBurstThreshold: number;
+      evidencePacketSampleLimit: number;
+      transportEvidencePacketSampleLimit: number;
+      finEvidencePacketSampleLimit: number;
+    };
+    pathCorrelation: {
+      timeOverlapToleranceSeconds: number;
+    };
+    planner: {
+      fallbackPatterns: {
+        usageHelp: string;
+        networkStatistics: string;
+        selectedSessionDiagnosis: string;
+        activeQueryExplain: string;
+        reportRequest: string;
+        broadTroubleshootingProblem: string;
+        concreteTroubleshootingScope: string;
+        accessQueryIntent: string;
+        accessQueryScope: string;
+        captureCorrelation: string;
+      };
+    };
+    tsharkQueryMcp: {
       command: string;
       args: string[];
     };
-    packetNormalizerMcp: {
-      command: string;
-      args: string[];
-    };
-    chainBuilderMcp: {
+    evidenceOpenerMcp: {
       command: string;
       args: string[];
     };
@@ -62,10 +89,25 @@ const defaults = JSON.parse(readFileSync(configPath, "utf8")) as {
   llm: {
     baseURL: string;
     model: string;
+    providerData: Record<string, unknown>;
     useResponses: boolean;
     traceIncludeSensitiveData: boolean;
   };
 };
+
+function objectFromJsonEnv(value: string | undefined): Record<string, unknown> {
+  if (!value) return {};
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    parsed = JSON.parse(value.replace(/\\"/g, "\""));
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("PCAPAI_LLM_PROVIDER_DATA must be a JSON object");
+  }
+  return parsed as Record<string, unknown>;
+}
 
 export const apiConfig = {
   host: process.env.PCAPAI_API_HOST || defaults.api.host,
@@ -83,25 +125,41 @@ export const apiConfig = {
     editcapCommand: process.env.PCAPAI_EDITCAP_COMMAND || defaults.api.payloadTrim.editcapCommand,
     snaplen: numberFromEnv(process.env.PCAPAI_PAYLOAD_TRIM_SNAPLEN, defaults.api.payloadTrim.snaplen)
   },
-  packetParserMcp: {
-    command: process.env.PCAPAI_PACKET_PARSER_MCP_COMMAND || defaults.api.packetParserMcp.command,
-    args: process.env.PCAPAI_PACKET_PARSER_MCP_ARGS
-      ? process.env.PCAPAI_PACKET_PARSER_MCP_ARGS.split(" ").filter(Boolean)
-      : defaults.api.packetParserMcp.args,
+  query: {
+    candidateGroupLimit: numberFromEnv(process.env.PCAPAI_QUERY_CANDIDATE_GROUP_LIMIT, defaults.api.query.candidateGroupLimit),
+    queryPacketLimit: numberFromEnv(process.env.PCAPAI_QUERY_PACKET_LIMIT, defaults.api.query.queryPacketLimit),
+    conversationPacketLimit: numberFromEnv(process.env.PCAPAI_CONVERSATION_PACKET_LIMIT, defaults.api.query.conversationPacketLimit),
+    retainedQueryRunLimit: numberFromEnv(process.env.PCAPAI_RETAINED_QUERY_RUN_LIMIT, defaults.api.query.retainedQueryRunLimit)
+  },
+  diagnosis: {
+    shortConversationPacketThreshold: numberFromEnv(process.env.PCAPAI_SHORT_CONVERSATION_PACKET_THRESHOLD, defaults.api.diagnosis.shortConversationPacketThreshold),
+    retransmissionBurstThreshold: numberFromEnv(process.env.PCAPAI_RETRANSMISSION_BURST_THRESHOLD, defaults.api.diagnosis.retransmissionBurstThreshold),
+    duplicateAckBurstThreshold: numberFromEnv(process.env.PCAPAI_DUPLICATE_ACK_BURST_THRESHOLD, defaults.api.diagnosis.duplicateAckBurstThreshold),
+    evidencePacketSampleLimit: numberFromEnv(process.env.PCAPAI_EVIDENCE_PACKET_SAMPLE_LIMIT, defaults.api.diagnosis.evidencePacketSampleLimit),
+    transportEvidencePacketSampleLimit: numberFromEnv(process.env.PCAPAI_TRANSPORT_EVIDENCE_PACKET_SAMPLE_LIMIT, defaults.api.diagnosis.transportEvidencePacketSampleLimit),
+    finEvidencePacketSampleLimit: numberFromEnv(process.env.PCAPAI_FIN_EVIDENCE_PACKET_SAMPLE_LIMIT, defaults.api.diagnosis.finEvidencePacketSampleLimit)
+  },
+  pathCorrelation: {
+    timeOverlapToleranceSeconds: numberFromEnv(process.env.PCAPAI_PATH_TIME_OVERLAP_TOLERANCE_SECONDS, defaults.api.pathCorrelation.timeOverlapToleranceSeconds)
+  },
+  planner: {
+    fallbackPatterns: {
+      ...defaults.api.planner.fallbackPatterns,
+      ...objectFromJsonEnv(process.env.PCAPAI_PLANNER_FALLBACK_PATTERNS)
+    }
+  },
+  tsharkQueryMcp: {
+    command: process.env.PCAPAI_TSHARK_QUERY_MCP_COMMAND || defaults.api.tsharkQueryMcp.command,
+    args: process.env.PCAPAI_TSHARK_QUERY_MCP_ARGS
+      ? process.env.PCAPAI_TSHARK_QUERY_MCP_ARGS.split(" ").filter(Boolean)
+      : defaults.api.tsharkQueryMcp.args,
     cwd: workspaceRoot
   },
-  packetNormalizerMcp: {
-    command: process.env.PCAPAI_PACKET_NORMALIZER_MCP_COMMAND || defaults.api.packetNormalizerMcp.command,
-    args: process.env.PCAPAI_PACKET_NORMALIZER_MCP_ARGS
-      ? process.env.PCAPAI_PACKET_NORMALIZER_MCP_ARGS.split(" ").filter(Boolean)
-      : defaults.api.packetNormalizerMcp.args,
-    cwd: workspaceRoot
-  },
-  chainBuilderMcp: {
-    command: process.env.PCAPAI_CHAIN_BUILDER_MCP_COMMAND || defaults.api.chainBuilderMcp.command,
-    args: process.env.PCAPAI_CHAIN_BUILDER_MCP_ARGS
-      ? process.env.PCAPAI_CHAIN_BUILDER_MCP_ARGS.split(" ").filter(Boolean)
-      : defaults.api.chainBuilderMcp.args,
+  evidenceOpenerMcp: {
+    command: process.env.PCAPAI_EVIDENCE_OPENER_MCP_COMMAND || defaults.api.evidenceOpenerMcp.command,
+    args: process.env.PCAPAI_EVIDENCE_OPENER_MCP_ARGS
+      ? process.env.PCAPAI_EVIDENCE_OPENER_MCP_ARGS.split(" ").filter(Boolean)
+      : defaults.api.evidenceOpenerMcp.args,
     cwd: workspaceRoot
   },
   caseGraphMcp: {
@@ -115,6 +173,7 @@ export const apiConfig = {
     apiKey: process.env.PCAPAI_LLM_API_KEY || process.env.OPENAI_API_KEY || "",
     baseURL: process.env.PCAPAI_LLM_BASE_URL || process.env.OPENAI_BASE_URL || defaults.llm.baseURL,
     model: process.env.PCAPAI_LLM_MODEL || defaults.llm.model,
+    providerData: objectFromJsonEnv(process.env.PCAPAI_LLM_PROVIDER_DATA),
     useResponses: process.env.PCAPAI_LLM_USE_RESPONSES
       ? process.env.PCAPAI_LLM_USE_RESPONSES === "true"
       : defaults.llm.useResponses,
@@ -124,7 +183,7 @@ export const apiConfig = {
   }
 };
 
-export function updateLlmConfig(input: { apiKey?: string; baseURL?: string; model?: string }) {
+export function updateLlmConfig(input: { apiKey?: string; baseURL?: string; model?: string; providerData?: Record<string, unknown> }) {
   if (input.apiKey !== undefined) {
     apiConfig.llm.apiKey = input.apiKey;
     process.env.PCAPAI_LLM_API_KEY = input.apiKey;
@@ -136,5 +195,9 @@ export function updateLlmConfig(input: { apiKey?: string; baseURL?: string; mode
   if (input.model !== undefined) {
     apiConfig.llm.model = input.model;
     process.env.PCAPAI_LLM_MODEL = input.model;
+  }
+  if (input.providerData !== undefined) {
+    apiConfig.llm.providerData = input.providerData;
+    process.env.PCAPAI_LLM_PROVIDER_DATA = JSON.stringify(input.providerData);
   }
 }

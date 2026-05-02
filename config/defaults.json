@@ -5,8 +5,10 @@
     "corsOrigins": [
       "http://127.0.0.1:5173",
       "http://127.0.0.1:5174",
+      "http://127.0.0.1:30023",
       "http://localhost:5173",
-      "http://localhost:5174"
+      "http://localhost:5174",
+      "http://localhost:30023"
     ],
     "jsonLimit": "20mb",
     "caseDataDir": "data/cases",
@@ -16,17 +18,44 @@
       "editcapCommand": "editcap",
       "snaplen": 128
     },
-    "packetParserMcp": {
-      "command": "npm",
-      "args": ["run", "dev", "-w", "mcp/packet-parser"]
+    "query": {
+      "candidateGroupLimit": 40,
+      "queryPacketLimit": 1000,
+      "conversationPacketLimit": 400,
+      "retainedQueryRunLimit": 30
     },
-    "packetNormalizerMcp": {
-      "command": "npm",
-      "args": ["run", "dev", "-w", "mcp/packet-normalizer"]
+    "diagnosis": {
+      "shortConversationPacketThreshold": 2,
+      "retransmissionBurstThreshold": 3,
+      "duplicateAckBurstThreshold": 3,
+      "evidencePacketSampleLimit": 5,
+      "transportEvidencePacketSampleLimit": 8,
+      "finEvidencePacketSampleLimit": 6
     },
-    "chainBuilderMcp": {
+    "pathCorrelation": {
+      "timeOverlapToleranceSeconds": 3
+    },
+    "planner": {
+      "fallbackPatterns": {
+        "usageHelp": "怎么用|怎样使用|如何使用|使用方法|使用说明|帮助|新手|流程|怎么开始|如何开始|这个\\s*agent.*(做什么|怎么用|如何用)|agent.*(怎么用|如何用|使用)",
+        "networkStatistics": "IP|端口|port|\\bRST\\b|reset|复位|重传|retransmission|HTTP.*状态码|DNS.*rcode|时间范围|时间窗口|通信对|通讯对|tcp.*连接",
+        "selectedSessionDiagnosis": "为什么|原因|失败|问题在哪|哪里有问题|哪里异常|断点|不通|怎么回事|怎么失败|异常原因",
+        "activeQueryExplain": "当前|这个|通讯对|通信对|链路|路径|断点|异常|建连|握手|SYN|ACK|RST|重传|丢包|单向|Zero Window|窗口|FIN",
+        "reportRequest": "报告|总结|复盘|导出",
+        "broadTroubleshootingProblem": "哪里有问题|有什么问题|故障|排障|断点|异常|帮我分析|分析一下|看下",
+        "concreteTroubleshootingScope": "(?:\\d{1,3}\\.){3}\\d{1,3}|\\b\\d{1,2}:\\d{2}(?::\\d{2})?\\b|端口|port|\\b\\d{2,5}\\b|RST|reset|重传|Zero Window|SYN|单向",
+        "accessQueryIntent": "分析|查询|查看|通讯|通信|访问|端口|路径|链路|wireshark",
+        "accessQueryScope": "(?:\\d{1,3}\\.){3}\\d{1,3}|\\b\\d{2,5}\\b",
+        "captureCorrelation": "串起来|关联起来|能串|能否串|能不能串|两个文件|2个文件|多文件|多节点|跨节点|链路还原|路径还原|是否连续|能否关联|能不能关联"
+      }
+    },
+    "tsharkQueryMcp": {
       "command": "npm",
-      "args": ["run", "dev", "-w", "mcp/chain-builder"]
+      "args": ["run", "dev", "-w", "mcp/tshark-query"]
+    },
+    "evidenceOpenerMcp": {
+      "command": "npm",
+      "args": ["run", "dev", "-w", "mcp/evidence-opener"]
     },
     "caseGraphMcp": {
       "command": "npm",
@@ -40,15 +69,23 @@
     "traceIncludeSensitiveData": false
   },
   "mcp": {
-    "packetParser": {
-      "tsharkCommand": "tshark",
+    "tshark": {
+      "command": "tshark",
+      "capinfosCommand": "capinfos",
       "maxBufferBytes": 10485760
+    },
+    "evidenceOpener": {
+      "wiresharkCommand": "/Applications/Wireshark.app/Contents/MacOS/Wireshark"
     }
   },
   "web": {
     "host": "127.0.0.1",
-    "port": 5173,
+    "port": 30023,
     "apiTarget": "http://127.0.0.1:30022",
-    "defaultQuestion": "最可能的断点在哪里？"
+    "defaultQuestion": "",
+    "chatHistoryLimit": 80,
+    "conversationDisplayLimit": 80,
+    "keyPacketDisplayLimit": 40,
+    "groupFailureModeDisplayLimit": 3
   }
 }

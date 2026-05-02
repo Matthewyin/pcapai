@@ -27,7 +27,10 @@ export const CaptureNodeSchema = z.object({
   role: z.string(),
   pcapFilename: z.string().optional(),
   interfaceDirection: z.enum(["ingress", "egress", "bidirectional", "unknown"]).default("unknown"),
-  capturePosition: z.string().default("")
+  capturePosition: z.string().default(""),
+  packetCount: z.number().int().optional(),
+  firstPacketTime: z.number().optional(),
+  lastPacketTime: z.number().optional()
 });
 export type CaptureNode = z.infer<typeof CaptureNodeSchema>;
 
@@ -71,6 +74,42 @@ export const PacketSummarySchema = z.object({
   tcpFlags: z.array(z.string()).default([]),
   tcpSeq: z.number().int().optional(),
   tcpAck: z.number().int().optional(),
+  tcpPayloadLength: z.number().int().optional(),
+  tcpWindowSize: z.number().int().optional(),
+  tcpAnalysis: z.object({
+    retransmission: z.boolean().default(false),
+    fastRetransmission: z.boolean().default(false),
+    duplicateAck: z.boolean().default(false),
+    zeroWindow: z.boolean().default(false),
+    lostSegment: z.boolean().default(false)
+  }).default({
+    retransmission: false,
+    fastRetransmission: false,
+    duplicateAck: false,
+    zeroWindow: false,
+    lostSegment: false
+  }),
+  icmpType: z.number().int().optional(),
+  icmpCode: z.number().int().optional(),
+  dnsId: z.string().optional(),
+  dnsQueryName: z.string().optional(),
+  dnsIsResponse: z.boolean().optional(),
+  dnsRcode: z.number().int().optional(),
+  dnsResponseAddress: z.string().optional(),
+  tlsHandshakeType: z.number().int().optional(),
+  tlsSni: z.string().optional(),
+  tlsRecordVersion: z.string().optional(),
+  tlsHandshakeVersion: z.string().optional(),
+  tlsAlertLevel: z.number().int().optional(),
+  tlsAlertDescription: z.number().int().optional(),
+  httpRequestMethod: z.string().optional(),
+  httpHost: z.string().optional(),
+  httpRequestUri: z.string().optional(),
+  httpResponseCode: z.number().int().optional(),
+  httpResponseCodeDescription: z.string().optional(),
+  httpRequestIn: z.number().int().optional(),
+  httpResponseIn: z.number().int().optional(),
+  httpTime: z.number().optional(),
   length: z.number().int().optional(),
   summary: z.string(),
   raw: z.record(z.string(), z.unknown()).default({})
@@ -123,12 +162,42 @@ export const FindingSchema = z.object({
   findingId: z.string(),
   title: z.string(),
   summary: z.string(),
+  tagIds: z.array(z.string()).default([]),
   evidenceIds: z.array(z.string()).default([]),
   packetIds: z.array(z.string()).default([]),
   confidence: ConfidenceSchema,
   nextSteps: z.array(z.string()).default([])
 });
 export type Finding = z.infer<typeof FindingSchema>;
+
+export const DiagnosticTagKindSchema = z.enum([
+  "syn_sent_no_synack",
+  "syn_seen_at_a_missing_at_b",
+  "synack_seen_at_server_missing_on_return_path",
+  "rst_first_seen_at_node",
+  "one_way_traffic",
+  "retransmission_burst",
+  "dup_ack_burst",
+  "zero_window",
+  "fin_without_peer_fin_ack",
+  "session_seen_on_one_node_only",
+  "nat_mapping_required_but_missing",
+  "time_window_not_overlapped"
+]);
+export type DiagnosticTagKind = z.infer<typeof DiagnosticTagKindSchema>;
+
+export const DiagnosticTagSchema = z.object({
+  tagId: z.string(),
+  kind: DiagnosticTagKindSchema,
+  nodeIds: z.array(z.string()).default([]),
+  segmentIds: z.array(z.string()).default([]),
+  packetIds: z.array(z.string()).default([]),
+  evidenceIds: z.array(z.string()).default([]),
+  confidence: ConfidenceSchema,
+  summary: z.string(),
+  nextSteps: z.array(z.string()).default([])
+});
+export type DiagnosticTag = z.infer<typeof DiagnosticTagSchema>;
 
 export const PathGraphSchema = z.object({
   nodes: z.array(z.object({
@@ -147,6 +216,187 @@ export const PathGraphSchema = z.object({
 });
 export type PathGraph = z.infer<typeof PathGraphSchema>;
 
+export const QueryRunInputSchema = z.object({
+  question: z.string().default(""),
+  timeRange: z.object({
+    start: z.number().optional(),
+    end: z.number().optional()
+  }).default({}),
+  srcIp: z.string().optional(),
+  dstIp: z.string().optional(),
+  port: z.number().int().optional(),
+  protocol: z.string().optional()
+});
+export type QueryRunInput = z.infer<typeof QueryRunInputSchema>;
+
+export const ConversationSchema = z.object({
+  conversationId: z.string(),
+  nodeId: z.string(),
+  pcapFilename: z.string(),
+  protocol: z.string(),
+  srcIp: z.string().optional(),
+  srcPort: z.number().int().optional(),
+  dstIp: z.string().optional(),
+  dstPort: z.number().int().optional(),
+  startTime: z.number(),
+  endTime: z.number(),
+  packetCount: z.number().int(),
+  byteCount: z.number().int(),
+  tcpFlags: z.array(z.string()).default([]),
+  rstCount: z.number().int().default(0),
+  retransmissionCount: z.number().int().default(0),
+  zeroWindowCount: z.number().int().default(0),
+  rankScore: z.number().default(0),
+  rankReasons: z.array(z.string()).default([]),
+  displayFilter: z.string()
+});
+export type Conversation = z.infer<typeof ConversationSchema>;
+
+export const AccessCandidateGroupSchema = z.object({
+  groupId: z.string(),
+  protocol: z.string(),
+  srcIp: z.string().optional(),
+  dstIp: z.string().optional(),
+  dstPort: z.number().int().optional(),
+  conversationIds: z.array(z.string()).default([]),
+  selectedConversationId: z.string().optional(),
+  conversationCount: z.number().int().default(0),
+  successCount: z.number().int().default(0),
+  failureCount: z.number().int().default(0),
+  rstCount: z.number().int().default(0),
+  retransmissionCount: z.number().int().default(0),
+  zeroWindowCount: z.number().int().default(0),
+  failureModes: z.array(z.object({
+    kind: z.string(),
+    label: z.string(),
+    count: z.number().int(),
+    conversationIds: z.array(z.string()).default([])
+  })).default([]),
+  firstSeen: z.number().optional(),
+  lastSeen: z.number().optional(),
+  rankScore: z.number().default(0),
+  rankReasons: z.array(z.string()).default([]),
+  summary: z.string()
+});
+export type AccessCandidateGroup = z.infer<typeof AccessCandidateGroupSchema>;
+
+export const PathHopSchema = z.object({
+  hopId: z.string(),
+  nodeId: z.string(),
+  conversationId: z.string(),
+  observedTuple: z.string(),
+  status: z.enum(["observed", "missing", "unknown"]),
+  startTime: z.number().optional(),
+  endTime: z.number().optional(),
+  packetCount: z.number().int().default(0),
+  anomalies: z.array(z.string()).default([]),
+  wiresharkFilter: z.string(),
+  correlation: z.enum(["exact_tuple", "mapping_hint", "missing", "needs_context"]).default("missing"),
+  correlationReasons: z.array(z.string()).default([])
+});
+export type PathHop = z.infer<typeof PathHopSchema>;
+
+export const QueryPathSchema = z.object({
+  queryRunId: z.string(),
+  conversationId: z.string(),
+  hops: z.array(PathHopSchema).default([]),
+  edges: z.array(z.object({
+    edgeId: z.string(),
+    fromNodeId: z.string(),
+    toNodeId: z.string(),
+    status: z.enum(["observed", "suspect", "needs_context", "unknown"]),
+    label: z.string(),
+    diagnosis: z.string().default(""),
+    reasons: z.array(z.string()).default([]),
+    nextSteps: z.array(z.string()).default([]),
+    timeDeltaSeconds: z.number().optional()
+  })).default([]),
+  missingHops: z.array(z.string()).default([]),
+  confidence: ConfidenceSchema,
+  summary: z.string()
+});
+export type QueryPath = z.infer<typeof QueryPathSchema>;
+
+export const ProtocolCorrelationSchema = z.object({
+  correlationId: z.string(),
+  kind: z.enum(["dns_to_tcp", "tls_sni_to_tcp", "http_host_to_tcp"]),
+  sourcePacketId: z.string(),
+  sourceEvidenceCardId: z.string().optional(),
+  targetConversationId: z.string().optional(),
+  targetDisplayFilter: z.string(),
+  relation: z.string(),
+  confidence: ConfidenceSchema,
+  summary: z.string(),
+  reasons: z.array(z.string()).default([]),
+  nextSteps: z.array(z.string()).default([])
+});
+export type ProtocolCorrelation = z.infer<typeof ProtocolCorrelationSchema>;
+
+export const QueryDiagnosisCheckSchema = z.object({
+  key: z.enum(["handshake", "rst", "traffic_direction", "retransmission", "zero_window", "close_state", "path", "protocol", "icmp", "dns", "udp", "tls", "http"]),
+  label: z.string(),
+  status: z.enum(["ok", "warn", "problem", "unknown"]),
+  summary: z.string(),
+  packetIds: z.array(z.string()).default([]),
+  nextSteps: z.array(z.string()).default([])
+});
+export type QueryDiagnosisCheck = z.infer<typeof QueryDiagnosisCheckSchema>;
+
+export const QueryDiagnosisSchema = z.object({
+  conversationId: z.string(),
+  summary: z.string(),
+  confidence: ConfidenceSchema,
+  checks: z.array(QueryDiagnosisCheckSchema).default([]),
+  diagnosticTags: z.array(DiagnosticTagSchema).default([]),
+  evidence: z.array(EvidenceEventSchema).default([]),
+  findings: z.array(FindingSchema).default([]),
+  nextSteps: z.array(z.string()).default([])
+});
+export type QueryDiagnosis = z.infer<typeof QueryDiagnosisSchema>;
+
+export const EvidenceCardSchema = z.object({
+  cardId: z.string(),
+  kind: z.enum(["capture", "time_range", "conversation", "packet", "protocol_event", "transaction", "filter", "statistic", "missing_context"]),
+  title: z.string(),
+  summary: z.string(),
+  pcapFilename: z.string().optional(),
+  frameNumber: z.number().int().optional(),
+  displayFilter: z.string().optional(),
+  packetDisplayFilter: z.string().optional(),
+  conversationId: z.string().optional(),
+  queryRunId: z.string().optional(),
+  actions: z.array(z.enum(["open_wireshark", "select_conversation", "query_packets", "request_upload", "copy_filter"])).default([])
+});
+export type EvidenceCard = z.infer<typeof EvidenceCardSchema>;
+
+export const QueryRunSchema = z.object({
+  queryRunId: z.string(),
+  caseId: z.string(),
+  question: z.string(),
+  timeRange: z.object({
+    start: z.number().optional(),
+    end: z.number().optional()
+  }).default({}),
+  srcIp: z.string().optional(),
+  dstIp: z.string().optional(),
+  port: z.number().int().optional(),
+  protocol: z.string().optional(),
+  displayFilter: z.string(),
+  totalConversationCount: z.number().int().default(0),
+  candidateGroups: z.array(AccessCandidateGroupSchema).default([]),
+  selectedCandidateGroupId: z.string().optional(),
+  conversationIds: z.array(z.string()).default([]),
+  conversations: z.array(ConversationSchema).default([]),
+  selectedConversationId: z.string().optional(),
+  path: QueryPathSchema.optional(),
+  selectedDiagnosis: QueryDiagnosisSchema.optional(),
+  evidenceCards: z.array(EvidenceCardSchema).default([]),
+  protocolCorrelations: z.array(ProtocolCorrelationSchema).default([]),
+  selectedEvidenceCardId: z.string().optional(),
+  createdAt: z.string()
+});
+export type QueryRun = z.infer<typeof QueryRunSchema>;
+
 export const AnalysisRunSchema = z.object({
   runId: z.string(),
   createdAt: z.string(),
@@ -161,6 +411,28 @@ export const AnalysisRunSchema = z.object({
 });
 export type AnalysisRun = z.infer<typeof AnalysisRunSchema>;
 
+export const ToolRunSchema = z.object({
+  toolRunId: z.string(),
+  createdAt: z.string(),
+  kind: z.enum(["planner", "tool", "mcp", "agent"]),
+  status: z.enum(["success", "error", "skipped"]),
+  target: z.string(),
+  question: z.string().optional(),
+  intent: z.string().optional(),
+  summary: z.string(),
+  inputSummary: z.string().optional(),
+  outputSummary: z.string().optional(),
+  queryRunId: z.string().optional(),
+  evidenceCardIds: z.array(z.string()).default([]),
+  pcapFilename: z.string().optional(),
+  frameNumber: z.number().int().optional(),
+  displayFilter: z.string().optional(),
+  packetDisplayFilter: z.string().optional(),
+  durationMs: z.number().optional(),
+  error: z.string().optional()
+});
+export type ToolRun = z.infer<typeof ToolRunSchema>;
+
 export const CaseGraphSchema = z.object({
   spec: CaseSpecSchema,
   captures: z.array(CaptureNodeSchema),
@@ -171,16 +443,23 @@ export const CaseGraphSchema = z.object({
   packets: z.array(PacketSummarySchema).default([]),
   sessions: z.array(SessionSegmentSchema).default([]),
   sessionLinks: z.array(SessionLinkSchema).default([]),
+  diagnosticTags: z.array(DiagnosticTagSchema).default([]),
   evidence: z.array(EvidenceEventSchema).default([]),
   findings: z.array(FindingSchema).default([]),
   path: PathGraphSchema,
+  queryRuns: z.array(QueryRunSchema).default([]),
+  activeQueryRunId: z.string().optional(),
   analysisRuns: z.array(AnalysisRunSchema).default([]),
-  activeRunId: z.string().optional()
+  activeRunId: z.string().optional(),
+  toolRuns: z.array(ToolRunSchema).default([])
 });
 export type CaseGraph = z.infer<typeof CaseGraphSchema>;
 
 export const AgentAnswerSchema = z.object({
   answer: z.string(),
+  thoughts: z.array(z.string()).optional(),
+  evidenceCards: z.array(EvidenceCardSchema).optional(),
+  actions: z.array(z.string()).optional(),
   evidenceIds: z.array(z.string()).default([]),
   packetIds: z.array(z.string()).default([]),
   sessionLinkIds: z.array(z.string()).default([]),

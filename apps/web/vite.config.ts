@@ -23,6 +23,10 @@ const defaults = JSON.parse(readFileSync(configPath, "utf8")) as {
     port: number;
     apiTarget: string;
     defaultQuestion: string;
+    chatHistoryLimit: number;
+    conversationDisplayLimit: number;
+    keyPacketDisplayLimit: number;
+    groupFailureModeDisplayLimit: number;
   };
 };
 
@@ -34,12 +38,19 @@ export default defineConfig({
   plugins: [react()],
   define: {
     __PCAPAI_WEB_CONFIG__: JSON.stringify({
-      defaultQuestion: process.env.PCAPAI_DEFAULT_QUESTION || defaults.web.defaultQuestion
+      defaultQuestion: process.env.PCAPAI_DEFAULT_QUESTION || defaults.web.defaultQuestion,
+      chatHistoryLimit: Number(process.env.PCAPAI_WEB_CHAT_HISTORY_LIMIT || defaults.web.chatHistoryLimit),
+      conversationDisplayLimit: Number(process.env.PCAPAI_WEB_CONVERSATION_DISPLAY_LIMIT || defaults.web.conversationDisplayLimit),
+      keyPacketDisplayLimit: Number(process.env.PCAPAI_WEB_KEY_PACKET_DISPLAY_LIMIT || defaults.web.keyPacketDisplayLimit),
+      groupFailureModeDisplayLimit: Number(
+        process.env.PCAPAI_WEB_GROUP_FAILURE_MODE_DISPLAY_LIMIT || defaults.web.groupFailureModeDisplayLimit
+      )
     })
   },
   server: {
     host,
     port,
+    strictPort: true,
     proxy: {
       "/api": apiTarget
     }

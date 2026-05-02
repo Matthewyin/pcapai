@@ -1,6 +1,6 @@
 # pcapAI
 
-pcapAI is a browser-based packet evidence-chain workbench built around OpenAI Agents SDK for TypeScript.
+pcapAI is an Agent-first packet troubleshooting chat workbench built around OpenAI Agents SDK for TypeScript.
 
 ## Architecture
 
@@ -8,10 +8,9 @@ pcapAI is a browser-based packet evidence-chain workbench built around OpenAI Ag
 - Agent API: `apps/api`
 - Leader agent and subagents: `apps/api/src/agents`
 - MCP servers:
-  - `mcp/packet-parser`
-  - `mcp/packet-normalizer`
-  - `mcp/chain-builder`
-  - `mcp/diagnosis-report`
+  - `mcp/tshark-query`
+  - `mcp/evidence-opener`
+  - `mcp/case-graph`
 - Shared schemas: `packages/shared`
 
 Detailed docs:
@@ -34,4 +33,4 @@ To enable real LLM calls, set `PCAPAI_LLM_API_KEY`. See `.env.example`.
 
 ## Boundary
 
-The leader agent coordinates subagents and MCP tools. MCP servers perform deterministic packet parsing, normalization, chain building, and report preparation. Agents explain, route, ask for missing context, and prepare user-facing output.
+The main troubleshooting unit is a chat-scoped `QueryRun`: user question and uploaded pcap -> capture metadata -> tshark display filter -> candidate conversations -> evidence cards -> Wireshark opener. Upload does not full-parse large pcap files; packet summaries are read later through bounded, display-filtered tshark queries. Agents explain active QueryRun evidence, route questions, ask for missing context, and prepare user-facing output.

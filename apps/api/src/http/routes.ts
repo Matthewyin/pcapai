@@ -1,30 +1,39 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { Router } from "express";
 import multer from "multer";
 import { z } from "zod";
 import {
-  AnalysisFilterSchema,
   CaptureNodeSchema,
   CaseSpecSchema,
   MappingHintSchema,
-  PacketSummarySchema,
+  QueryRunInputSchema,
   TimeOffsetHintSchema,
-  type AgentAnswer,
-  type AnalysisRun,
   type CaseGraph,
-  type EvidenceEvent,
-  type Finding,
-  type PacketSummary
+  type EvidenceCard,
+  type QueryRun,
 } from "../../../../packages/shared/src/index.js";
-import { runPcapTroubleshootingAgent } from "../agents/runtime.js";
+import { runAgentCompatibilityCheck, runPcapTroubleshootingAgent } from "../agents/runtime.js";
 import { apiConfig } from "../config.js";
-import { buildPathGraphWithMcp, matchCrossNodeSessionsWithMcp } from "../mcp/chainBuilderClient.js";
-import { normalizePacketsWithMcp } from "../mcp/packetNormalizerClient.js";
-import { parsePcapWithMcp } from "../mcp/packetParserClient.js";
+import { getCaptureTimeRangeWithMcp, getConversationPacketsWithMcp, listDnsPacketsWithMcp, listHttpPacketsWithMcp, listIcmpEventsWithMcp, listTcpResetsWithMcp, listTcpRetransmissionsWithMcp, listTcpZeroWindowWithMcp, listTlsPacketsWithMcp, listUdpPacketsWithMcp, queryPacketsWithMcp } from "../mcp/tsharkQueryClient.js";
+import { createPacketPairAnswer, createProtocolQueryAnswer, groupPacketPairs, noCaptureAnswer, pairGroupFromPackets, pairKey, protocolPacketCard } from "../protocolAdapters/builders.js";
+import { createDnsAdapter } from "../protocolAdapters/dns.js";
+import { createHttpAdapter } from "../protocolAdapters/http.js";
+import { createIcmpAdapter } from "../protocolAdapters/icmp.js";
+import { createTcpAdapters } from "../protocolAdapters/tcp.js";
+import { createTlsAdapter } from "../protocolAdapters/tls.js";
+import { protocolAdapterErrorMessage, protocolAdapterErrorStatus, runProtocolAdapter, type ProtocolAdapter, type ProtocolAdapterContext } from "../protocolAdapters/types.js";
+import { createUdpAdapter } from "../protocolAdapters/udp.js";
 import { stripPayload } from "./capturePreprocess.js";
-import { addCapture, capturesDirectory, caseDirectory, createEmptyCase, deleteCases, listCaseSummaries, readAnalysisRunSnapshot, readCaseGraph, safePathPart, writeAnalysisRunSnapshot, writeCaseGraph } from "./caseStore.js";
-import { activateLlmProfile, deleteLlmProfiles, getLlmSettings, listLlmProfiles, saveLlmProfile, saveLlmSettings } from "./llmSettings.js";
+import { addCapture, capturesDirectory, createEmptyCase, deleteCases, listCaseSummaries, readAnalysisRunSnapshot, readCaseGraph, safePathPart, writeCaseGraph } from "./caseStore.js";
+import { activateLlmProfile, deleteLlmProfiles, getLlmSettings, listLlmProfiles, parseProviderData, saveLlmProfile, saveLlmSettings } from "./llmSettings.js";
+import { buildCaseReportMarkdown } from "./reportBuilder.js";
+import { createAgentAnswerService } from "../services/agentAnswerService.js";
+import { createEvidenceOpenService } from "../services/evidenceOpenService.js";
+import { createPlannerService } from "../services/plannerService.js";
+import { createQueryRunService } from "../services/queryRunService.js";
+import { createStatisticsQueryService } from "../services/statisticsQueryService.js";
+import { createToolRunService } from "../services/toolRunService.js";
 
 const cases = new Map<string, CaseGraph>();
 const agentRuntimeStatus = {
@@ -39,16 +48,14 @@ const CreateCaseRequestSchema = z.object({
   caseId: z.string().min(1).optional(),
   title: z.string().min(1)
 });
-const AnalyzeRequestSchema = z.object({
-  client: z.string().trim().optional(),
-  server: z.string().trim().optional(),
-  protocol: z.string().trim().optional(),
-  port: z.coerce.number().int().optional()
+const UpdateCaseRequestSchema = z.object({
+  title: z.string().min(1)
 });
 const LlmSettingsRequestSchema = z.object({
   baseURL: z.string().url(),
   model: z.string().min(1),
-  apiKey: z.string().optional()
+  apiKey: z.string().optional(),
+  providerData: z.string().optional()
 });
 const LlmTestRequestSchema = LlmSettingsRequestSchema;
 const LlmProfileRequestSchema = LlmSettingsRequestSchema.extend({
@@ -63,15 +70,13 @@ const DeleteCasesRequestSchema = z.object({
 });
 const AgentRequestSchema = z.object({
   question: z.string().default(""),
+  chatHistory: z.array(z.object({
+    role: z.enum(["user", "assistant"]),
+    content: z.string()
+  })).default([]),
   profileId: z.string().min(1).optional(),
   thinkingDepth: z.string().min(1).optional(),
   reasoningDepth: z.string().min(1).optional()
-});
-const ParsePcapRequestSchema = z.object({
-  caseId: z.string().min(1),
-  nodeId: z.string().min(1),
-  pcapPath: z.string().min(1),
-  pcapFilename: z.string().optional()
 });
 const CaptureMetadataSchema = z.object({
   originalName: z.string(),
@@ -105,6 +110,79 @@ function loadGraph(caseId: string) {
   return graph;
 }
 
+const toolRunService = createToolRunService({
+  readGraph: loadGraph,
+  writeGraph: writeCaseGraph,
+  setGraph: (caseId, graph) => cases.set(caseId, graph)
+});
+const { recordPlannerRun, recordAnswerRun, recordErrorRun, recordMcpRun, recordQueryRunMcp } = toolRunService;
+const evidenceOpenService = createEvidenceOpenService({
+  capturesDirectory,
+  writeGraph: writeCaseGraph,
+  setGraph: (caseId, graph) => cases.set(caseId, graph),
+  recordMcpRun
+});
+const agentAnswerService = createAgentAnswerService({
+  evidencePacketSampleLimit: apiConfig.diagnosis.evidencePacketSampleLimit
+});
+const {
+  queryRunAnswer,
+  selectedSessionProblemAnswer,
+  usageHelpAnswer,
+  activeQueryRunAnswer,
+  fallbackAgentAnswer,
+  troubleshootingScopeAnswer,
+  reportAnswer,
+  answerWithPlannerThought
+} = agentAnswerService;
+const queryRunService = createQueryRunService({
+  candidateGroupLimit: apiConfig.query.candidateGroupLimit,
+  queryPacketLimit: apiConfig.query.queryPacketLimit,
+  conversationPacketLimit: apiConfig.query.conversationPacketLimit,
+  retainedQueryRunLimit: apiConfig.query.retainedQueryRunLimit,
+  shortConversationPacketThreshold: apiConfig.diagnosis.shortConversationPacketThreshold,
+  retransmissionBurstThreshold: apiConfig.diagnosis.retransmissionBurstThreshold,
+  duplicateAckBurstThreshold: apiConfig.diagnosis.duplicateAckBurstThreshold,
+  evidencePacketSampleLimit: apiConfig.diagnosis.evidencePacketSampleLimit,
+  transportEvidencePacketSampleLimit: apiConfig.diagnosis.transportEvidencePacketSampleLimit,
+  finEvidencePacketSampleLimit: apiConfig.diagnosis.finEvidencePacketSampleLimit,
+  timeOverlapToleranceSeconds: apiConfig.pathCorrelation.timeOverlapToleranceSeconds,
+  fallbackPatterns: apiConfig.planner.fallbackPatterns,
+  capturesDirectory,
+  writeCaseGraph,
+  setGraph: (caseId, graph) => cases.set(caseId, graph),
+  recordQueryRunMcp,
+  recordMcpRun,
+  formatBeijingTime
+});
+const {
+  captureQueryInputs,
+  buildAccessCandidateGroups,
+  buildQueryPath,
+  buildQueryDiagnosis,
+  inferQueryRunInput,
+  requestedLimit,
+  displayFilterFromQuestion,
+  createQueryRun,
+  selectConversation,
+  createCaptureCorrelationQueryRun,
+  applyCorrelationContextAndRerun,
+  activeCorrelationNeedsContext,
+  shouldApplyCorrelationContext,
+  shouldCorrelateCaptures,
+  shouldCreateQueryRun
+} = queryRunService;
+const statisticsQueryService = createStatisticsQueryService({
+  retainedQueryRunLimit: apiConfig.query.retainedQueryRunLimit,
+  captureQueryInputs,
+  writeCaseGraph,
+  setGraph: (caseId, graph) => cases.set(caseId, graph),
+  recordMcpRun,
+  recordQueryRunMcp,
+  formatBeijingTime
+});
+const { deterministicStatisticsAnswer, isProtocolStatisticsQuestion } = statisticsQueryService;
+
 function parseCaptureMetadata(raw: unknown) {
   if (typeof raw !== "string") return null;
   try {
@@ -126,32 +204,50 @@ function fallbackCaptureMetadata(body: Record<string, unknown>, files: Express.M
   })));
 }
 
-function matchesEndpoint(packet: PacketSummary, ip?: string) {
-  return !ip || packet.srcIp === ip || packet.dstIp === ip;
+type CaptureTimeRange = Awaited<ReturnType<typeof getCaptureTimeRangeWithMcp>>;
+
+async function readCaptureTimeRanges(graph: CaseGraph, captures = graph.captures) {
+  const captureInputs = captures
+    .filter((capture) => capture.pcapFilename)
+    .map((capture) => ({
+      nodeId: capture.nodeId,
+      name: capture.name,
+      pcapFilename: capture.pcapFilename,
+      pcapPath: path.join(capturesDirectory(graph.spec.caseId), capture.pcapFilename!)
+    }));
+  return Promise.all(captureInputs.map((capture) => getCaptureTimeRangeWithMcp({ capture })));
 }
 
-function matchesPort(packet: PacketSummary, port?: number) {
-  return !port || packet.srcPort === port || packet.dstPort === port;
-}
-
-function filterPackets(packets: PacketSummary[], filter: z.infer<typeof AnalyzeRequestSchema>) {
-  return packets.filter((packet) => {
-    const protocolMatched = !filter.protocol || packet.protocol === filter.protocol.toLowerCase();
-    return protocolMatched && matchesEndpoint(packet, filter.client) && matchesEndpoint(packet, filter.server) && matchesPort(packet, filter.port);
+function captureEvidenceCardsFromRanges(ranges: CaptureTimeRange[]): EvidenceCard[] {
+  return ranges.map((range) => {
+    const timeText = range.firstPacketTime && range.lastPacketTime
+      ? `${formatBeijingTime(range.firstPacketTime)} 到 ${formatBeijingTime(range.lastPacketTime)}`
+      : "未读取到时间戳";
+    return {
+      cardId: `capture-${range.nodeId}-${Date.now()}`,
+      kind: "capture" as const,
+      title: range.pcapFilename,
+      summary: `已收到 ${range.packetCount} 个包，时间范围 ${timeText}。`,
+      pcapFilename: range.pcapFilename,
+      actions: ["request_upload" as const]
+    };
   });
 }
 
-async function parseRawPackets(graph: CaseGraph) {
-  const packetGroups = await Promise.all(graph.captures.map((capture) => {
-    if (!capture.pcapFilename) return Promise.resolve([]);
-    return parsePcapWithMcp({
-      caseId: graph.spec.caseId,
-      nodeId: capture.nodeId,
-      pcapPath: path.join(capturesDirectory(graph.spec.caseId), capture.pcapFilename),
-      pcapFilename: capture.pcapFilename
-    }).then((result) => result.packets);
-  }));
-  return packetGroups.flat().map((packet) => PacketSummarySchema.parse(packet));
+async function captureEvidenceCards(graph: CaseGraph, captures = graph.captures): Promise<EvidenceCard[]> {
+  return captureEvidenceCardsFromRanges(await readCaptureTimeRanges(graph, captures));
+}
+
+function graphWithCaptureTimeRanges(graph: CaseGraph, ranges: CaptureTimeRange[]): CaseGraph {
+  return {
+    ...graph,
+    captures: graph.captures.map((capture) => {
+      const range = ranges.find((item) => item.nodeId === capture.nodeId && item.pcapFilename === capture.pcapFilename);
+      return range
+        ? { ...capture, packetCount: range.packetCount, firstPacketTime: range.firstPacketTime, lastPacketTime: range.lastPacketTime }
+        : capture;
+    })
+  };
 }
 
 function resetAnalysis(graph: CaseGraph) {
@@ -162,8 +258,11 @@ function resetAnalysis(graph: CaseGraph) {
     packets: [],
     sessions: [],
     sessionLinks: [],
+    diagnosticTags: [],
     evidence: [],
     findings: [],
+    queryRuns: [],
+    activeQueryRunId: undefined,
     path: {
       nodes: graph.path.nodes.map((node) => ({ ...node, status: "unknown" as const })),
       edges: []
@@ -171,152 +270,124 @@ function resetAnalysis(graph: CaseGraph) {
   };
 }
 
-function createAnalysisRun(graph: CaseGraph, kind: AnalysisRun["kind"], summary: string) {
-  const runId = `run-${Date.now()}`;
-  const run: AnalysisRun = {
-    runId,
-    createdAt: new Date().toISOString(),
-    kind,
-    summary,
-    captureCount: graph.captures.length,
-    rawPacketCount: graph.rawPackets.length,
-    packetCount: graph.packets.length,
-    findingCount: graph.findings.length,
-    analysisFilter: graph.analysisFilter,
-    snapshotFilename: `${runId}.json`
-  };
-  const nextGraph: CaseGraph = {
-    ...graph,
-    activeRunId: runId,
-    analysisRuns: [run, ...(graph.analysisRuns || [])].slice(0, 30)
-  };
-  writeCaseGraph(nextGraph);
-  writeAnalysisRunSnapshot(nextGraph, run);
-  return nextGraph;
+const setCaseGraph = (caseId: string, graph: CaseGraph) => cases.set(caseId, graph);
+const packetPairAnswer = createPacketPairAnswer({
+  conversationPacketLimit: apiConfig.query.conversationPacketLimit,
+  retainedQueryRunLimit: apiConfig.query.retainedQueryRunLimit,
+  captureQueryInputs,
+  getConversationPackets: getConversationPacketsWithMcp,
+  buildAccessCandidateGroups,
+  buildQueryPath,
+  buildQueryDiagnosis,
+  writeCaseGraph,
+  setCaseGraph,
+  formatBeijingTime
+});
+const protocolQueryAnswer = createProtocolQueryAnswer({
+  retainedQueryRunLimit: apiConfig.query.retainedQueryRunLimit,
+  writeCaseGraph,
+  setCaseGraph
+});
+
+const protocolAdapterContext: ProtocolAdapterContext = {
+  queryPacketLimit: apiConfig.query.queryPacketLimit,
+  captureQueryInputs,
+  requestedLimit,
+  displayFilterFromQuestion,
+  noCaptureAnswer,
+  packetPairAnswer,
+  protocolPacketCard,
+  protocolQueryAnswer,
+  groupPacketPairs,
+  pairKey,
+  pairGroupFromPackets,
+  formatBeijingTime,
+  queryPackets: queryPacketsWithMcp,
+  listTcpResets: listTcpResetsWithMcp,
+  listTcpRetransmissions: listTcpRetransmissionsWithMcp,
+  listTcpZeroWindow: listTcpZeroWindowWithMcp,
+  listIcmpEvents: listIcmpEventsWithMcp,
+  listDnsPackets: listDnsPacketsWithMcp,
+  listUdpPackets: listUdpPacketsWithMcp,
+  listTlsPackets: listTlsPacketsWithMcp,
+  listHttpPackets: listHttpPacketsWithMcp
+};
+
+const protocolAdapters: ProtocolAdapter[] = [
+  ...createTcpAdapters(protocolAdapterContext),
+  createDnsAdapter(protocolAdapterContext),
+  createIcmpAdapter(protocolAdapterContext),
+  createUdpAdapter(protocolAdapterContext),
+  createTlsAdapter(protocolAdapterContext),
+  createHttpAdapter(protocolAdapterContext)
+];
+const plannerService = createPlannerService({
+  fallbackPatterns: apiConfig.planner.fallbackPatterns,
+  hasLlmApiKey: () => Boolean(apiConfig.llm.apiKey),
+  isProtocolStatisticsQuestion,
+  shouldApplyCorrelationContext,
+  activeCorrelationNeedsContext,
+  shouldCorrelateCaptures,
+  shouldCreateQueryRun,
+  usageHelpAnswer,
+  deterministicStatisticsAnswer,
+  applyCorrelationContextAndRerun,
+  createCaptureCorrelationQueryRun,
+  runProtocolEventQuery: async (graph, question) => {
+    const adapterResult = await runProtocolAdapter(protocolAdapters, graph, question);
+    return adapterResult ? { status: adapterResult.adapter.status, answer: adapterResult.answer } : null;
+  },
+  createTcpSessionQueryRun: async (graph, question) => {
+    const queryInput = QueryRunInputSchema.parse({ ...inferQueryRunInput(question, graph), question });
+    const nextGraph = await createQueryRun(graph, queryInput);
+    return queryRunAnswer(nextGraph, nextGraph.activeQueryRunId || "");
+  },
+  selectedSessionProblemAnswer,
+  activeQueryRunAnswer,
+  reportAnswer,
+  troubleshootingScopeAnswer
+});
+const {
+  shouldAnswerUsageHelp,
+  shouldAnswerActiveQueryRun,
+  shouldExplainSelectedSessionProblem,
+  shouldAskForTroubleshootingScope,
+  planUserIntent,
+  executeAgentIntentPlan
+} = plannerService;
+
+export const pathCorrelationTestHooks = {
+  buildQueryPath
+};
+
+function formatBeijingTime(epochSeconds: number) {
+  return new Date(epochSeconds * 1000).toLocaleString("zh-CN", {
+    timeZone: "Asia/Shanghai",
+    hour12: false,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit"
+  });
 }
 
-function nodeName(graph: CaseGraph, nodeId: string) {
-  return graph.captures.find((capture) => capture.nodeId === nodeId)?.name || nodeId;
-}
-
-function linkEvidenceEvents(graph: CaseGraph, evidence: EvidenceEvent[]) {
-  const linkEvidence: EvidenceEvent[] = graph.sessionLinks.map((link) => ({
-    evidenceId: `link-evidence-${link.linkId}`,
-    kind: "session_link",
-    title: `跨节点会话关联：${nodeName(graph, link.fromNodeId)} -> ${nodeName(graph, link.toNodeId)}`,
-    nodeId: link.toNodeId,
-    packetIds: [
-      ...(graph.sessions.find((session) => session.segmentId === link.fromSegmentId)?.packetIds || []),
-      ...(graph.sessions.find((session) => session.segmentId === link.toSegmentId)?.packetIds || [])
-    ],
-    detail: `置信度 ${link.confidence}，分数 ${link.score}。依据：${link.matchReasons.join("；") || "无"}。反证：${link.counterEvidence.join("；") || "无"}`,
-    confidence: link.confidence
-  }));
-  return [...linkEvidence, ...evidence];
-}
-
-function attributedFindings(graph: CaseGraph, evidence: EvidenceEvent[]): Finding[] {
-  const findings: Finding[] = [];
-  for (const edge of graph.path.edges) {
-    const edgeLinks = graph.sessionLinks.filter((link) => link.fromNodeId === edge.fromNodeId && link.toNodeId === edge.toNodeId);
-    const edgeEvidence = evidence.filter((event) => {
-      if (event.kind === "session_link") return edgeLinks.some((link) => event.evidenceId === `link-evidence-${link.linkId}`);
-      return event.nodeId === edge.fromNodeId || event.nodeId === edge.toNodeId;
-    });
-    if (edge.status === "unknown") {
-      findings.push({
-        findingId: `finding-${findings.length + 1}`,
-        title: `待补上下文：${nodeName(graph, edge.fromNodeId)} -> ${nodeName(graph, edge.toNodeId)}`,
-        summary: "当前筛选结果无法把相邻节点的会话可靠关联起来。可能原因包括地址转换线索缺失、时间偏移未配置、抓包窗口不重叠或筛选条件过窄。",
-        evidenceIds: edgeEvidence.map((event) => event.evidenceId),
-        packetIds: edgeEvidence.flatMap((event) => event.packetIds),
-        confidence: "needs_context",
-        nextSteps: ["补充 NAT/SLB/代理/网关转换线索", "补充相邻节点时间偏移", "确认两个节点抓包时间窗口是否重叠", "放宽筛选条件后重新分析"]
-      });
-    } else if (edge.status === "suspect") {
-      findings.push({
-        findingId: `finding-${findings.length + 1}`,
-        title: `低置信关联：${nodeName(graph, edge.fromNodeId)} -> ${nodeName(graph, edge.toNodeId)}`,
-        summary: "相邻节点存在候选会话关联，但证据不足以形成高置信路径。请优先核对反证和缺失上下文。",
-        evidenceIds: edgeEvidence.map((event) => event.evidenceId),
-        packetIds: edgeEvidence.flatMap((event) => event.packetIds),
-        confidence: "low",
-        nextSteps: ["检查跨节点关联表中的反证", "补充地址转换或时间偏移线索", "确认节点顺序和入/出方向"]
-      });
-    }
-  }
-
-  if (!findings.length && graph.sessionLinks.some((link) => link.confidence === "high")) {
-    const evidenceIds = evidence.filter((event) => event.kind === "session_link").map((event) => event.evidenceId);
-    findings.push({
-      findingId: "finding-1",
-      title: "当前路径已形成高置信关联",
-      summary: "当前筛选流量在相邻节点之间均存在高置信会话关联。首版未发现明确网络断点。",
-      evidenceIds,
-      packetIds: evidence.filter((event) => event.kind === "session_link").flatMap((event) => event.packetIds),
-      confidence: "high",
-      nextSteps: ["如仍有访问失败，请继续检查服务端响应、应用层错误或未覆盖的抓包节点"]
-    });
-  }
-
-  return findings;
-}
-
-function caseReportMarkdown(graph: CaseGraph) {
-  const lines = [
-    `# ${graph.spec.title}`,
-    "",
-    "## 案例概览",
-    `- 案例 ID: ${graph.spec.caseId}`,
-    `- 原始包数: ${graph.rawPackets.length}`,
-    `- 当前筛选包数: ${graph.packets.length}`,
-    `- 筛选条件: ${graph.analysisFilter.client || "*"} -> ${graph.analysisFilter.server || "*"}:${graph.analysisFilter.port ?? "*"} ${graph.analysisFilter.protocol || "*"}`,
-    "",
-    "## 抓包节点",
-    ...graph.captures.map((capture) => `- ${capture.name} (${capture.nodeId}): ${capture.role}, ${capture.interfaceDirection}, ${capture.capturePosition || "-"}`),
-    "",
-    "## 访问路径",
-    ...(graph.path.edges.length ? graph.path.edges.map((edge) => `- ${nodeName(graph, edge.fromNodeId)} -> ${nodeName(graph, edge.toNodeId)}: ${edge.label} (${edge.status})`) : ["- 尚未生成路径边"]),
-    "",
-    "## 跨节点关联",
-    ...(graph.sessionLinks.length ? graph.sessionLinks.map((link) => `- ${link.linkId}: ${nodeName(graph, link.fromNodeId)} -> ${nodeName(graph, link.toNodeId)}, ${link.confidence}, score=${link.score}; 依据: ${link.matchReasons.join("；") || "-"}; 反证: ${link.counterEvidence.join("；") || "-"}`) : ["- 尚未生成跨节点关联"]),
-    "",
-    "## 判断结果",
-    ...(graph.findings.length ? graph.findings.flatMap((finding) => [
-      `- ${finding.title} (${finding.confidence})`,
-      `  - ${finding.summary}`,
-      `  - 证据: ${finding.evidenceIds.join(", ") || "-"}`,
-      `  - 下一步: ${finding.nextSteps.join("；") || "-"}`
-    ]) : ["- 尚未生成判断结果"]),
-    "",
-    "## 关键证据",
-    ...(graph.evidence.length ? graph.evidence.map((event) => `- ${event.evidenceId}: ${event.title}; ${event.detail}; packets=${event.packetIds.join(",") || "-"}`) : ["- 尚未生成证据"])
-  ];
-  return lines.join("\n");
-}
-
-function fallbackAgentAnswer(graph: CaseGraph): AgentAnswer {
-  return {
-    answer: graph.findings[0]
-      ? `${graph.findings[0].title}: ${graph.findings[0].summary}`
-      : "当前 case graph 还没有 finding。请先完成 pcap 解析和后续会话归一化/诊断步骤。",
-    evidenceIds: graph.findings[0]?.evidenceIds || [],
-    packetIds: graph.findings[0]?.packetIds || [],
-    sessionLinkIds: [],
-    findingIds: graph.findings[0] ? [graph.findings[0].findingId] : [],
-    missingContext: [],
-    confidence: graph.findings[0]?.confidence,
-    suggestedActions: graph.findings[0]?.nextSteps || [],
-    handoffAgent: "fallback"
-  };
-}
 
 function buildAgentQuestion(input: z.infer<typeof AgentRequestSchema>) {
   const depthInstruction = [
     input.thinkingDepth ? `思考深度：${input.thinkingDepth}` : "",
     input.reasoningDepth ? `推理深度：${input.reasoningDepth}` : ""
   ].filter(Boolean).join("；");
-  return depthInstruction ? `${input.question}\n\n本次回答控制：${depthInstruction}` : input.question;
+  const history = input.chatHistory.slice(-12)
+    .filter((message) => message.content.trim())
+    .map((message) => `${message.role === "user" ? "用户" : "Agent"}：${message.content.trim().slice(0, 1200)}`)
+    .join("\n\n");
+  return [
+    history ? `以下是当前案例下最近的聊天上下文，只用于理解指代和延续问题，不得覆盖 case graph 证据：\n${history}` : "",
+    `用户当前问题：${input.question}`,
+    depthInstruction ? `本次回答控制：${depthInstruction}` : ""
+  ].filter(Boolean).join("\n\n");
 }
 
 function writeStreamEvent(res: { write: (chunk: string) => void }, event: string, data: unknown) {
@@ -338,7 +409,8 @@ async function testOpenAICompatibleConfig(input: z.infer<typeof LlmTestRequestSc
       model: input.model,
       messages: [{ role: "user", content: "ping" }],
       max_tokens: 8,
-      stream: false
+      stream: false,
+      ...parseProviderData(input.providerData)
     })
   });
   if (!response.ok) {
@@ -346,6 +418,18 @@ async function testOpenAICompatibleConfig(input: z.infer<typeof LlmTestRequestSc
     return { ok: false, status: response.status, error: body.slice(0, 500) || response.statusText };
   }
   return { ok: true, status: response.status };
+}
+
+async function testAgentCompatibleConfig(input: z.infer<typeof LlmTestRequestSchema>) {
+  const apiKey = input.apiKey || apiConfig.llm.apiKey;
+  if (!apiKey) return { ok: false, error: "API Key 不能为空，或先保存已有 Key。" };
+  const providerData = parseProviderData(input.providerData);
+  return runAgentCompatibilityCheck({
+    apiKey,
+    baseURL: input.baseURL,
+    model: input.model,
+    providerData
+  });
 }
 
 export function createAgentRouter() {
@@ -370,7 +454,11 @@ export function createAgentRouter() {
   router.post("/settings/llm", (req, res) => {
     const parsed = LlmSettingsRequestSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-    return res.json({ ...saveLlmSettings(parsed.data), profiles: listLlmProfiles() });
+    try {
+      return res.json({ ...saveLlmSettings(parsed.data), profiles: listLlmProfiles() });
+    } catch (error) {
+      return res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
+    }
   });
 
   router.get("/settings/llm/profiles", (_req, res) => {
@@ -380,7 +468,11 @@ export function createAgentRouter() {
   router.post("/settings/llm/profiles", (req, res) => {
     const parsed = LlmProfileRequestSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-    return res.json({ ...saveLlmProfile(parsed.data), profiles: listLlmProfiles() });
+    try {
+      return res.json({ ...saveLlmProfile(parsed.data), profiles: listLlmProfiles() });
+    } catch (error) {
+      return res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
+    }
   });
 
   router.post("/settings/llm/profiles/:profileId/activate", (req, res) => {
@@ -400,6 +492,16 @@ export function createAgentRouter() {
     if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
     try {
       return res.json(await testOpenAICompatibleConfig(parsed.data));
+    } catch (error) {
+      return res.status(502).json({ ok: false, error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  router.post("/settings/llm/agent-test", async (req, res) => {
+    const parsed = LlmTestRequestSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+    try {
+      return res.json(await testAgentCompatibleConfig(parsed.data));
     } catch (error) {
       return res.status(502).json({ ok: false, error: error instanceof Error ? error.message : String(error) });
     }
@@ -427,6 +529,31 @@ export function createAgentRouter() {
     return res.json({ deleted, cases: listCaseSummaries() });
   });
 
+  router.put("/cases/:caseId", (req, res) => {
+    const parsed = UpdateCaseRequestSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+    try {
+      const graph = loadGraph(req.params.caseId);
+      const nextGraph: CaseGraph = { ...graph, spec: { ...graph.spec, title: parsed.data.title } };
+      writeCaseGraph(nextGraph);
+      cases.set(nextGraph.spec.caseId, nextGraph);
+      return res.json(nextGraph);
+    } catch {
+      return res.status(404).json({ error: "case not found" });
+    }
+  });
+
+  router.post("/cases/new-chat", (_req, res) => {
+    const caseId = safePathPart(`new-chat-${Date.now()}`);
+    const graph = createEmptyCase(CaseSpecSchema.parse({
+      caseId,
+      title: "新建数据包分析会话",
+      protocol: "tcp"
+    }));
+    cases.set(caseId, graph);
+    return res.status(201).json(graph);
+  });
+
   router.post(`/cases/:caseId/captures`, upload.array(apiConfig.uploadFieldName), async (req, res) => {
     const caseId = String(req.params.caseId);
     const files = Array.isArray(req.files) ? req.files : [];
@@ -436,6 +563,7 @@ export function createAgentRouter() {
 
     try {
       let graph = loadGraph(caseId);
+      const addedCaptures = [];
       for (const [index, file] of files.entries()) {
         const fileMetadata = metadata.data[index];
         if (!fileMetadata) return res.status(400).json({ error: `missing metadata for ${file.originalname}` });
@@ -451,11 +579,61 @@ export function createAgentRouter() {
         });
         if (!nodeInput.success) return res.status(400).json({ error: nodeInput.error.flatten() });
         graph = addCapture(graph, nodeInput.data);
+        addedCaptures.push(nodeInput.data);
       }
-      graph = resetAnalysis(graph);
-      graph = createAnalysisRun(graph, "capture_update", `追加或替换 ${files.length} 个抓包文件，已重置分析结果。`);
+      const ranges = await readCaptureTimeRanges(graph, addedCaptures);
+      graph = graphWithCaptureTimeRanges(resetAnalysis(graph), ranges);
+      writeCaseGraph(graph);
       cases.set(caseId, graph);
       return res.status(201).json(graph);
+    } catch (error) {
+      return res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  router.post(`/cases/:caseId/attachments`, upload.array(apiConfig.uploadFieldName), async (req, res) => {
+    const caseId = String(req.params.caseId);
+    const files = Array.isArray(req.files) ? req.files : [];
+    if (!files.length) return res.status(400).json({ error: `${apiConfig.uploadFieldName} file is required` });
+    try {
+      let graph = loadGraph(caseId);
+      const addedCaptures = [];
+      const baseNodeIndex = graph.captures.length;
+      for (const [index, file] of files.entries()) {
+        const strippedPath = await stripPayload(file.path);
+        const pcapFilename = path.basename(strippedPath);
+        const capture = CaptureNodeSchema.parse({
+          nodeId: `node-${baseNodeIndex + index + 1}`,
+          name: file.originalname.replace(/\.[^.]+$/, "") || `抓包节点 ${baseNodeIndex + index + 1}`,
+          role: "unknown",
+          interfaceDirection: "unknown",
+          capturePosition: "",
+          pcapFilename
+        });
+        graph = addCapture(graph, capture);
+        addedCaptures.push(capture);
+      }
+      const ranges = await readCaptureTimeRanges(graph, addedCaptures);
+      graph = graphWithCaptureTimeRanges(resetAnalysis(graph), ranges);
+      const evidenceCards = captureEvidenceCardsFromRanges(ranges);
+      writeCaseGraph(graph);
+      cases.set(caseId, graph);
+      return res.status(201).json({
+        graph,
+        evidenceCards,
+        agentAnswer: {
+          answer: [
+            `已收到 ${files.length} 个数据包文件。`,
+            ...evidenceCards.map((card) => `- ${card.summary}`),
+            "请补充这些抓包节点的角色、抓包位置、入/出方向，以及故障时间、源地址、目的地址和端口。"
+          ].join("\n"),
+          thoughts: ["通过聊天附件接收 pcap。", "裁剪 payload 后用 tshark-query 读取时间范围。", "当前缺少节点上下文，先追问必要信息。"],
+          evidenceCards,
+          actions: ["request_upload"],
+          missingContext: ["节点角色", "抓包位置", "入/出方向", "故障时间", "源地址", "目的地址", "端口"],
+          confidence: "needs_context"
+        }
+      });
     } catch (error) {
       return res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
     }
@@ -470,8 +648,8 @@ export function createAgentRouter() {
       writeCaseGraph(nextGraph);
       cases.set(graph.spec.caseId, nextGraph);
       return res.json(nextGraph);
-    } catch {
-      return res.status(404).json({ error: "case not found" });
+    } catch (error) {
+      return res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
     }
   });
 
@@ -484,97 +662,137 @@ export function createAgentRouter() {
       writeCaseGraph(nextGraph);
       cases.set(graph.spec.caseId, nextGraph);
       return res.json(nextGraph);
-    } catch {
-      return res.status(404).json({ error: "case not found" });
+    } catch (error) {
+      return res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
     }
   });
 
-  router.post("/cases/:caseId/parse", async (req, res) => {
+  router.post("/cases/:caseId/query-runs", async (req, res) => {
     const caseId = String(req.params.caseId);
     try {
       const graph = loadGraph(caseId);
-      const rawPackets = await parseRawPackets(graph);
+      const inferred = inferQueryRunInput(String(req.body?.question || ""), graph);
+      const parsed = QueryRunInputSchema.safeParse({ ...inferred, ...(req.body || {}) });
+      if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+      const nextGraph = await createQueryRun(graph, parsed.data);
+      const queryRun = nextGraph.queryRuns.find((run) => run.queryRunId === nextGraph.activeQueryRunId);
+      return res.status(201).json({ graph: nextGraph, queryRun });
+    } catch (error) {
+      return res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  router.get("/cases/:caseId/query-runs/:queryRunId", (req, res) => {
+    try {
+      const graph = loadGraph(String(req.params.caseId));
+      const queryRun = graph.queryRuns.find((run) => run.queryRunId === String(req.params.queryRunId));
+      if (!queryRun) return res.status(404).json({ error: "query run not found" });
+      return res.json({ queryRun });
+    } catch (error) {
+      return res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  router.post("/cases/:caseId/query-runs/:queryRunId/activate", (req, res) => {
+    try {
+      const graph = loadGraph(String(req.params.caseId));
+      const queryRunId = String(req.params.queryRunId);
+      const cardId = typeof req.body?.cardId === "string" ? req.body.cardId : "";
+      const queryRun = graph.queryRuns.find((run) => run.queryRunId === queryRunId);
+      if (!queryRun) return res.status(404).json({ error: "query run not found" });
       const nextGraph: CaseGraph = {
         ...graph,
-        rawPackets,
-        packets: [],
-        sessions: [],
-        sessionLinks: [],
-        evidence: [],
-        findings: [],
-        path: {
-          nodes: graph.path.nodes.map((node) => ({ ...node, status: "unknown" as const })),
-          edges: []
-        }
+        activeQueryRunId: queryRunId,
+        queryRuns: graph.queryRuns.map((run) => run.queryRunId === queryRunId && cardId ? { ...run, selectedEvidenceCardId: cardId } : run)
       };
-      const outputDirectory = caseDirectory(graph.spec.caseId);
-      mkdirSync(outputDirectory, { recursive: true });
-      writeFileSync(path.join(outputDirectory, "raw-packets.json"), JSON.stringify(rawPackets, null, 2));
-      const graphWithRun = createAnalysisRun(nextGraph, "parse", `解析 ${nextGraph.captures.length} 个抓包节点，读取 ${rawPackets.length} 个原始包摘要。`);
-      cases.set(graph.spec.caseId, graphWithRun);
-      return res.json(graphWithRun);
+      writeCaseGraph(nextGraph);
+      cases.set(graph.spec.caseId, nextGraph);
+      return res.json(nextGraph);
     } catch (error) {
       return res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
     }
   });
 
-  router.post("/cases/:caseId/analyze", async (req, res) => {
-    const caseId = String(req.params.caseId);
-    const parsed = AnalyzeRequestSchema.safeParse(req.body || {});
-    if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  router.post("/cases/:caseId/query-runs/:queryRunId/conversations/:conversationId/select", async (req, res) => {
     try {
-      const graph = loadGraph(caseId);
-      const rawPackets = graph.rawPackets.length ? graph.rawPackets : await parseRawPackets(graph);
-      const analysisFilter = AnalysisFilterSchema.parse(parsed.data);
-      const packets = filterPackets(rawPackets, analysisFilter);
-      const graphWithPackets: CaseGraph = { ...graph, rawPackets, analysisFilter, packets };
-      const normalized = await normalizePacketsWithMcp(graphWithPackets);
-      const graphWithNormalized: CaseGraph = {
-        ...graphWithPackets,
-        sessions: normalized.sessions,
-        evidence: normalized.evidence,
-        findings: normalized.findings,
-        path: normalized.path
-      };
-      const matched = await matchCrossNodeSessionsWithMcp(graphWithNormalized);
-      const linkedPath = await buildPathGraphWithMcp(graphWithNormalized, matched.links);
-      const graphWithLinks: CaseGraph = {
-        ...graphWithNormalized,
-        sessionLinks: matched.links,
-        sessions: normalized.sessions,
-        path: linkedPath,
-        evidence: []
-      };
-      const evidence = linkEvidenceEvents(graphWithLinks, normalized.evidence);
-      const nextGraph: CaseGraph = {
-        ...graphWithLinks,
-        evidence,
-        findings: attributedFindings({ ...graphWithLinks, evidence }, evidence)
-      };
-      const outputDirectory = caseDirectory(graph.spec.caseId);
-      mkdirSync(outputDirectory, { recursive: true });
-      writeFileSync(path.join(outputDirectory, "raw-packets.json"), JSON.stringify(rawPackets, null, 2));
-      writeFileSync(path.join(outputDirectory, "packets.json"), JSON.stringify(packets, null, 2));
-      writeFileSync(path.join(outputDirectory, "sessions.json"), JSON.stringify(normalized.sessions, null, 2));
-      writeFileSync(path.join(outputDirectory, "session-links.json"), JSON.stringify(matched.links, null, 2));
-      const graphWithRun = createAnalysisRun(nextGraph, "analysis", `按当前筛选条件分析，命中 ${packets.length} 个包，生成 ${nextGraph.findings.length} 个判断。`);
-      cases.set(graph.spec.caseId, graphWithRun);
-      return res.json(graphWithRun);
+      const graph = loadGraph(String(req.params.caseId));
+      const selected = await selectConversation(graph, String(req.params.queryRunId), String(req.params.conversationId));
+      if (selected.status === "query_not_found") return res.status(404).json({ error: "query run not found" });
+      if (selected.status === "conversation_not_found") return res.status(404).json({ error: "conversation not found" });
+      if (selected.status === "capture_not_found") return res.status(404).json({ error: "capture file not found" });
+      const shouldOpenWireshark = req.body?.openWireshark === true;
+      const wireshark = shouldOpenWireshark && selected.conversation.pcapFilename
+        ? await evidenceOpenService.openConversation(selected.graph, selected.queryRun, selected.conversation, "打开选中 TCP session 的 Wireshark filter。")
+        : null;
+      return res.json({ graph: selected.graph, queryRun: selected.queryRun, wireshark });
     } catch (error) {
       return res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
     }
   });
 
-  router.post("/tools/parse-pcap", async (req, res) => {
-    const parsed = ParsePcapRequestSchema.safeParse(req.body);
-    if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-
+  router.get("/cases/:caseId/query-runs/:queryRunId/conversations/:conversationId/packets", async (req, res) => {
     try {
-      const result = await parsePcapWithMcp(parsed.data);
-      const outputDirectory = caseDirectory(parsed.data.caseId);
-      mkdirSync(outputDirectory, { recursive: true });
-      writeFileSync(path.join(outputDirectory, "packets.json"), JSON.stringify(result.packets, null, 2));
+      const graph = loadGraph(String(req.params.caseId));
+      const queryRun = graph.queryRuns.find((run) => run.queryRunId === String(req.params.queryRunId));
+      if (!queryRun) return res.status(404).json({ error: "query run not found" });
+      const conversation = queryRun.conversations.find((item) => item.conversationId === String(req.params.conversationId));
+      if (!conversation) return res.status(404).json({ error: "conversation not found" });
+      const capture = graph.captures.find((item) => item.nodeId === conversation.nodeId && item.pcapFilename === conversation.pcapFilename);
+      if (!capture?.pcapFilename) return res.status(404).json({ error: "capture file not found" });
+      const result = await getConversationPacketsWithMcp({
+        capture: {
+          nodeId: capture.nodeId,
+          name: capture.name,
+          pcapFilename: capture.pcapFilename,
+          pcapPath: path.join(capturesDirectory(graph.spec.caseId), capture.pcapFilename)
+        },
+        displayFilter: conversation.displayFilter,
+        limit: apiConfig.query.conversationPacketLimit
+      });
       return res.json(result);
+    } catch (error) {
+      return res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  router.post("/cases/:caseId/query-runs/:queryRunId/open-wireshark", async (req, res) => {
+    try {
+      const graph = loadGraph(String(req.params.caseId));
+      const queryRun = graph.queryRuns.find((run) => run.queryRunId === String(req.params.queryRunId));
+      if (!queryRun) return res.status(404).json({ error: "query run not found" });
+      const conversationId = String(req.body?.conversationId || queryRun.selectedConversationId || "");
+      const conversation = queryRun.conversations.find((item) => item.conversationId === conversationId);
+      if (!conversation) return res.status(404).json({ error: "conversation not found" });
+      const capture = graph.captures.find((item) => item.nodeId === conversation.nodeId && item.pcapFilename === conversation.pcapFilename);
+      if (!capture?.pcapFilename) return res.status(404).json({ error: "capture file not found" });
+      const wireshark = await evidenceOpenService.openConversation(graph, queryRun, conversation);
+      if (!wireshark) return res.status(404).json({ error: "capture file not found" });
+      return res.json(wireshark);
+    } catch (error) {
+      return res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  router.post("/cases/:caseId/evidence/open", async (req, res) => {
+    try {
+      const graph = loadGraph(String(req.params.caseId));
+      const pcapFilename = String(req.body?.pcapFilename || "");
+      const displayFilter = String(req.body?.displayFilter || "");
+      const frameNumber = Number(req.body?.frameNumber);
+      const queryRunId = String(req.body?.queryRunId || "");
+      const cardId = String(req.body?.cardId || "");
+      if (!pcapFilename || !displayFilter) return res.status(400).json({ error: "pcapFilename and displayFilter are required" });
+      const capture = graph.captures.find((item) => item.pcapFilename === pcapFilename);
+      if (!capture?.pcapFilename) return res.status(404).json({ error: "capture file not found" });
+      const result = await evidenceOpenService.openEvidence(graph, {
+        pcapFilename: capture.pcapFilename,
+        displayFilter,
+        frameNumber: Number.isFinite(frameNumber) ? frameNumber : undefined,
+        queryRunId: queryRunId || undefined,
+        cardId: cardId || undefined
+      });
+      if (!result) return res.status(404).json({ error: "capture file not found" });
+      return res.json({ ...result.wireshark, graph: result.graph });
     } catch (error) {
       return res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
     }
@@ -599,7 +817,7 @@ export function createAgentRouter() {
   router.get("/cases/:caseId/report", (req, res) => {
     try {
       const graph = loadGraph(String(req.params.caseId));
-      return res.json({ markdown: caseReportMarkdown(graph) });
+      return res.json({ markdown: buildCaseReportMarkdown(graph) });
     } catch {
       return res.status(404).json({ error: "case not found" });
     }
@@ -618,6 +836,211 @@ export function createAgentRouter() {
     const requestedProfileId = parsedRequest.data.profileId;
     if (requestedProfileId && !activateLlmProfile(requestedProfileId)) {
       return res.status(404).json({ error: "llm profile not found" });
+    }
+    const requestStartedAt = Date.now();
+    const plannerStartedAt = Date.now();
+    const plan = await planUserIntent(graph, parsedRequest.data.question);
+    const plannerDurationMs = Date.now() - plannerStartedAt;
+    try {
+      const plannedResult = await executeAgentIntentPlan(graph, parsedRequest.data.question, plan);
+      if (plannedResult) {
+        const answer = answerWithPlannerThought(plannedResult.answer, plan);
+        recordPlannerRun(graph.spec.caseId, parsedRequest.data.question, plan, plannerDurationMs);
+        recordAnswerRun(graph.spec.caseId, parsedRequest.data.question, plan, plannedResult.status, answer, Date.now() - requestStartedAt);
+        Object.assign(agentRuntimeStatus, {
+          lastRunAt: new Date().toISOString(),
+          lastStatus: plannedResult.status,
+          lastError: "",
+          lastCaseId: graph.spec.caseId,
+          lastModel: apiConfig.llm.model,
+          lastBaseURL: apiConfig.llm.baseURL
+        });
+        return res.json(answer);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      recordPlannerRun(graph.spec.caseId, parsedRequest.data.question, plan, plannerDurationMs);
+      recordErrorRun(graph.spec.caseId, parsedRequest.data.question, plan, `${plan.intent}_error`, error, Date.now() - requestStartedAt);
+      Object.assign(agentRuntimeStatus, {
+        lastRunAt: new Date().toISOString(),
+        lastStatus: `${plan.intent}_error`,
+        lastError: message,
+        lastCaseId: graph.spec.caseId,
+        lastModel: apiConfig.llm.model,
+        lastBaseURL: apiConfig.llm.baseURL
+      });
+      return res.status(502).json({ error: message });
+    }
+    if (apiConfig.llm.apiKey && plan.intent === "llm_explain") {
+      try {
+        const answer = await runPcapTroubleshootingAgent({ graph, question: buildAgentQuestion(parsedRequest.data) });
+        const plannedAnswer = answerWithPlannerThought(answer, plan);
+        recordPlannerRun(graph.spec.caseId, parsedRequest.data.question, plan, plannerDurationMs);
+        recordAnswerRun(graph.spec.caseId, parsedRequest.data.question, plan, "success", plannedAnswer, Date.now() - requestStartedAt);
+        Object.assign(agentRuntimeStatus, {
+          lastRunAt: new Date().toISOString(),
+          lastStatus: "success",
+          lastError: "",
+          lastCaseId: graph.spec.caseId,
+          lastModel: apiConfig.llm.model,
+          lastBaseURL: apiConfig.llm.baseURL
+        });
+        return res.json(plannedAnswer);
+      } catch (error) {
+        recordPlannerRun(graph.spec.caseId, parsedRequest.data.question, plan, plannerDurationMs);
+        recordErrorRun(graph.spec.caseId, parsedRequest.data.question, plan, "error", error, Date.now() - requestStartedAt);
+        Object.assign(agentRuntimeStatus, {
+          lastRunAt: new Date().toISOString(),
+          lastStatus: "error",
+          lastError: error instanceof Error ? error.message : String(error),
+          lastCaseId: graph.spec.caseId,
+          lastModel: apiConfig.llm.model,
+          lastBaseURL: apiConfig.llm.baseURL
+        });
+        return res.status(502).json({ error: `LLM 调用失败：${error instanceof Error ? error.message : String(error)}` });
+      }
+    }
+    if (shouldAnswerUsageHelp(parsedRequest.data.question)) {
+      const answer = usageHelpAnswer();
+      Object.assign(agentRuntimeStatus, {
+        lastRunAt: new Date().toISOString(),
+        lastStatus: "usage_help",
+        lastError: "",
+        lastCaseId: graph.spec.caseId,
+        lastModel: apiConfig.llm.model,
+        lastBaseURL: apiConfig.llm.baseURL
+      });
+      return res.json(answer);
+    }
+    const deterministicAnswer = await deterministicStatisticsAnswer(graph, parsedRequest.data.question);
+    if (deterministicAnswer) {
+      Object.assign(agentRuntimeStatus, {
+        lastRunAt: new Date().toISOString(),
+        lastStatus: "deterministic_statistics",
+        lastError: "",
+        lastCaseId: graph.spec.caseId,
+        lastModel: apiConfig.llm.model,
+        lastBaseURL: apiConfig.llm.baseURL
+      });
+      return res.json(deterministicAnswer);
+    }
+    if (shouldApplyCorrelationContext(parsedRequest.data.question, graph)) {
+      try {
+        const answer = await applyCorrelationContextAndRerun(graph, parsedRequest.data.question);
+        Object.assign(agentRuntimeStatus, {
+          lastRunAt: new Date().toISOString(),
+          lastStatus: "correlation_context_applied",
+          lastError: "",
+          lastCaseId: graph.spec.caseId,
+          lastModel: apiConfig.llm.model,
+          lastBaseURL: apiConfig.llm.baseURL
+        });
+        return res.json(answer);
+      } catch (error) {
+        return res.status(502).json({ error: `关联上下文应用失败：${error instanceof Error ? error.message : String(error)}` });
+      }
+    }
+    if (shouldCorrelateCaptures(parsedRequest.data.question)) {
+      try {
+        const answer = await createCaptureCorrelationQueryRun(graph, parsedRequest.data.question);
+        Object.assign(agentRuntimeStatus, {
+          lastRunAt: new Date().toISOString(),
+          lastStatus: "capture_correlation",
+          lastError: "",
+          lastCaseId: graph.spec.caseId,
+          lastModel: apiConfig.llm.model,
+          lastBaseURL: apiConfig.llm.baseURL
+        });
+        return res.json(answer);
+      } catch (error) {
+        return res.status(502).json({ error: `多文件关联失败：${error instanceof Error ? error.message : String(error)}` });
+      }
+    }
+    try {
+      const adapterResult = await runProtocolAdapter(protocolAdapters, graph, parsedRequest.data.question);
+      if (adapterResult) {
+        Object.assign(agentRuntimeStatus, {
+          lastRunAt: new Date().toISOString(),
+          lastStatus: adapterResult.adapter.status,
+          lastError: "",
+          lastCaseId: graph.spec.caseId,
+          lastModel: apiConfig.llm.model,
+          lastBaseURL: apiConfig.llm.baseURL
+        });
+        return res.json(adapterResult.answer);
+      }
+    } catch (error) {
+      return res.status(502).json({ error: protocolAdapterErrorMessage(error) });
+    }
+    if (shouldCreateQueryRun(parsedRequest.data.question)) {
+      try {
+        const queryInput = QueryRunInputSchema.parse({ ...inferQueryRunInput(parsedRequest.data.question, graph), question: parsedRequest.data.question });
+        const nextGraph = await createQueryRun(graph, queryInput);
+        const answer = queryRunAnswer(nextGraph, nextGraph.activeQueryRunId || "");
+        Object.assign(agentRuntimeStatus, {
+          lastRunAt: new Date().toISOString(),
+          lastStatus: "query_run",
+          lastError: "",
+          lastCaseId: nextGraph.spec.caseId,
+          lastModel: apiConfig.llm.model,
+          lastBaseURL: apiConfig.llm.baseURL
+        });
+        return res.json(answer);
+      } catch (error) {
+        return res.status(502).json({ error: `QueryRun 创建失败：${error instanceof Error ? error.message : String(error)}` });
+      }
+    }
+    if (graph.queryRuns.length && shouldExplainSelectedSessionProblem(parsedRequest.data.question)) {
+      const answer = selectedSessionProblemAnswer(graph);
+      Object.assign(agentRuntimeStatus, {
+        lastRunAt: new Date().toISOString(),
+        lastStatus: "selected_session_diagnosis",
+        lastError: "",
+        lastCaseId: graph.spec.caseId,
+        lastModel: apiConfig.llm.model,
+        lastBaseURL: apiConfig.llm.baseURL
+      });
+      return res.json(answer);
+    }
+    if (graph.queryRuns.length && shouldExplainSelectedSessionProblem(parsedRequest.data.question)) {
+      const answer = selectedSessionProblemAnswer(graph);
+      Object.assign(agentRuntimeStatus, {
+        lastRunAt: new Date().toISOString(),
+        lastStatus: "selected_session_diagnosis",
+        lastError: "",
+        lastCaseId: graph.spec.caseId,
+        lastModel: apiConfig.llm.model,
+        lastBaseURL: apiConfig.llm.baseURL
+      });
+      answer.thoughts?.forEach((thought) => writeStreamEvent(res, "thought", { text: thought }));
+      writeStreamEvent(res, "delta", { text: answer.answer });
+      writeStreamEvent(res, "done", answer);
+      return res.end();
+    }
+
+    if (graph.queryRuns.length && shouldAnswerActiveQueryRun(parsedRequest.data.question)) {
+      const answer = activeQueryRunAnswer(graph, parsedRequest.data.question);
+      Object.assign(agentRuntimeStatus, {
+        lastRunAt: new Date().toISOString(),
+        lastStatus: "query_run_diagnosis",
+        lastError: "",
+        lastCaseId: graph.spec.caseId,
+        lastModel: apiConfig.llm.model,
+        lastBaseURL: apiConfig.llm.baseURL
+      });
+      return res.json(answer);
+    }
+    if (shouldAskForTroubleshootingScope(parsedRequest.data.question, graph)) {
+      const answer = troubleshootingScopeAnswer();
+      Object.assign(agentRuntimeStatus, {
+        lastRunAt: new Date().toISOString(),
+        lastStatus: "needs_query_scope",
+        lastError: "",
+        lastCaseId: graph.spec.caseId,
+        lastModel: apiConfig.llm.model,
+        lastBaseURL: apiConfig.llm.baseURL
+      });
+      return res.json(answer);
     }
     const question = buildAgentQuestion(parsedRequest.data);
     const fallback = fallbackAgentAnswer(graph);
@@ -678,10 +1101,276 @@ export function createAgentRouter() {
     res.setHeader("Connection", "keep-alive");
     res.flushHeaders?.();
 
+    const requestStartedAt = Date.now();
+    const plannerStartedAt = Date.now();
+    const plan = await planUserIntent(graph, parsedRequest.data.question, (text) => writeStreamEvent(res, "thought", { text }));
+    const plannerDurationMs = Date.now() - plannerStartedAt;
+    writeStreamEvent(res, "thought", {
+      text: `Leader Intent Planner 识别：${plan.intent}（${plan.confidence}）${plan.reason ? `，${plan.reason}` : ""}`
+    });
+    try {
+      const plannedResult = await executeAgentIntentPlan(graph, parsedRequest.data.question, plan);
+      if (plannedResult) {
+        const answer = answerWithPlannerThought(plannedResult.answer, plan);
+        recordPlannerRun(graph.spec.caseId, parsedRequest.data.question, plan, plannerDurationMs);
+        recordAnswerRun(graph.spec.caseId, parsedRequest.data.question, plan, plannedResult.status, answer, Date.now() - requestStartedAt);
+        Object.assign(agentRuntimeStatus, {
+          lastRunAt: new Date().toISOString(),
+          lastStatus: plannedResult.status,
+          lastError: "",
+          lastCaseId: graph.spec.caseId,
+          lastModel: apiConfig.llm.model,
+          lastBaseURL: apiConfig.llm.baseURL
+        });
+        answer.thoughts?.forEach((thought) => writeStreamEvent(res, "thought", { text: thought }));
+        writeStreamEvent(res, "delta", { text: answer.answer });
+        writeStreamEvent(res, "done", answer);
+        return res.end();
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      recordPlannerRun(graph.spec.caseId, parsedRequest.data.question, plan, plannerDurationMs);
+      recordErrorRun(graph.spec.caseId, parsedRequest.data.question, plan, `${plan.intent}_error`, error, Date.now() - requestStartedAt);
+      Object.assign(agentRuntimeStatus, {
+        lastRunAt: new Date().toISOString(),
+        lastStatus: `${plan.intent}_error`,
+        lastError: message,
+        lastCaseId: graph.spec.caseId,
+        lastModel: apiConfig.llm.model,
+        lastBaseURL: apiConfig.llm.baseURL
+      });
+      writeStreamEvent(res, "error", { error: message });
+      return res.end();
+    }
+    if (apiConfig.llm.apiKey && plan.intent === "llm_explain") {
+      try {
+        const answer = await runPcapTroubleshootingAgent({
+          graph,
+          question: buildAgentQuestion(parsedRequest.data),
+          onTrace: (text) => writeStreamEvent(res, "thought", { text })
+        });
+        const plannedAnswer = answerWithPlannerThought(answer, plan);
+        recordPlannerRun(graph.spec.caseId, parsedRequest.data.question, plan, plannerDurationMs);
+        recordAnswerRun(graph.spec.caseId, parsedRequest.data.question, plan, "success", plannedAnswer, Date.now() - requestStartedAt);
+        Object.assign(agentRuntimeStatus, {
+          lastRunAt: new Date().toISOString(),
+          lastStatus: "success",
+          lastError: "",
+          lastCaseId: graph.spec.caseId,
+          lastModel: apiConfig.llm.model,
+          lastBaseURL: apiConfig.llm.baseURL
+        });
+        plannedAnswer.thoughts?.forEach((thought) => writeStreamEvent(res, "thought", { text: thought }));
+        for (let index = 0; index < plannedAnswer.answer.length; index += 24) {
+          writeStreamEvent(res, "delta", { text: plannedAnswer.answer.slice(index, index + 24) });
+        }
+        writeStreamEvent(res, "done", plannedAnswer);
+      } catch (error) {
+        const message = `LLM 调用失败：${error instanceof Error ? error.message : String(error)}`;
+        recordPlannerRun(graph.spec.caseId, parsedRequest.data.question, plan, plannerDurationMs);
+        recordErrorRun(graph.spec.caseId, parsedRequest.data.question, plan, "error", error, Date.now() - requestStartedAt);
+        Object.assign(agentRuntimeStatus, {
+          lastRunAt: new Date().toISOString(),
+          lastStatus: "error",
+          lastError: message,
+          lastCaseId: graph.spec.caseId,
+          lastModel: apiConfig.llm.model,
+          lastBaseURL: apiConfig.llm.baseURL
+        });
+        writeStreamEvent(res, "error", { error: message });
+      }
+      return res.end();
+    }
+
+    if (shouldAnswerUsageHelp(parsedRequest.data.question)) {
+      const answer = usageHelpAnswer();
+      Object.assign(agentRuntimeStatus, {
+        lastRunAt: new Date().toISOString(),
+        lastStatus: "usage_help",
+        lastError: "",
+        lastCaseId: graph.spec.caseId,
+        lastModel: apiConfig.llm.model,
+        lastBaseURL: apiConfig.llm.baseURL
+      });
+      answer.thoughts?.forEach((thought) => writeStreamEvent(res, "thought", { text: thought }));
+      writeStreamEvent(res, "delta", { text: answer.answer });
+      writeStreamEvent(res, "done", answer);
+      return res.end();
+    }
+
+    const deterministicAnswer = await deterministicStatisticsAnswer(graph, parsedRequest.data.question);
+    if (deterministicAnswer) {
+      Object.assign(agentRuntimeStatus, {
+        lastRunAt: new Date().toISOString(),
+        lastStatus: "deterministic_statistics",
+        lastError: "",
+        lastCaseId: graph.spec.caseId,
+        lastModel: apiConfig.llm.model,
+        lastBaseURL: apiConfig.llm.baseURL
+      });
+      writeStreamEvent(res, "thought", { text: "识别为确定性统计问题，直接调用对应统计工具，不进入 LLM 自由推理。" });
+      writeStreamEvent(res, "delta", { text: deterministicAnswer.answer });
+      writeStreamEvent(res, "done", deterministicAnswer);
+      return res.end();
+    }
+
+    if (shouldApplyCorrelationContext(parsedRequest.data.question, graph)) {
+      writeStreamEvent(res, "thought", { text: "识别为多文件关联后的上下文补充，准备写入 hint 并重跑关联。" });
+      try {
+        const answer = await applyCorrelationContextAndRerun(graph, parsedRequest.data.question);
+        Object.assign(agentRuntimeStatus, {
+          lastRunAt: new Date().toISOString(),
+          lastStatus: "correlation_context_applied",
+          lastError: "",
+          lastCaseId: graph.spec.caseId,
+          lastModel: apiConfig.llm.model,
+          lastBaseURL: apiConfig.llm.baseURL
+        });
+        answer.thoughts?.forEach((thought) => writeStreamEvent(res, "thought", { text: thought }));
+        writeStreamEvent(res, "delta", { text: answer.answer });
+        writeStreamEvent(res, "done", answer);
+      } catch (error) {
+        const message = `关联上下文应用失败：${error instanceof Error ? error.message : String(error)}`;
+        Object.assign(agentRuntimeStatus, {
+          lastRunAt: new Date().toISOString(),
+          lastStatus: "correlation_context_error",
+          lastError: message,
+          lastCaseId: graph.spec.caseId,
+          lastModel: apiConfig.llm.model,
+          lastBaseURL: apiConfig.llm.baseURL
+        });
+        writeStreamEvent(res, "error", { error: message });
+      }
+      return res.end();
+    }
+
+    if (shouldCorrelateCaptures(parsedRequest.data.question)) {
+      writeStreamEvent(res, "thought", { text: "识别为多文件/多节点链路关联问题，创建 QueryRun。" });
+      writeStreamEvent(res, "thought", { text: "调用 tshark-query MCP 列出 TCP conversations，并按 exact tuple / mapping hint / time offset 关联。" });
+      try {
+        const answer = await createCaptureCorrelationQueryRun(graph, parsedRequest.data.question);
+        Object.assign(agentRuntimeStatus, {
+          lastRunAt: new Date().toISOString(),
+          lastStatus: "capture_correlation",
+          lastError: "",
+          lastCaseId: graph.spec.caseId,
+          lastModel: apiConfig.llm.model,
+          lastBaseURL: apiConfig.llm.baseURL
+        });
+        writeStreamEvent(res, "delta", { text: answer.answer });
+        writeStreamEvent(res, "done", answer);
+      } catch (error) {
+        const message = `多文件关联失败：${error instanceof Error ? error.message : String(error)}`;
+        Object.assign(agentRuntimeStatus, {
+          lastRunAt: new Date().toISOString(),
+          lastStatus: "capture_correlation_error",
+          lastError: message,
+          lastCaseId: graph.spec.caseId,
+          lastModel: apiConfig.llm.model,
+          lastBaseURL: apiConfig.llm.baseURL
+        });
+        writeStreamEvent(res, "error", { error: message });
+      }
+      return res.end();
+    }
+
+    try {
+      const adapterResult = await runProtocolAdapter(protocolAdapters, graph, parsedRequest.data.question);
+      if (adapterResult) {
+        adapterResult.answer.thoughts?.forEach((thought) => writeStreamEvent(res, "thought", { text: thought }));
+        Object.assign(agentRuntimeStatus, {
+          lastRunAt: new Date().toISOString(),
+          lastStatus: adapterResult.adapter.status,
+          lastError: "",
+          lastCaseId: graph.spec.caseId,
+          lastModel: apiConfig.llm.model,
+          lastBaseURL: apiConfig.llm.baseURL
+        });
+        writeStreamEvent(res, "delta", { text: adapterResult.answer.answer });
+        writeStreamEvent(res, "done", adapterResult.answer);
+        return res.end();
+      }
+    } catch (error) {
+      const message = protocolAdapterErrorMessage(error);
+      Object.assign(agentRuntimeStatus, {
+        lastRunAt: new Date().toISOString(),
+        lastStatus: protocolAdapterErrorStatus(),
+        lastError: message,
+        lastCaseId: graph.spec.caseId,
+        lastModel: apiConfig.llm.model,
+        lastBaseURL: apiConfig.llm.baseURL
+      });
+      writeStreamEvent(res, "error", { error: message });
+      return res.end();
+    }
+
+    if (shouldCreateQueryRun(parsedRequest.data.question)) {
+      writeStreamEvent(res, "thought", { text: "识别为访问链路查询，创建 QueryRun。" });
+      writeStreamEvent(res, "thought", { text: "调用 tshark-query MCP 生成 display filter 并查询通讯对。" });
+      try {
+        const queryInput = QueryRunInputSchema.parse({ ...inferQueryRunInput(parsedRequest.data.question, graph), question: parsedRequest.data.question });
+        const nextGraph = await createQueryRun(graph, queryInput);
+        const answer = queryRunAnswer(nextGraph, nextGraph.activeQueryRunId || "");
+        Object.assign(agentRuntimeStatus, {
+          lastRunAt: new Date().toISOString(),
+          lastStatus: "query_run",
+          lastError: "",
+          lastCaseId: nextGraph.spec.caseId,
+          lastModel: apiConfig.llm.model,
+          lastBaseURL: apiConfig.llm.baseURL
+        });
+        writeStreamEvent(res, "delta", { text: answer.answer });
+        writeStreamEvent(res, "done", answer);
+      } catch (error) {
+        const message = `QueryRun 创建失败：${error instanceof Error ? error.message : String(error)}`;
+        Object.assign(agentRuntimeStatus, {
+          lastRunAt: new Date().toISOString(),
+          lastStatus: "query_run_error",
+          lastError: message,
+          lastCaseId: graph.spec.caseId,
+          lastModel: apiConfig.llm.model,
+          lastBaseURL: apiConfig.llm.baseURL
+        });
+        writeStreamEvent(res, "error", { error: message });
+      }
+      return res.end();
+    }
+
+    if (graph.queryRuns.length && shouldAnswerActiveQueryRun(parsedRequest.data.question)) {
+      const answer = activeQueryRunAnswer(graph, parsedRequest.data.question);
+      Object.assign(agentRuntimeStatus, {
+        lastRunAt: new Date().toISOString(),
+        lastStatus: "query_run_diagnosis",
+        lastError: "",
+        lastCaseId: graph.spec.caseId,
+        lastModel: apiConfig.llm.model,
+        lastBaseURL: apiConfig.llm.baseURL
+      });
+      writeStreamEvent(res, "thought", { text: "识别为当前访问链路问题，读取 active QueryRun。" });
+      writeStreamEvent(res, "thought", { text: "使用选中通讯对的确定性诊断结果回答，不让模型泛化判断。" });
+      writeStreamEvent(res, "delta", { text: answer.answer });
+      writeStreamEvent(res, "done", answer);
+      return res.end();
+    }
+
+    if (shouldAskForTroubleshootingScope(parsedRequest.data.question, graph)) {
+      const answer = troubleshootingScopeAnswer();
+      Object.assign(agentRuntimeStatus, {
+        lastRunAt: new Date().toISOString(),
+        lastStatus: "needs_query_scope",
+        lastError: "",
+        lastCaseId: graph.spec.caseId,
+        lastModel: apiConfig.llm.model,
+        lastBaseURL: apiConfig.llm.baseURL
+      });
+      answer.thoughts?.forEach((thought) => writeStreamEvent(res, "thought", { text: thought }));
+      writeStreamEvent(res, "delta", { text: answer.answer });
+      writeStreamEvent(res, "done", answer);
+      return res.end();
+    }
+
     const question = buildAgentQuestion(parsedRequest.data);
-    writeStreamEvent(res, "thought", { text: "读取当前 case graph 和分析版本。" });
-    writeStreamEvent(res, "thought", { text: "通过 case-graph MCP 准备证据、会话、路径和 finding 上下文。" });
-    writeStreamEvent(res, "thought", { text: `使用模型 ${apiConfig.llm.model}，按本次深度参数生成解释。` });
+    writeStreamEvent(res, "thought", { text: `未命中确定性分流，进入 Agents SDK 解释流程；case=${graph.spec.caseId}，activeQueryRun=${graph.activeQueryRunId || "无"}。` });
 
     if (!apiConfig.llm.apiKey) {
       const fallback = fallbackAgentAnswer(graph);
@@ -699,7 +1388,11 @@ export function createAgentRouter() {
     }
 
     try {
-      const answer = await runPcapTroubleshootingAgent({ graph, question });
+      const answer = await runPcapTroubleshootingAgent({
+        graph,
+        question,
+        onTrace: (text) => writeStreamEvent(res, "thought", { text })
+      });
       Object.assign(agentRuntimeStatus, {
         lastRunAt: new Date().toISOString(),
         lastStatus: "success",

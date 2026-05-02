@@ -39,8 +39,7 @@ export function writeCaseGraph(graph: CaseGraph) {
 }
 
 export function readCaseGraph(caseId: string) {
-  const graph = CaseGraphSchema.parse(JSON.parse(readFileSync(graphPath(caseId), "utf8")));
-  return graph.rawPackets.length || !graph.packets.length ? graph : { ...graph, rawPackets: graph.packets };
+  return CaseGraphSchema.parse(JSON.parse(readFileSync(graphPath(caseId), "utf8")));
 }
 
 export function listCaseSummaries() {
@@ -55,7 +54,7 @@ export function listCaseSummaries() {
           title: graph.spec.title,
           updatedAt: stats.mtimeMs,
           captureCount: graph.captures.length,
-          rawPacketCount: graph.rawPackets.length,
+          rawPacketCount: graph.captures.reduce((sum, capture) => sum + (capture.packetCount || 0), 0),
           packetCount: graph.packets.length,
           findingCount: graph.findings.length,
           runCount: graph.analysisRuns.length,
@@ -80,10 +79,13 @@ export function createEmptyCase(spec: CaseSpec) {
     packets: [],
     sessions: [],
     sessionLinks: [],
+    diagnosticTags: [],
     evidence: [],
     findings: [],
     path: { nodes: [], edges: [] },
-    analysisRuns: []
+    queryRuns: [],
+    analysisRuns: [],
+    toolRuns: []
   };
   writeCaseGraph(graph);
   return graph;
