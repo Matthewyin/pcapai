@@ -4,7 +4,7 @@
 
 pcapAI 是一个 Agent-first 本地浏览器工作台，用于离线分析网络故障。
 
-用户上传 pcap 并用自然语言提问后，Chain Planner 生成单步或多步分析计划，确定性 protocol adapter 运行 tshark 查询产出 evidence cards，Leader Agent 综合解读证据链并给出诊断结论。Agent 只读取 case graph（包含所有 QueryRun 及其 evidenceCards、checks、protocolCorrelations），不直接解析原始 pcap。
+用户上传 pcap 并用自然语言提问后，Chain Planner 生成单步或多步分析计划，确定性 protocol adapter 运行 tshark 查询产出 evidence cards，Leader Agent 综合解读证据链并给出诊断结论。Agent 通过 case-graph MCP 只读 case graph，通过 tshark-query MCP 查询原始包数据，不直接解析原始 pcap。
 
 ## 系统范围
 
@@ -25,8 +25,11 @@ pcapAI 是一个 Agent-first 本地浏览器工作台，用于离线分析网络
 - 手工录入 MappingHint（NAT、SLB、代理、网关、隧道）
 - Chain Planner 动态生成 1-5 步分析链（不硬编码任何故障场景）
 - 6 个确定性 protocol adapter（TCP/DNS/TLS/HTTP/ICMP/UDP）
+- Protocol adapter 自改进：三层路由（hardcoded regex → learned patterns → agent fallback）
 - Leader Agent + 5 个 handoff subagent（Triage/Evidence/Path/Protocol/Report）
+- Agent 同时使用 case-graph MCP 和 tshark-query MCP
 - SSE 流式输出，链式步骤进度实时展示
+- 聊天气泡 Markdown 渲染 + 证据卡片在新标签页展示（Blob URL）
 - 一键 Wireshark 打开证据
 - Markdown 报告导出
 - 后续查询建议（suggest_next_query）
@@ -44,8 +47,8 @@ pcapAI 是一个 Agent-first 本地浏览器工作台，用于离线分析网络
 3. Chain Planner 规划分析步骤（单步或多步）。
 4. 确定性步骤运行 tshark 查询，产出 evidence cards + diagnosis checks。
 5. 如有 LLM key，Agent 综合解读前序步骤的证据，给出诊断结论和建议。
-6. 前端展示 evidence cards、诊断检查、后续查询建议。
-7. 用户点击任何 card → 本地 Wireshark 打开对应 filter。
+6. 前端在聊天气泡展示文字分析（Markdown 渲染），在新标签页展示证据卡片（display filter、Wireshark 按钮）。
+7. 用户在新标签页点击任何 card → 本地 Wireshark 打开对应 filter。
 8. 用户可点击建议的后续查询继续下钻，或导出报告。
 
 ## 数据模型
@@ -62,15 +65,18 @@ pcapAI 是一个 Agent-first 本地浏览器工作台，用于离线分析网络
 - `EvidenceCard`：可点击的证据卡，包含 Wireshark filter。
 - `ProtocolCorrelation`：L7 协议到 TCP 的关联（DNS→TCP、TLS SNI→TCP、HTTP Host→TCP）。
 - `AnalysisChainPlan`/`AnalysisChainStep`：分析链计划。
-- `AgentAnswer`：Agent 回复——answer、evidenceCards、checks、suggestedQueries。
+- `AgentAnswer`：Agent 回复——answer、evidenceCards、checks、suggestedQueries、protocolCorrelations。
 
 ## 分析原则
 
 - **确定性优先**：protocol adapter 运行 tshark 直接产出证据，不依赖 LLM。
+- **三层路由**：hardcoded regex → learned patterns（`data/learned_patterns.json`）→ agent fallback（tshark-query MCP）。
+- **自改进**：agent fallback 后 LLM 生成 regex pattern + adapterId，持久化供下次确定性路由使用。无硬编码映射。
 - **链式编排**：Chain Planner 动态规划多步计划，步骤间通过 `paramsFrom` JSON 路径表达式传递参数，不硬编码场景。
 - **Graph reload**：链式执行中每步完成后刷新 case graph，后续步骤可读到前序步骤写入的 QueryRun。
-- **Agent 只读**：Agent 通过 case-graph MCP 读取 case graph（包括所有 QueryRun），不修改证据、不解析 pcap、不执行 shell。
+- **Agent 只读 graph + tshark**：Agent 通过 case-graph MCP 读取 case graph，通过 tshark-query MCP 查询原始包数据。不修改证据、不解析 pcap 文件、不执行 shell。
 - **综合解读**：链的最后一个步骤由 LLM 综合前序步骤的 QueryRun evidenceCards 和 checks，给出诊断结论。如果没有 LLM key，系统只输出确定性统计结果。
+- **聊天是读结论的地方，链接页是操作 Wireshark 的地方**：聊天气泡保留所有文字分析（Markdown 渲染），证据卡片在新标签页展示（Blob URL）。
 
 ## 置信度策略
 

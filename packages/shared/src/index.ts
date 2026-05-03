@@ -476,7 +476,8 @@ export const AgentAnswerSchema = z.object({
   confidence: ConfidenceSchema.optional(),
   suggestedActions: z.array(z.string()).default([]),
   suggestedQueries: z.array(SuggestedQuerySchema).optional(),
-  handoffAgent: z.string().optional()
+  handoffAgent: z.string().optional(),
+  protocolCorrelations: z.array(ProtocolCorrelationSchema).optional()
 });
 export type AgentAnswer = z.infer<typeof AgentAnswerSchema>;
 

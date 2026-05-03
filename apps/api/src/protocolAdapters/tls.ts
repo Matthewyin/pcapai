@@ -3,6 +3,7 @@ import { buildProtocolCorrelations } from "./builders.js";
 import type { ProtocolAdapter, ProtocolAdapterContext } from "./types.js";
 
 function shouldListTlsEvents(question: string) {
+  if (/\bhttp\b|状态码|dns|解析|域名|icmp|udp/i.test(question)) return false;
   return /tls|ssl|https|sni|证书|alert|握手|clienthello|serverhello|server hello|client hello/i.test(question);
 }
 

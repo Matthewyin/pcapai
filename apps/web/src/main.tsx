@@ -1,8 +1,20 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { ArrowUp, BookOpen, CheckCircle, ChevronDown, Copy, Cpu, Eye, EyeOff, History, Maximize2, Minimize2, Moon, MoreHorizontal, Paperclip, Pencil, Pin, PinOff, Plus, Save, Settings, Sun, Trash2, X } from "lucide-react";
+import { marked } from "marked";
+import DOMPurify from "dompurify";
 import { webConfig } from "./config";
 import "./styles.css";
+
+marked.setOptions({ breaks: true, gfm: true });
+
+function renderMarkdown(text: string): string {
+  const html = marked.parse(text) as string;
+  return DOMPurify.sanitize(html, {
+    ALLOWED_TAGS: ["h1", "h2", "h3", "h4", "h5", "h6", "p", "br", "hr", "strong", "em", "del", "ul", "ol", "li", "a", "code", "pre", "blockquote"],
+    ALLOWED_ATTR: ["href", "target", "rel"]
+  });
+}
 
 type PacketSummary = {
   packetId: string;
@@ -347,6 +359,15 @@ type ChatMessage = {
   evidenceCards?: EvidenceCard[];
   suggestedQueries?: Array<{ question: string; reason: string; intent: string }>;
   streaming?: boolean;
+  evidenceIds?: string[];
+  packetIds?: string[];
+  findingIds?: string[];
+  sessionLinkIds?: string[];
+  handoffAgent?: string;
+  confidence?: string;
+  missingContext?: string[];
+  suggestedActions?: string[];
+  protocolCorrelations?: ProtocolCorrelation[];
 };
 
 function fileStem(filename: string) {
@@ -1230,7 +1251,7 @@ function App() {
     setGraph(data.graph);
     setComposerFiles([]);
     await loadCaseHistory();
-    return data as { graph: CaseGraph; agentAnswer?: { answer: string; thoughts?: string[]; evidenceCards?: EvidenceCard[] } };
+    return data as { graph: CaseGraph; agentAnswer?: { answer: string; thoughts?: string[]; evidenceCards?: EvidenceCard[]; protocolCorrelations?: ProtocolCorrelation[] } };
   }
 
   function updateCaptureDraft(index: number, patch: Partial<Omit<CaptureDraft, "file">>) {
@@ -1325,6 +1346,7 @@ function App() {
             content: uploadResult.agentAnswer?.answer || "",
             thoughts: uploadResult.agentAnswer?.thoughts || [],
             evidenceCards: uploadResult.agentAnswer?.evidenceCards || [],
+            protocolCorrelations: uploadResult.agentAnswer?.protocolCorrelations || [],
             streaming: false
           } : message));
           await loadLlmRuntime();
@@ -1377,7 +1399,7 @@ function App() {
         setChatMessages((messages) => messages.map((message) => message.id === assistantId ? { ...message, content: message.content + data.text } : message));
       } else if (event === "done") {
         setAnswer(data.answer || "");
-        setChatMessages((messages) => messages.map((message) => message.id === assistantId ? { ...message, content: data.answer || message.content, evidenceCards: data.evidenceCards || [], suggestedQueries: data.suggestedQueries || [], streaming: false } : message));
+        setChatMessages((messages) => messages.map((message) => message.id === assistantId ? { ...message, content: data.answer || message.content, evidenceCards: data.evidenceCards || [], suggestedQueries: data.suggestedQueries || [], evidenceIds: data.evidenceIds || [], packetIds: data.packetIds || [], findingIds: data.findingIds || [], sessionLinkIds: data.sessionLinkIds || [], handoffAgent: data.handoffAgent || undefined, confidence: data.confidence || undefined, missingContext: data.missingContext || [], suggestedActions: data.suggestedActions || [], protocolCorrelations: data.protocolCorrelations || [], streaming: false } : message));
         void refreshGraph(currentCaseId);
       } else if (event === "error") {
         setChatMessages((messages) => messages.map((message) => message.id === assistantId ? { ...message, content: data.error, streaming: false } : message));
@@ -1395,6 +1417,73 @@ function App() {
     if (buffer.trim()) applyEvent(buffer);
     setChatMessages((messages) => messages.map((message) => message.id === assistantId ? { ...message, streaming: false } : message));
     await loadLlmRuntime();
+  }
+
+  function openEvidenceDetail(message: ChatMessage, caseId: string) {
+    const cards = message.evidenceCards || [];
+    const correlations = message.protocolCorrelations || [];
+    const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+    const cardSections = cards.map((card) => `
+      <div class="ev-card">
+        <div class="ev-card-title">${esc(card.title)}</div>
+        <div class="ev-card-summary">${esc(card.summary)}</div>
+        ${card.pcapFilename ? `<div class="ev-meta">文件：${esc(card.pcapFilename)}${card.frameNumber ? ` / Frame ${card.frameNumber}` : ""}</div>` : ""}
+        ${card.displayFilter ? `<div class="ev-filter"><code>${esc(card.displayFilter)}</code><button onclick="copyFilter(this)" title="复制过滤器">复制</button>${card.pcapFilename ? `<button onclick="openWireshark('${esc(card.pcapFilename)}','${esc(card.displayFilter)}')" title="在 Wireshark 中打开">Wireshark</button>` : ""}</div>` : ""}
+        ${card.packetDisplayFilter && card.packetDisplayFilter !== card.displayFilter ? `<div class="ev-filter"><span>包级过滤器：</span><code>${esc(card.packetDisplayFilter)}</code><button onclick="copyFilter(this)">复制</button></div>` : ""}
+      </div>`).join("");
+    const corrSections = correlations.map((corr) => `
+      <div class="ev-card">
+        <div class="ev-card-title">${esc(corr.kind.replace(/_/g, " ").toUpperCase())}</div>
+        <div class="ev-card-summary">${esc(corr.summary)}</div>
+        <div class="ev-meta">关系：${esc(corr.relation)} / 置信度：${esc(corr.confidence)}</div>
+        ${corr.targetDisplayFilter ? `<div class="ev-filter"><code>${esc(corr.targetDisplayFilter)}</code><button onclick="copyFilter(this)">复制</button></div>` : ""}
+        ${corr.reasons.length ? `<div class="ev-reasons">${corr.reasons.map((r) => `<span>${esc(r)}</span>`).join("")}</div>` : ""}
+      </div>`).join("");
+    const diagSections: string[] = [];
+    if (message.confidence) diagSections.push(`<div class="diag-item"><strong>置信度</strong><span>${esc(message.confidence)}</span></div>`);
+    if (message.handoffAgent) diagSections.push(`<div class="diag-item"><strong>Agent</strong><span>${esc(message.handoffAgent)}</span></div>`);
+    if (message.missingContext?.length) diagSections.push(`<div class="diag-item"><strong>缺失上下文</strong><ul>${message.missingContext.map((c) => `<li>${esc(c)}</li>`).join("")}</ul></div>`);
+    if (message.suggestedActions?.length) diagSections.push(`<div class="diag-item"><strong>建议动作</strong><ul>${message.suggestedActions.map((a) => `<li>${esc(a)}</li>`).join("")}</ul></div>`);
+    if (message.findingIds?.length) diagSections.push(`<div class="diag-item"><strong>Findings</strong><div class="id-list">${message.findingIds.map((id) => `<code>${esc(id)}</code>`).join(" ")}</div></div>`);
+    if (message.evidenceIds?.length) diagSections.push(`<div class="diag-item"><strong>Evidence</strong><div class="id-list">${message.evidenceIds.map((id) => `<code>${esc(id)}</code>`).join(" ")}</div></div>`);
+    if (message.packetIds?.length) diagSections.push(`<div class="diag-item"><strong>Packets</strong><div class="id-list">${message.packetIds.slice(0, 20).map((id) => `<code>${esc(id)}</code>`).join(" ")}${message.packetIds.length > 20 ? ` ...共 ${message.packetIds.length} 个` : ""}</div></div>`);
+    if (message.sessionLinkIds?.length) diagSections.push(`<div class="diag-item"><strong>Session Links</strong><div class="id-list">${message.sessionLinkIds.map((id) => `<code>${esc(id)}</code>`).join(" ")}</div></div>`);
+    const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>证据详情</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:system-ui,-apple-system,sans-serif;background:#f8f9fa;color:#1a1a2e;padding:24px;max-width:900px;margin:0 auto}
+h1{font-size:1.4em;margin-bottom:8px}
+h2{font-size:1.15em;margin:24px 0 12px;padding-bottom:6px;border-bottom:1px solid #e0e0e0;color:#333}
+.ev-card{background:#fff;border:1px solid #e0e0e0;border-radius:8px;padding:14px 16px;margin-bottom:10px}
+.ev-card-title{font-weight:700;font-size:.95em;margin-bottom:4px}
+.ev-card-summary{color:#555;font-size:.88em;margin-bottom:8px}
+.ev-meta{font-size:.8em;color:#888;margin-bottom:6px}
+.ev-filter{display:flex;align-items:center;gap:6px;margin-top:4px}
+.ev-filter code{background:#f0f2f5;padding:3px 8px;border-radius:4px;font-size:.82em;flex:1;overflow-x:auto;white-space:nowrap}
+.ev-filter button{padding:3px 10px;border:1px solid #ccc;border-radius:4px;background:#fafafa;cursor:pointer;font-size:.78em;white-space:nowrap}
+.ev-filter button:hover{background:#eee}
+.ev-reasons{margin-top:6px;display:flex;flex-wrap:wrap;gap:4px}
+.ev-reasons span{background:#e8f0fe;color:#1a73e8;padding:2px 8px;border-radius:10px;font-size:.75em}
+.diag-item{margin-bottom:8px;font-size:.85em}
+.diag-item strong{display:inline-block;width:100px;color:#666}
+.diag-item ul{padding-left:1.5em;margin-top:4px}
+.diag-item li{margin:2px 0;color:#444}
+.id-list code{background:#f0f0f0;padding:1px 4px;border-radius:3px;font-size:.78em;margin:2px}
+.empty{color:#999;font-size:.9em;font-style:italic}
+.section-label{font-size:.8em;color:#888;margin-bottom:8px}
+</style></head><body>
+<h1>证据详情</h1>
+<p class="section-label">${cards.length} 张证据卡片${correlations.length ? `，${correlations.length} 条协议关联` : ""}</p>
+<h2>证据卡片</h2>
+${cards.length ? cardSections : '<p class="empty">无证据卡片</p>'}
+${correlations.length ? `<h2>协议关联</h2>${corrSections}` : ""}
+${diagSections.length ? `<h2>诊断详情</h2>${diagSections.join("")}` : ""}
+<script>
+function copyFilter(btn){const code=btn.parentElement.querySelector("code");navigator.clipboard.writeText(code.textContent).then(()=>{btn.textContent="已复制";setTimeout(()=>btn.textContent="复制",1200)}).catch(()=>btn.textContent="失败")}
+function openWireshark(pcap,filter){fetch("${window.location.origin}/api/cases/${esc(caseId)}/evidence/open",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({pcapFilename:pcap,displayFilter:filter})}).catch(()=>{})}
+</script></body></html>`;
+    const blob = new Blob([html], { type: "text/html" });
+    window.open(URL.createObjectURL(blob), "_blank");
   }
 
   async function copyMessage(message: ChatMessage) {
@@ -2076,25 +2165,16 @@ function App() {
                       <ol>{message.thoughts.map((thought, index) => <li key={`${message.id}-thought-${index}`}>{thought}</li>)}</ol>
                     </details>
                   ) : null}
-                  <p>{message.content || (message.streaming ? "等待模型返回..." : "")}</p>
-	                  {message.evidenceCards?.length ? (
-	                    <div className="evidenceCardList">
-	                      {message.evidenceCards.map((card) => (
-	                        <article className={`evidenceCard ${card.kind}`} key={card.cardId}>
-	                          <strong>{card.title}</strong>
-	                          <span>{card.summary}</span>
-		                          {card.displayFilter ? (
-		                            <details>
-		                              <summary>过滤器</summary>
-		                              <code>{card.displayFilter}</code>
-		                            </details>
-			                          ) : null}
-			                          <div className="evidenceCardActions">
-			                            {card.pcapFilename && (card.displayFilter || card.frameNumber || card.packetDisplayFilter) ? <button type="button" onClick={() => void openEvidenceCard(card)}>Wireshark</button> : null}
-			                            {card.actions.includes("copy_filter") && (card.displayFilter || card.packetDisplayFilter) ? <button type="button" onClick={() => void copyEvidenceFilter(card)}>复制过滤器</button> : null}
-			                          </div>
-	                        </article>
-	                      ))}
+                  {message.role === "assistant" && !message.streaming && message.content ? (
+                    <div className="markdownBody" dangerouslySetInnerHTML={{ __html: renderMarkdown(message.content) }} />
+                  ) : (
+                    <p>{message.content || (message.streaming ? "等待模型返回..." : "")}</p>
+                  )}
+	                  {message.role === "assistant" && !message.streaming && message.evidenceCards?.length ? (
+	                    <div className="evidenceRefLink">
+	                      <button type="button" onClick={() => openEvidenceDetail(message, graph?.spec.caseId || "")}>
+	                        查看证据详情（{message.evidenceCards.length} 张卡片）
+	                      </button>
 	                    </div>
 	                  ) : null}
                   {message.suggestedQueries?.length ? (

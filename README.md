@@ -8,12 +8,15 @@ Agent-first packet troubleshooting chat workbench. Upload pcap files, ask questi
 User uploads pcap + asks question
   → Chain Planner classifies intent, produces single-step or multi-step plan
   → Deterministic protocol adapters run tshark queries (TCP/DNS/TLS/HTTP/ICMP/UDP)
-  → Evidence cards + diagnosis checks rendered in browser
+  → Three-tier routing: hardcoded regex → learned patterns → agent with tshark-query MCP
+  → Evidence cards shown in new browser tab, text analysis in chat bubble
   → Agent explains findings and suggests follow-up queries
   → User clicks any card → local Wireshark opens with the exact filter
 ```
 
 Chain Planner generates 1–5 step plans dynamically. Each step uses one of 12 intents. Steps can bind parameters from prior results via JSON path expressions. No scenario is hard-coded — plans derive from the case graph.
+
+Protocol adapters self-improve: when no regex matches, the agent handles the query via tshark-query MCP and LLM generates a new regex pattern for future routing.
 
 ## Quick start
 
@@ -51,7 +54,8 @@ POST /agent/stream
   planChain()         → single-step or multi-step AnalysisChainPlan
   executeChain()      → runs steps sequentially, binds params between steps
   per step:
-    deterministic?    → protocol adapter runs tshark directly, no LLM
+    deterministic?    → protocol adapter three-tier routing:
+                         hardcoded regex → learned patterns → agent fallback
     open-ended?       → leader agent hands off to Triage/Evidence/Path/Protocol/Report subagents
   aggregate result    → AgentAnswer with evidence cards, checks, suggested queries
 ```
@@ -69,9 +73,19 @@ POST /agent/stream
 
 Each adapter builds evidence cards and L7-to-TCP protocol correlations without LLM involvement.
 
+### Protocol adapter self-improvement
+
+When no hardcoded regex matches a question:
+1. Check learned patterns from `data/learned_patterns.json`
+2. If still no match, fall back to agent (with tshark-query MCP access)
+3. After agent handles the query, LLM generates a new regex pattern + target adapterId
+4. Pattern is validated and persisted for future deterministic routing
+
+No hardcoded tool→adapter mapping — LLM determines both regex and adapterId.
+
 ### Agent architecture
 
-Leader agent with 5 handoff subagents (Triage, Evidence, Path, Protocol, Report), all sharing a read-only case-graph MCP. Agents never parse pcap files or execute shell commands. They can suggest follow-up queries via `suggest_next_query`, but the user decides whether to execute them.
+Leader agent with 5 handoff subagents (Triage, Evidence, Path, Protocol, Report), all sharing case-graph MCP and tshark-query MCP. Agents can query raw packet data via tshark-query tools but never parse pcap files or execute shell commands. They can suggest follow-up queries via `suggest_next_query`, but the user decides whether to execute them.
 
 ## Commands
 
@@ -86,8 +100,8 @@ npm run test               # run tests (apps/api + mcp/tshark-query)
 
 ## Documentation
 
-- [Design document](docs/design.md) — v1 scope, data model, analysis principles
-- [Architecture](docs/architecture.md) — QueryRun pipeline, agent boundaries, API endpoints
+- [Design document](docs/design.md) — scope, data model, analysis principles, self-improvement
+- [Architecture](docs/architecture.md) — QueryRun pipeline, agent boundaries, three-tier adapter routing
 
 ## Tech stack
 

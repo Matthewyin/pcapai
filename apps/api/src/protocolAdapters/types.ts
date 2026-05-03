@@ -105,10 +105,18 @@ export type ProtocolAdapterContext = {
   listHttpPackets: (input: { captures: CaptureQueryInput[]; displayFilter: string; limit?: number }) => Promise<{ packets: PacketSummary[] }>;
 };
 
-export async function runProtocolAdapter(adapters: ProtocolAdapter[], graph: CaseGraph, question: string): Promise<{ adapter: ProtocolAdapter; answer: AgentAnswer } | null> {
+export async function runProtocolAdapter(adapters: ProtocolAdapter[], graph: CaseGraph, question: string, learnedPatterns?: { regex: RegExp; adapterId: string }[]): Promise<{ adapter: ProtocolAdapter; answer: AgentAnswer } | null> {
   const adapter = adapters.find((candidate) => candidate.match(question));
-  if (!adapter) return null;
-  return { adapter, answer: await adapter.run(graph, question) };
+  if (adapter) return { adapter, answer: await adapter.run(graph, question) };
+  if (learnedPatterns) {
+    for (const { regex, adapterId } of learnedPatterns) {
+      if (regex.test(question)) {
+        const matched = adapters.find((a) => a.id === adapterId);
+        if (matched) return { adapter: matched, answer: await matched.run(graph, question) };
+      }
+    }
+  }
+  return null;
 }
 
 export function protocolAdapterErrorStatus(adapter?: ProtocolAdapter) {

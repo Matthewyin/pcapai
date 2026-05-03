@@ -4,6 +4,8 @@
 
 pcapAI 是 Agent-first 本地浏览器工作台，用于离线分析网络故障。核心流程：用户上传 pcap 并提问 → Chain Planner 规划分析链 → 确定性 protocol adapter 运行 tshark 产出证据 → Agent 综合解读证据链 → 输出诊断结论。
 
+Protocol adapter 路由采用三层 fallback：硬编码 regex → 学习到的 pattern → agent（带 tshark-query MCP）。学习到的 pattern 由 LLM 动态生成并持久化到 `data/learned_patterns.json`。
+
 ```mermaid
 flowchart LR
   Web["聊天工作台"] --> API["apps/api"]
@@ -16,6 +18,7 @@ flowchart LR
   Planner --> Agent["Leader Agent"]
   Adapters --> Graph["case graph"]
   Agent --> CaseGraph["case-graph MCP"]
+  Agent --> Query
   CaseGraph --> Graph
   Web --> SSE["SSE 流式输出"]
 ```
@@ -31,6 +34,10 @@ Chain Planner (LLM 或本地兜底)
 ┌─────────────────────────────────────────┐
 │ 确定性层 (protocol adapters)             │
 │ TCP / DNS / TLS / HTTP / ICMP / UDP     │
+│ 三层路由：                               │
+│   1. hardcoded regex match              │
+│   2. learned patterns (JSON 文件)       │
+│   3. agent fallback + 学习              │
 │ 直接运行 tshark，产出 evidenceCards     │
 │ + checks + protocolCorrelations         │
 └─────────────────────────────────────────┘
@@ -41,6 +48,7 @@ Chain Planner (LLM 或本地兜底)
 │ llm_explain intent → Leader Agent       │
 │ 或自动综合 (无 llm_explain 步骤时追加)   │
 │ 通过 case-graph MCP 只读 case graph     │
+│ 通过 tshark-query MCP 查询原始包数据    │
 │ 产出诊断结论 + suggestedQueries         │
 └─────────────────────────────────────────┘
 ```
@@ -67,9 +75,10 @@ Chain Planner (LLM 或本地兜底)
     - **TriageAgent** — 问题分流，决定交由哪个专业 subagent
     - **EvidenceAgent** — 综合解读证据链，读取 QueryRun evidenceCards 和 checks
     - **PathAgent** — 多节点路径分析和跨链路关联
-    - **ProtocolAgent** — 协议级行为分析（TCP/DNS/TLS/HTTP/ICMP/UDP）
+    - **ProtocolAgent** — 协议级行为分析，可直接调用 tshark-query MCP 查询原始包数据
     - **ReportAgent** — 生成结构化诊断报告
-  - 所有 agent 通过 case-graph MCP 只读 case graph，不解析 pcap、不执行 shell
+  - 所有 agent 同时使用 case-graph MCP 和 tshark-query MCP
+  - 返回 `AgentAnswerWithToolCalls`，包含 tool call 名称用于 pattern learning
 
 #### Planner 层 (`src/services/`)
 - **plannerService.ts** — 分析链执行引擎：
@@ -78,23 +87,29 @@ Chain Planner (LLM 或本地兜底)
   - `executeChain()` — 逐步执行，支持 `paramsFrom` 参数绑定 + `reloadGraph` 回调
   - `executeChainStep()` — 单步 intent 路由（12 种 intent）
   - 本地兜底模式：无 LLM key 时使用正则匹配
+- **patternLearner.ts** — protocol adapter 自改进模块：
+  - `loadLearnedPatterns()` — 从 `data/learned_patterns.json` 加载 learned regex→adapterId 对
+  - `learnFromAgentRun()` — agent fallback 后，用 LLM 生成 regex + adapterId；验证后持久化
+  - 无硬编码 tool→adapter 映射，LLM 从问题上下文和 adapter 列表决定路由
 
 #### Protocol Adapters (`src/protocolAdapters/`)
 6 个确定性 adapter，绕过 LLM 直接运行 tshark：
-- **tcp.ts** — RST session pairs、retransmission pairs、zero-window pairs、SYN-no-SYN/ACK、one-way traffic
+- **tcp.ts** — RST session pairs、retransmission pairs、zero-window pairs、SYN-no-SYN/ACK、one-way traffic、TCP issues overview
 - **dns.ts** — DNS 失败/无响应事务，rcode 分组，多 check 输出
 - **tls.ts** — TLS 握手事件（ClientHello/ServerHello/Alert），握手完整性检查，多 check 输出
 - **http.ts** — HTTP 事务（4xx/5xx），请求/响应匹配，多 check 输出
 - **icmp.ts** — ICMP Unreachable/TTL Exceeded/Fragmentation
 - **udp.ts** — UDP 流聚合
 - 共享逻辑在 `builders.ts`：packet pair 分组、evidence card 创建、L7→TCP protocol correlations（DNS→TCP、TLS SNI→TCP、HTTP Host→TCP）
+- `types.ts` 中 `runProtocolAdapter()` 实现三层路由：hardcoded regex → learned patterns → null（由调用方 fallback 到 agent）
 
 ### `apps/web` — React 工作台
 
 单文件 React 19 应用（`src/main.tsx`）。聊天优先布局：
 - 会话历史、消息流、底部输入框
 - pcap 上传（文件选择 / 拖放 / 粘贴）
-- 证据卡片：display filter、conversations、packets、protocol correlations、时间范围
+- Markdown 渲染（`marked` + `dompurify`）用于已完成的 assistant 消息
+- 证据卡片在浏览器新标签页展示（Blob URL，"查看证据详情" 按钮）——聊天气泡保留文字分析，链接页用于 Wireshark 操作
 - SSE 流式 agent 回答
 - 链式步骤进度（chain_start → step_start → step_done → chain_done）
 - Mapping hint / time offset hint 编辑
@@ -110,7 +125,7 @@ Zod schema + TypeScript 类型，定义完整领域模型：
 - `QueryRun`, `QueryPath`, `EvidenceCard`
 - `ProtocolCorrelation`, `AccessCandidateGroup`
 - `AnalysisChainPlan`, `AnalysisChainStep`, `ChainStepResult`
-- `AgentAnswer`, `QueryDiagnosis`
+- `AgentAnswer`（含 `protocolCorrelations` 字段）, `QueryDiagnosis`
 - `CaseGraph` — 聚合所有上述数据
 
 ### `config/defaults.json` — 集中配置
@@ -163,13 +178,16 @@ Zod schema + TypeScript 类型，定义完整领域模型：
     无 llm_explain 步骤 → 自动追加 LLM 综合解读
   ↓
 2b. Single deterministic path:
-    protocol adapter 匹配 → tshark 查询
+    protocol adapter 三层路由:
+      hardcoded regex match → tshark 查询
+      learned pattern match → tshark 查询
+      无匹配 → agent fallback (case-graph + tshark-query MCP)
     → evidenceCards + checks + protocolCorrelations
     → 写入 QueryRun
   ↓
 2c. Agent path (llm_explain intent):
     Leader Agent → handoff → subagent
-    → 通过 case-graph MCP 读取 case graph
+    → 通过 case-graph MCP + tshark-query MCP
     → 诊断结论 + suggestedQueries
 ```
 
@@ -184,6 +202,16 @@ Zod schema + TypeScript 类型，定义完整领域模型：
 6. 浏览器展示证据卡片
 ```
 
+## Protocol Adapter 自改进
+
+Protocol adapter 路由采用三层 fallback：
+
+1. **Hardcoded regex** — 每个 adapter 有内置的 match 函数
+2. **Learned patterns** — `data/learned_patterns.json` 存储 `{regex, adapterId}` 对，由 LLM 在 agent fallback 后生成
+3. **Agent fallback** — leader agent 通过 tshark-query MCP 处理查询；成功后 `patternLearner` 用 LLM 生成新 regex pattern
+
+学习模块（`src/services/patternLearner.ts`）无硬编码 tool→adapter 映射。LLM 从问题上下文和可用 adapter 列表决定 regex 和 adapterId。
+
 ## 分析链执行
 
 ### 12 种 Intent
@@ -195,7 +223,7 @@ Zod schema + TypeScript 类型，定义完整领域模型：
 | `network_statistics` | 确定性网络事件查询 |
 | `mapping_hint_update` | 更新 mapping hint 并重跑关联 |
 | `capture_correlation` | 多文件关联查询 |
-| `protocol_event_query` | 协议事件查询（DNS/TLS/HTTP/ICMP/UDP） |
+| `protocol_event_query` | 协议事件查询（三层路由 + agent fallback） |
 | `tcp_session_query` | TCP session 查询 |
 | `selected_session_diagnosis` | 当前 session 诊断追问 |
 | `active_query_explain` | 当前 QueryRun 解释 |
@@ -217,10 +245,11 @@ Zod schema + TypeScript 类型，定义完整领域模型：
 - 内存缓存：`Map<string, CaseGraph>` 缓存最近加载的 graph
 - Agent 临时文件：`PCAPAI_CASE_GRAPH_PATH` 指向的 temp JSON 文件
 - LLM profiles：`.env` 中 `PCAPAI_LLM_PROFILE_*` 条目
+- Learned patterns：`data/learned_patterns.json`（regex→adapterId 对，由 LLM 生成）
 
 ## Agent 边界
 
-Leader Agent 不直接读 pcap，不执行 shell，不自行拼路径。Agent 的输入只来自 case-graph MCP 的 16 个只读工具。
+Leader Agent 通过 case-graph MCP 只读 case graph，通过 tshark-query MCP 查询原始包数据。Agent 不自行解析 pcap 文件，不执行 shell。
 
 如果没有 QueryRun 或没有选中通讯对，Agent 必须追问查询条件，不能给确定断点结论。
 
@@ -244,3 +273,4 @@ Leader Agent 不直接读 pcap，不执行 shell，不自行拼路径。Agent �
 - 单 pcap 只返回单节点 hop，不伪造多跳
 - Wireshark 采用本地桌面打开方式，不嵌入浏览器
 - LLM 综合解读质量取决于模型遵循指令的能力，可能需要迭代调整 agent 指令
+- Learned patterns 由 LLM 生成，质量取决于模型 regex 生成能力

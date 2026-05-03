@@ -3,6 +3,7 @@ import { buildProtocolCorrelations } from "./builders.js";
 import type { ProtocolAdapter, ProtocolAdapterContext } from "./types.js";
 
 function shouldListDnsFailures(question: string) {
+  if (/\bhttp\b|状态码|status|[45]xx|tls|ssl|icmp|udp/i.test(question)) return false;
   return /dns|解析|域名|nxdomain|servfail|rcode|无响应|no response/i.test(question);
 }
 

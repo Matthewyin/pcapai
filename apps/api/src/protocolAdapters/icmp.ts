@@ -1,6 +1,7 @@
 import type { ProtocolAdapter, ProtocolAdapterContext } from "./types.js";
 
 function shouldListIcmpEvents(question: string) {
+  if (/\bhttp\b|dns|解析|域名|tls|ssl|udp/i.test(question)) return false;
   return /icmp|unreachable|不可达|TTL|ttl|超时|fragmentation|分片|需要分片|端口不可达|主机不可达|网络不可达/i.test(question);
 }
 

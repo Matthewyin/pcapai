@@ -9,11 +9,13 @@ import {
   MappingHintSchema,
   QueryRunInputSchema,
   TimeOffsetHintSchema,
+  type AgentAnswer,
   type CaseGraph,
   type EvidenceCard,
   type QueryRun,
 } from "../../../../packages/shared/src/index.js";
 import { runAgentCompatibilityCheck, runPcapTroubleshootingAgent } from "../agents/runtime.js";
+import { learnFromAgentRun, loadLearnedPatterns } from "../services/patternLearner.js";
 import { apiConfig } from "../config.js";
 import { getCaptureTimeRangeWithMcp, getConversationPacketsWithMcp, listDnsPacketsWithMcp, listHttpPacketsWithMcp, listIcmpEventsWithMcp, listTcpResetsWithMcp, listTcpRetransmissionsWithMcp, listTcpZeroWindowWithMcp, listTlsPacketsWithMcp, listUdpPacketsWithMcp, queryPacketsWithMcp } from "../mcp/tsharkQueryClient.js";
 import { createPacketPairAnswer, createProtocolQueryAnswer, groupPacketPairs, noCaptureAnswer, pairGroupFromPackets, pairKey, protocolPacketCard } from "../protocolAdapters/builders.js";
@@ -334,8 +336,44 @@ const plannerService = createPlannerService({
   applyCorrelationContextAndRerun,
   createCaptureCorrelationQueryRun,
   runProtocolEventQuery: async (graph, question) => {
-    const adapterResult = await runProtocolAdapter(protocolAdapters, graph, question);
-    return adapterResult ? { status: adapterResult.adapter.status, answer: adapterResult.answer } : null;
+    const matching = protocolAdapters.filter((candidate) => candidate.match(question));
+    if (!matching.length) {
+      const learnedPatterns = loadLearnedPatterns();
+      const adapterResult = await runProtocolAdapter(protocolAdapters, graph, question, learnedPatterns);
+      if (adapterResult) return { status: adapterResult.adapter.status, answer: adapterResult.answer };
+      if (apiConfig.llm.apiKey) {
+        try {
+          const agentAnswer = await runPcapTroubleshootingAgent({ graph, question });
+          const adapterIds = protocolAdapters.map((a) => a.id);
+          learnFromAgentRun(question, agentAnswer.toolCalls || [], adapterIds).catch(() => {});
+          return { status: "agent_fallback", answer: agentAnswer };
+        } catch {
+          return null;
+        }
+      }
+      return null;
+    }
+    if (matching.length === 1) {
+      const answer = await matching[0].run(graph, question);
+      return { status: matching[0].status, answer };
+    }
+    const results = await Promise.all(matching.map(async (adapter) => ({ adapter, answer: await adapter.run(graph, question) })));
+    const combinedAnswer: AgentAnswer = {
+      answer: results.map((r) => r.answer.answer).join("\n\n---\n\n"),
+      thoughts: results.flatMap((r) => r.answer.thoughts || []),
+      evidenceCards: results.flatMap((r) => r.answer.evidenceCards || []),
+      actions: results.flatMap((r) => r.answer.actions || []),
+      evidenceIds: results.flatMap((r) => r.answer.evidenceIds),
+      packetIds: results.flatMap((r) => r.answer.packetIds),
+      sessionLinkIds: results.flatMap((r) => r.answer.sessionLinkIds),
+      findingIds: results.flatMap((r) => r.answer.findingIds),
+      missingContext: results.flatMap((r) => r.answer.missingContext),
+      confidence: results.every((r) => r.answer.confidence === "certain") ? "certain" : results.some((r) => r.answer.confidence === "low" || r.answer.confidence === "needs_context") ? "low" : "high",
+      suggestedActions: results.flatMap((r) => r.answer.suggestedActions),
+      suggestedQueries: results.flatMap((r) => r.answer.suggestedQueries || []),
+      handoffAgent: results[results.length - 1]?.answer.handoffAgent
+    };
+    return { status: "deterministic_multi_protocol", answer: combinedAnswer };
   },
   createTcpSessionQueryRun: async (graph, question) => {
     const queryInput = QueryRunInputSchema.parse({ ...inferQueryRunInput(question, graph), question });
@@ -1349,7 +1387,8 @@ export function createAgentRouter() {
     }
 
     try {
-      const adapterResult = await runProtocolAdapter(protocolAdapters, graph, parsedRequest.data.question);
+      const learnedPatterns = loadLearnedPatterns();
+      const adapterResult = await runProtocolAdapter(protocolAdapters, graph, parsedRequest.data.question, learnedPatterns);
       if (adapterResult) {
         adapterResult.answer.thoughts?.forEach((thought) => writeStreamEvent(res, "thought", { text: thought }));
         Object.assign(agentRuntimeStatus, {
@@ -1475,6 +1514,8 @@ export function createAgentRouter() {
         lastModel: apiConfig.llm.model,
         lastBaseURL: apiConfig.llm.baseURL
       });
+      const adapterIds = protocolAdapters.map((a) => a.id);
+      learnFromAgentRun(parsedRequest.data.question, answer.toolCalls || [], adapterIds).catch(() => {});
       for (let index = 0; index < answer.answer.length; index += 24) {
         writeStreamEvent(res, "delta", { text: answer.answer.slice(index, index + 24) });
       }

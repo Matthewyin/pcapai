@@ -1,6 +1,7 @@
 import type { ProtocolAdapter, ProtocolAdapterContext } from "./types.js";
 
 function shouldListUdpFlows(question: string) {
+  if (/\bhttp\b|dns|解析|域名|tls|ssl|icmp/i.test(question)) return false;
   return /udp/i.test(question) && /flow|流|通信|通讯|无响应|单向|unreachable|不可达|前|top|\d+/.test(question);
 }
 

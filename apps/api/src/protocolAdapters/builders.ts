@@ -340,7 +340,8 @@ export function createProtocolQueryAnswer(deps: Pick<BuilderDependencies, "retai
       missingContext: [],
       confidence,
       suggestedActions: input.packets.length ? input.suggestedActions : ["确认协议、时间范围、源目的地址是否正确。"],
-      handoffAgent: input.handoffAgent
+      handoffAgent: input.handoffAgent,
+      protocolCorrelations: input.protocolCorrelations || []
     };
   };
 }

@@ -71,23 +71,7 @@ function confidenceFrom(value: unknown): AgentAnswer["confidence"] {
 }
 
 function formatAgentAnswer(answer: AgentAnswer): AgentAnswer {
-  const lines = [answer.answer.trim() || "当前没有形成可解释的结论。"];
-  if (answer.confidence) lines.push("", `置信度：${answer.confidence}`);
-  if (answer.missingContext.length) {
-    lines.push("", "缺失上下文：", ...answer.missingContext.map((item) => `- ${item}`));
-  }
-  if (answer.suggestedActions.length) {
-    lines.push("", "建议动作：", ...answer.suggestedActions.map((item) => `- ${item}`));
-  }
-  const references = [
-    answer.findingIds.length ? `finding: ${answer.findingIds.join(", ")}` : "",
-    answer.evidenceIds.length ? `evidence: ${answer.evidenceIds.join(", ")}` : "",
-    answer.sessionLinkIds.length ? `sessionLink: ${answer.sessionLinkIds.join(", ")}` : "",
-    answer.packetIds.length ? `packet: ${answer.packetIds.join(", ")}` : ""
-  ].filter(Boolean);
-  if (references.length) lines.push("", "证据引用：", ...references.map((item) => `- ${item}`));
-  if (answer.handoffAgent) lines.push("", `处理 Agent：${answer.handoffAgent}`);
-  return { ...answer, answer: lines.join("\n") };
+  return { ...answer, answer: answer.answer.trim() || "当前没有形成可解释的结论。" };
 }
 
 function normalizeSuggestedQueries(value: unknown): Array<{ question: string; reason: string; intent: string }> {
@@ -286,7 +270,7 @@ export async function runIntentPlanner(input: IntentPlannerInput): Promise<Agent
       "- protocol_statistics：用户问协议种类、协议数量、协议分布。",
       "- network_statistics：用户问 IP 数量、源/目的 IP 排名、端口分布、RST 数量、重传数量、HTTP 状态码分布、DNS rcode 分布等事实统计。",
       "- tcp_session_query：用户给出时间、源/目的、端口，要求分析访问、通信对、TCP session、路径候选。",
-      "- protocol_event_query：用户要求列出 DNS/HTTP/TLS/ICMP/UDP/RST/重传/Zero Window/包级事件或前 N 个异常 session。",
+      "- protocol_event_query：用户要求列出 DNS/HTTP/TLS/ICMP/UDP/RST/重传/Zero Window/包级事件或前 N 个异常 session。即使问题同时提到多种协议，也只选一个 intent——选择用户最关注的那种协议。",
       "- capture_correlation：用户问多个 pcap/两个文件/多节点能否串起来、路径还原、跨节点关联。",
       "- mapping_hint_update：用户补充 NAT/F5/LB/SLB/代理/地址转换/时间偏移/节点上下文，用于重跑多文件关联。",
       "- selected_session_diagnosis：用户问当前选中的 session 为什么失败、问题在哪、哪里异常。",
@@ -341,7 +325,7 @@ export async function runChainPlanner(input: ChainPlannerInput): Promise<Analysi
       "- protocol_statistics：协议种类、数量、分布。",
       "- network_statistics：IP/端口/RST/重传/状态码等事实统计。",
       "- tcp_session_query：分析访问、TCP session、路径候选。",
-      "- protocol_event_query：列出 DNS/HTTP/TLS/ICMP/UDP/RST/重传/Zero Window 事件。",
+      "- protocol_event_query：列出 DNS/HTTP/TLS/ICMP/UDP/RST/重传/Zero Window 事件。每个 step 的 purpose 应只涉及一种协议或一种事件类型（如 \"查询 DNS 解析异常\" 或 \"查看 RST 通信对\"），不要在同一个 step 同时查询多种协议。如需查询多种协议，拆成多个 step。",
       "- capture_correlation：多节点/多文件关联。",
       "- mapping_hint_update：补充 NAT/F5/LB/代理/地址转换/时间偏移。",
       "- selected_session_diagnosis：当前 session 诊断。",
@@ -406,7 +390,22 @@ export async function runAgentCompatibilityCheck(input: CompatibilityInput) {
   return { ok: true, output: String(result.finalOutput || "").slice(0, 500) };
 }
 
-export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<AgentAnswer> {
+export type AgentAnswerWithToolCalls = AgentAnswer & { toolCalls?: string[] };
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function extractToolCalls(result: any): string[] {
+  const tools: string[] = [];
+  if (!result?.newItems) return tools;
+  for (const item of result.newItems) {
+    if (item.type === "tool_call_item" || item.type === "function_call") {
+      const name = item.rawItem?.name;
+      if (name) tools.push(name);
+    }
+  }
+  return tools;
+}
+
+export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<AgentAnswerWithToolCalls> {
   setDefaultModelProvider(new OpenAIProvider({
     apiKey: apiConfig.llm.apiKey,
     baseURL: apiConfig.llm.baseURL,
@@ -426,9 +425,20 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
     cacheToolsList: true
   });
 
-  input.onTrace?.("正在连接 case-graph MCP。");
+  const tsharkQueryMcp = new MCPServerStdio({
+    name: "tshark-query-mcp",
+    command: apiConfig.tsharkQueryMcp.command,
+    args: apiConfig.tsharkQueryMcp.args,
+    cwd: apiConfig.tsharkQueryMcp.cwd,
+    cacheToolsList: true
+  });
+
+  input.onTrace?.("正在连接 case-graph MCP 和 tshark-query MCP。");
   await caseGraphMcp.connect();
-  input.onTrace?.("case-graph MCP 已连接，Agent 只能通过 MCP 读取证据。");
+  await tsharkQueryMcp.connect();
+  input.onTrace?.("case-graph MCP 和 tshark-query MCP 已连接。");
+
+  const mcpServers = [caseGraphMcp, tsharkQueryMcp];
 
   const triageAgent = new Agent({
     name: "TriageAgent",
@@ -443,7 +453,7 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
     ].join("\n"),
     model: apiConfig.llm.model,
     modelSettings: modelSettings(),
-    mcpServers: [caseGraphMcp]
+    mcpServers
   });
 
   const evidenceAgent = new Agent({
@@ -463,7 +473,7 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
     ].join("\n"),
     model: apiConfig.llm.model,
     modelSettings: modelSettings(),
-    mcpServers: [caseGraphMcp]
+    mcpServers
   });
 
   const pathAgent = new Agent({
@@ -480,7 +490,7 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
     ].join("\n"),
     model: apiConfig.llm.model,
     modelSettings: modelSettings(),
-    mcpServers: [caseGraphMcp]
+    mcpServers
   });
 
   const protocolAgent = new Agent({
@@ -488,6 +498,8 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
     instructions: [
       "你是 pcapAI 的协议专项诊断专家。",
       "必须先调用 load_case_graph，再调用 get_active_query_run、get_protocol_correlations、get_evidence_cards 和 get_query_diagnosis。",
+      "当需要查询原始协议数据（如 TCP RST、重传、Zero Window、DNS、TLS、HTTP、ICMP、UDP 包）时，直接调用 tshark-query MCP 的工具。调用时 capturesJson 参数从 case graph 的 captures 字段获取（JSON 字符串化的 [{nodeId, pcapFilename}] 数组）。",
+      "可用的 tshark-query 工具包括：list_tcp_resets、list_tcp_retransmissions、list_tcp_zero_window、list_dns_packets、list_tls_packets、list_http_packets、list_icmp_events、list_udp_packets、query_packets、build_display_filter、get_network_statistics。",
       "解释完协议关联后，调用 suggest_next_query 获取后续查询建议，将结果放入 suggestedQueries 字段。",
       "用户询问 DNS、TLS、SSL、SNI、HTTP、Host、URI、状态码、ICMP、UDP 或 L7 与 TCP 的关系时，优先使用 protocolCorrelations。",
       "只解释 DNS-to-TCP、TLS-SNI-to-TCP、HTTP-Host-to-TCP 的确定性关联，不自动推断 SSL 卸载、Cookie 会话保持或后端连接池。",
@@ -497,7 +509,7 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
     ].join("\n"),
     model: apiConfig.llm.model,
     modelSettings: modelSettings(),
-    mcpServers: [caseGraphMcp]
+    mcpServers
   });
 
   const reportAgent = new Agent({
@@ -512,7 +524,7 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
     ].join("\n"),
     model: apiConfig.llm.model,
     modelSettings: modelSettings(),
-    mcpServers: [caseGraphMcp]
+    mcpServers
   });
 
   const leaderAgent = new Agent({
@@ -533,7 +545,7 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
     handoffs: [triageAgent, evidenceAgent, pathAgent, protocolAgent, reportAgent],
     model: apiConfig.llm.model,
     modelSettings: modelSettings(),
-    mcpServers: [caseGraphMcp]
+    mcpServers
   });
   input.onTrace?.(`已创建 Leader Agent 和 5 个专家 Agent，模型=${apiConfig.llm.model}。`);
 
@@ -549,10 +561,13 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
       }
     });
     input.onTrace?.("Agents SDK 运行完成，正在归一化模型输出为 AgentAnswer。");
-    return parseAgentOutput(result.finalOutput);
+    const answer = parseAgentOutput(result.finalOutput);
+    const toolCalls = extractToolCalls(result);
+    return { ...answer, toolCalls };
   } finally {
+    await tsharkQueryMcp.close();
     await caseGraphMcp.close();
     rmSync(tempDirectory, { recursive: true, force: true });
-    input.onTrace?.("case-graph MCP 已关闭，临时 case graph 快照已清理。");
+    input.onTrace?.("MCP 已关闭，临时 case graph 快照已清理。");
   }
 }
