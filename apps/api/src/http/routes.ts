@@ -1130,14 +1130,15 @@ export function createAgentRouter() {
           onError: (step, error, index, total) => {
             writeStreamEvent(res, "step_done", { stepId: step.stepId, status: "error", summary: `步骤失败：${error instanceof Error ? error.message : String(error)}`, index, total });
           }
-        });
+        }, () => loadGraph(graph.spec.caseId));
         const hasLlmStep = chainPlan.steps.some((s) => s.intent === "llm_explain");
         let enrichedAnswer = finalAnswer;
         if (!hasLlmStep && apiConfig.llm.apiKey) {
           writeStreamEvent(res, "thought", { text: "综合解读证据，生成诊断结论..." });
           try {
             const synthesisQuestion = `基于以下分析链结果，综合解读异常并给出诊断结论：\n${finalAnswer.answer}`;
-            const llmAnswer = await runPcapTroubleshootingAgent({ graph, question: synthesisQuestion });
+            const freshGraph = loadGraph(graph.spec.caseId);
+            const llmAnswer = await runPcapTroubleshootingAgent({ graph: freshGraph, question: synthesisQuestion });
             enrichedAnswer = {
               ...finalAnswer,
               answer: `${finalAnswer.answer}\n\n---\n### 综合解读\n${llmAnswer.answer}`,

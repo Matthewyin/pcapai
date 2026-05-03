@@ -247,8 +247,10 @@ export async function executeChain(
   graph: CaseGraph,
   plan: AnalysisChainPlan,
   executeStep: (graph: CaseGraph, intent: string, params: Record<string, unknown>) => Promise<{ status: string; answer: AgentAnswer } | null>,
-  callbacks?: ChainCallbacks
+  callbacks?: ChainCallbacks,
+  reloadGraph?: () => CaseGraph
 ): Promise<{ results: ChainStepResult[]; finalAnswer: AgentAnswer }> {
+  let currentGraph = graph;
   const results: ChainStepResult[] = [];
   for (let index = 0; index < plan.steps.length; index++) {
     const step = plan.steps[index];
@@ -257,7 +259,8 @@ export async function executeChain(
     try {
       const params = resolveStepParams(step, results);
       if (!params.question && !params.purpose) params.purpose = step.purpose;
-      const result = await executeStep(graph, step.intent, params);
+      const result = await executeStep(currentGraph, step.intent, params);
+      if (reloadGraph) currentGraph = reloadGraph();
       const durationMs = Date.now() - startedAt;
       const stepResult = ChainStepResultSchema.parse({
         stepId: step.stepId,
