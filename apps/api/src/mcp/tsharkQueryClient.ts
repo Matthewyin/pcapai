@@ -181,7 +181,7 @@ export async function getConversationPacketsWithMcp(input: { capture: CaptureQue
 }
 
 export async function getPacketDetailWithMcp(input: { pcapPath: string; frameNumber: number }) {
-  return callTsharkQueryTool("get_packet_detail", input, PacketDetailResultSchema);
+  return callTsharkQueryTool("get_tshark_packet_detail", input, PacketDetailResultSchema);
 }
 
 export async function listTcpResetsWithMcp(input: { captures: CaptureQueryInput[]; displayFilter: string; limit?: number }) {

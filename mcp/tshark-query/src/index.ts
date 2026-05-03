@@ -738,7 +738,7 @@ server.registerTool(
 );
 
 server.registerTool(
-  "get_packet_detail",
+  "get_tshark_packet_detail",
   {
     title: "Get packet detail",
     description: "Return verbose packet detail from tshark.",
