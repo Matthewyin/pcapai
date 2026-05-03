@@ -2694,6 +2694,26 @@ pre {
   border-left: 3px solid var(--accent-2);
 }
 
+.suggestedQueries {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+.suggestedQuery {
+  background: var(--surface-1);
+  border: 1px solid var(--border-1);
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  color: var(--text-1);
+}
+.suggestedQuery:hover {
+  background: var(--surface-2);
+  border-color: var(--accent-1);
+}
+
 .workbenchShell > .caseRail,
 .conversationPanel,
 .caseStatusBar,

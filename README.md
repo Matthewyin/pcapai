@@ -1,36 +1,98 @@
 # pcapAI
 
-pcapAI is an Agent-first packet troubleshooting chat workbench built around OpenAI Agents SDK for TypeScript.
+Agent-first packet troubleshooting chat workbench. Upload pcap files, ask questions in natural language, get deterministic evidence cards with one-click Wireshark drill-down.
 
-## Architecture
+## How it works
 
-- Browser workbench: `apps/web`
-- Agent API: `apps/api`
-- Leader agent and subagents: `apps/api/src/agents`
-- MCP servers:
-  - `mcp/tshark-query`
-  - `mcp/evidence-opener`
-  - `mcp/case-graph`
-- Shared schemas: `packages/shared`
+```
+User uploads pcap + asks question
+  → Chain Planner classifies intent, produces single-step or multi-step plan
+  → Deterministic protocol adapters run tshark queries (TCP/DNS/TLS/HTTP/ICMP/UDP)
+  → Evidence cards + diagnosis checks rendered in browser
+  → Agent explains findings and suggests follow-up queries
+  → User clicks any card → local Wireshark opens with the exact filter
+```
 
-Detailed docs:
+Chain Planner generates 1–5 step plans dynamically. Each step uses one of 12 intents. Steps can bind parameters from prior results via JSON path expressions. No scenario is hard-coded — plans derive from the case graph.
 
-- [首版设计方案](docs/design.md)
-- [Agent 与 MCP 架构](docs/architecture.md)
-
-## Development
+## Quick start
 
 ```bash
 npm install
-npm run dev
+npm run dev          # starts API (port 30022) + web (port 30023)
 ```
 
-Open the Vite URL printed by `npm run dev`.
+Open `http://127.0.0.1:30023`. Default config lives in `config/defaults.json`, overridable via `PCAPAI_*` env vars.
 
-Default local settings live in `config/defaults.json` and can be overridden with environment variables.
+To enable LLM-powered agent and chain planner:
 
-To enable real LLM calls, set `PCAPAI_LLM_API_KEY`. See `.env.example`.
+```bash
+cp .env.example .env
+# edit PCAPAI_LLM_API_KEY in .env
+```
 
-## Boundary
+Without an API key, the system falls back to local pattern matching for intent classification and skips the agent conversation path. Deterministic protocol adapters always work.
 
-The main troubleshooting unit is a chat-scoped `QueryRun`: user question and uploaded pcap -> capture metadata -> tshark display filter -> candidate conversations -> evidence cards -> Wireshark opener. Upload does not full-parse large pcap files; packet summaries are read later through bounded, display-filtered tshark queries. Agents explain active QueryRun evidence, route questions, ask for missing context, and prepare user-facing output.
+## Architecture
+
+```
+apps/web         React 19 single-file workbench — chat, evidence cards, settings
+apps/api         Express API + chain planner + deterministic adapters + agent runtime
+mcp/tshark-query capinfos + tshark queries (conversations, packets, protocols, stats)
+mcp/evidence-opener  opens local Wireshark with pcap path + display filter
+mcp/case-graph   read-only MCP for agents — loads case graph from temp file
+packages/shared  Zod schemas + TypeScript types for the full domain model
+```
+
+### Request pipeline
+
+```
+POST /agent/stream
+  planChain()         → single-step or multi-step AnalysisChainPlan
+  executeChain()      → runs steps sequentially, binds params between steps
+  per step:
+    deterministic?    → protocol adapter runs tshark directly, no LLM
+    open-ended?       → leader agent hands off to Triage/Evidence/Path/Protocol/Report subagents
+  aggregate result    → AgentAnswer with evidence cards, checks, suggested queries
+```
+
+### Deterministic protocol adapters
+
+| Adapter | Triggers on | Checks produced |
+|---------|-------------|-----------------|
+| TCP | RST, retransmission, zero-window, SYN, one-way traffic | Session pair health |
+| DNS | DNS queries, NXDOMAIN, SERVFAIL | Rcode distribution, unanswered queries |
+| TLS | ClientHello, ServerHello, alerts, SNI | Handshake status, SNI distribution, version mix |
+| HTTP | Status codes, request/response pairing | Status distribution, latency outliers, host distribution |
+| ICMP | Unreachable, TTL exceeded, fragmentation | Error event summary |
+| UDP | Flow aggregation by endpoint pair | Flow distribution |
+
+Each adapter builds evidence cards and L7-to-TCP protocol correlations without LLM involvement.
+
+### Agent architecture
+
+Leader agent with 5 handoff subagents (Triage, Evidence, Path, Protocol, Report), all sharing a read-only case-graph MCP. Agents never parse pcap files or execute shell commands. They can suggest follow-up queries via `suggest_next_query`, but the user decides whether to execute them.
+
+## Commands
+
+```bash
+npm run dev                # API + web
+npm run dev -w apps/api    # API only
+npm run dev -w apps/web    # web only
+npm run build              # build all workspaces
+npm run check              # type-check all workspaces
+npm run test               # run tests (apps/api + mcp/tshark-query)
+```
+
+## Documentation
+
+- [Design document](docs/design.md) — v1 scope, data model, analysis principles
+- [Architecture](docs/architecture.md) — QueryRun pipeline, agent boundaries, API endpoints
+
+## Tech stack
+
+- TypeScript, React 19, Express, Vite
+- OpenAI Agents SDK (pluggable LLM endpoint via config)
+- MCP (Model Context Protocol) over stdio
+- tshark / Wireshark for packet analysis
+- npm workspaces monorepo

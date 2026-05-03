@@ -585,6 +585,104 @@ server.registerTool(
   }
 );
 
+function suggestNextQueries(graph: CaseGraph) {
+  const suggestions: Array<{ question: string; reason: string; intent: string; params?: Record<string, unknown> }> = [];
+  const activeQueryRun = (graph.queryRuns || []).find((run) => run.queryRunId === graph.activeQueryRunId);
+  const diagnosis = activeQueryRun?.selectedDiagnosis;
+  const path = activeQueryRun?.path;
+  const correlations = activeQueryRun?.protocolCorrelations || [];
+  const selectedConversation = activeQueryRun?.conversations.find((c) => c.conversationId === activeQueryRun.selectedConversationId);
+
+  if (!graph.rawPackets.length && !graph.packets.length) {
+    suggestions.push({ question: "请先上传 pcap 文件", reason: "当前案例没有可查询的抓包数据。", intent: "needs_clarification" });
+    return suggestions;
+  }
+
+  if (!activeQueryRun) {
+    if (graph.captures.length >= 2) {
+      suggestions.push({ question: "这两个抓包文件能串起来吗？", reason: `有 ${graph.captures.length} 个抓包节点，可以尝试多文件关联。`, intent: "capture_correlation" });
+    }
+    if (graph.captures.length === 1) {
+      suggestions.push({ question: "查看 TCP RST 和异常 session", reason: "还没有 QueryRun，可以先查看传输层异常事件。", intent: "protocol_event_query" });
+    }
+    suggestions.push({ question: "查看协议分布统计", reason: "了解抓包包含哪些协议，帮助缩小排查范围。", intent: "network_statistics" });
+    return suggestions;
+  }
+
+  if (correlations.some((c) => c.kind === "dns_to_tcp")) {
+    const dnsCorr = correlations.find((c) => c.kind === "dns_to_tcp");
+    if (dnsCorr?.nextSteps?.length) {
+      suggestions.push({ question: dnsCorr.nextSteps[0], reason: `DNS 关联发现：${dnsCorr.summary}`, intent: "tcp_session_query", params: { displayFilter: dnsCorr.targetDisplayFilter } });
+    }
+  }
+
+  if (correlations.some((c) => c.kind === "http_host_to_tcp")) {
+    const httpCorr = correlations.find((c) => c.kind === "http_host_to_tcp");
+    if (httpCorr?.nextSteps?.length) {
+      suggestions.push({ question: httpCorr.nextSteps[0], reason: `HTTP 关联发现：${httpCorr.summary}`, intent: "selected_session_diagnosis", params: { displayFilter: httpCorr.targetDisplayFilter } });
+    }
+  }
+
+  if (correlations.some((c) => c.kind === "tls_sni_to_tcp")) {
+    const tlsCorr = correlations.find((c) => c.kind === "tls_sni_to_tcp");
+    if (tlsCorr?.nextSteps?.length) {
+      suggestions.push({ question: tlsCorr.nextSteps[0], reason: `TLS 关联发现：${tlsCorr.summary}`, intent: "selected_session_diagnosis", params: { displayFilter: tlsCorr.targetDisplayFilter } });
+    }
+  }
+
+  if (diagnosis?.checks.some((c) => c.key === "rst" && c.status === "problem")) {
+    suggestions.push({ question: "RST 是从哪个方向发出的？", reason: "当前 session 存在 RST，需要确定方向来源。", intent: "selected_session_diagnosis" });
+  }
+
+  if (diagnosis?.checks.some((c) => c.key === "handshake" && c.status === "problem")) {
+    suggestions.push({ question: "建连失败的服务端是否可达？", reason: "SYN 发出但未收到 SYN-ACK，可能是服务端或中间设备问题。", intent: "selected_session_diagnosis" });
+  }
+
+  if (path && path.hops.some((h) => h.status === "missing") && !graph.mappingHints.length) {
+    const missingNodes = path.hops.filter((h) => h.status === "missing").map((h) => nodeName(graph, h.nodeId));
+    suggestions.push({ question: "补充 NAT/F5/LB 代理映射线索", reason: `路径在 ${missingNodes.join("、")} 节点缺失，可能存在地址转换。`, intent: "mapping_hint_update" });
+  }
+
+  if (path && path.edges.some((e) => e.status === "needs_context")) {
+    suggestions.push({ question: "补充时间偏移或抓包方向", reason: "相邻节点有时间窗口不重叠或需要补充映射。", intent: "mapping_hint_update" });
+  }
+
+  if (selectedConversation && selectedConversation.retransmissionCount > 3) {
+    suggestions.push({ question: "重传集中在哪个时间段？", reason: `当前 session 有 ${selectedConversation.retransmissionCount} 个重传。`, intent: "selected_session_diagnosis" });
+  }
+
+  if (activeQueryRun.candidateGroups?.some((g) => g.failureCount > 0 && g.successCount > 0)) {
+    const group = activeQueryRun.candidateGroups.find((g) => g.failureCount > 0 && g.successCount > 0);
+    suggestions.push({ question: "成功的和失败的 session 有什么区别？", reason: `同一链路组有 ${group!.successCount} 成功、${group!.failureCount} 失败，对比差异可定位间歇性问题。`, intent: "selected_session_diagnosis" });
+  }
+
+  if (graph.captures.length >= 2 && !activeQueryRun.path?.hops.some((h) => h.status === "observed")) {
+    suggestions.push({ question: "尝试跨节点关联", reason: "有多个抓包节点但当前 QueryRun 未形成跨节点路径。", intent: "capture_correlation" });
+  }
+
+  if (diagnosis?.findings.length && !suggestions.length) {
+    suggestions.push({ question: "生成排障报告", reason: "已有足够的诊断结论，可以生成报告。", intent: "report_request" });
+  }
+
+  if (!suggestions.length) {
+    suggestions.push({ question: "深入分析当前 session", reason: "可以进一步查看当前选中通讯对的详细行为。", intent: "selected_session_diagnosis" });
+  }
+
+  return suggestions.slice(0, 5);
+}
+
+server.registerTool(
+  "suggest_next_query",
+  {
+    title: "Suggest next query",
+    description: "基于当前 case graph 的证据模式，返回最多 5 个建议的后续查询。每个建议包含可执行的问题文本和推荐理由。",
+    inputSchema: {}
+  },
+  async () => ({
+    content: [{ type: "text", text: JSON.stringify(suggestNextQueries(loadGraph())) }]
+  })
+);
+
 server.registerTool(
   "export_report",
   {

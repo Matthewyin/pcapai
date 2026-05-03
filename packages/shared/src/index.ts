@@ -292,7 +292,8 @@ export const PathHopSchema = z.object({
   anomalies: z.array(z.string()).default([]),
   wiresharkFilter: z.string(),
   correlation: z.enum(["exact_tuple", "mapping_hint", "missing", "needs_context"]).default("missing"),
-  correlationReasons: z.array(z.string()).default([])
+  correlationReasons: z.array(z.string()).default([]),
+  protocolStatus: z.record(z.string(), z.unknown()).optional()
 });
 export type PathHop = z.infer<typeof PathHopSchema>;
 
@@ -455,6 +456,13 @@ export const CaseGraphSchema = z.object({
 });
 export type CaseGraph = z.infer<typeof CaseGraphSchema>;
 
+export const SuggestedQuerySchema = z.object({
+  question: z.string(),
+  reason: z.string(),
+  intent: z.string()
+});
+export type SuggestedQuery = z.infer<typeof SuggestedQuerySchema>;
+
 export const AgentAnswerSchema = z.object({
   answer: z.string(),
   thoughts: z.array(z.string()).optional(),
@@ -467,6 +475,52 @@ export const AgentAnswerSchema = z.object({
   missingContext: z.array(z.string()).default([]),
   confidence: ConfidenceSchema.optional(),
   suggestedActions: z.array(z.string()).default([]),
+  suggestedQueries: z.array(SuggestedQuerySchema).optional(),
   handoffAgent: z.string().optional()
 });
 export type AgentAnswer = z.infer<typeof AgentAnswerSchema>;
+
+export const AgentIntentEnum = z.enum([
+  "usage_help",
+  "protocol_statistics",
+  "network_statistics",
+  "tcp_session_query",
+  "protocol_event_query",
+  "capture_correlation",
+  "mapping_hint_update",
+  "active_query_explain",
+  "selected_session_diagnosis",
+  "report_request",
+  "needs_clarification",
+  "llm_explain"
+]);
+export type AgentIntent = z.infer<typeof AgentIntentEnum>;
+
+export const AnalysisChainStepSchema = z.object({
+  stepId: z.string(),
+  intent: AgentIntentEnum,
+  purpose: z.string(),
+  params: QueryRunInputSchema.partial().optional(),
+  paramsFrom: z.record(z.string(), z.string()).optional()
+});
+export type AnalysisChainStep = z.infer<typeof AnalysisChainStepSchema>;
+
+export const AnalysisChainPlanSchema = z.object({
+  chainId: z.string(),
+  planKind: z.enum(["single", "chain"]),
+  question: z.string(),
+  steps: z.array(AnalysisChainStepSchema),
+  confidence: z.enum(["high", "medium", "low"]).default("medium"),
+  reason: z.string().default(""),
+  missingContext: z.array(z.string()).default([])
+});
+export type AnalysisChainPlan = z.infer<typeof AnalysisChainPlanSchema>;
+
+export const ChainStepResultSchema = z.object({
+  stepId: z.string(),
+  intent: AgentIntentEnum,
+  status: z.string(),
+  answer: AgentAnswerSchema,
+  durationMs: z.number().optional()
+});
+export type ChainStepResult = z.infer<typeof ChainStepResultSchema>;

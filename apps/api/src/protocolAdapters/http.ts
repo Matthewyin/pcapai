@@ -60,6 +60,109 @@ function httpCheck(packets: PacketSummary[]) {
   };
 }
 
+function httpStatusCodeDistribution(responses: PacketSummary[]) {
+  const distribution = new Map<number, { code: number; count: number; packetIds: string[] }>();
+  for (const packet of responses) {
+    if (packet.httpResponseCode === undefined) continue;
+    const current = distribution.get(packet.httpResponseCode);
+    if (current) {
+      current.count += 1;
+      current.packetIds.push(packet.packetId);
+    } else {
+      distribution.set(packet.httpResponseCode, { code: packet.httpResponseCode, count: 1, packetIds: [packet.packetId] });
+    }
+  }
+  return [...distribution.values()].sort((a, b) => b.count - a.count);
+}
+
+function httpLatencyStats(packets: PacketSummary[]) {
+  const pairedPackets = packets.filter((p) => p.httpTime !== undefined);
+  if (!pairedPackets.length) return null;
+  const times = pairedPackets.map((p) => p.httpTime!);
+  const max = Math.max(...times);
+  const avg = times.reduce((sum, t) => sum + t, 0) / times.length;
+  const outliers = pairedPackets.filter((p) => p.httpTime !== undefined && p.httpTime > avg * 3);
+  return { count: times.length, avg: avg.toFixed(3), max: max.toFixed(3), outlierCount: outliers.length, outlierPacketIds: outliers.map((p) => p.packetId) };
+}
+
+function httpHostDistribution(requests: PacketSummary[]) {
+  const hosts = new Map<string, number>();
+  for (const packet of requests) {
+    if (!packet.httpHost) continue;
+    hosts.set(packet.httpHost, (hosts.get(packet.httpHost) || 0) + 1);
+  }
+  return [...hosts.entries()].sort((a, b) => b[1] - a[1]).map(([host, count]) => ({ host, count }));
+}
+
+function buildHttpChecks(packets: PacketSummary[], correlations: unknown[]) {
+  const requests = packets.filter((packet) => packet.httpRequestMethod);
+  const responses = packets.filter((packet) => packet.httpResponseCode !== undefined);
+  const checks: Array<{ key: "http"; label: string; status: "ok" | "warn" | "problem" | "unknown"; summary: string; packetIds: string[]; nextSteps: string[] }> = [];
+
+  const mainCheck = httpCheck(packets);
+  checks.push({
+    key: "http",
+    label: "HTTP transaction",
+    status: mainCheck.status,
+    summary: `${mainCheck.summary}${correlations.length ? ` 已生成 ${correlations.length} 条 HTTP-to-TCP 关联。` : ""}`,
+    packetIds: mainCheck.packetIds,
+    nextSteps: ["查看 HTTP 状态码、request/response 是否成对，以及底层 TCP 是否存在 RST 或重传。"]
+  });
+
+  if (responses.length) {
+    const distribution = httpStatusCodeDistribution(responses);
+    const errorCodes = distribution.filter((d) => d.code >= 400);
+    if (errorCodes.length) {
+      const detail = errorCodes.map((d) => `${d.code}×${d.count}`).join("、");
+      checks.push({
+        key: "http",
+        label: "HTTP 状态码分布",
+        status: "problem",
+        summary: `响应码分布：${distribution.map((d) => `${d.code}(${d.count})`).join("、")}。异常码：${detail}。`,
+        packetIds: errorCodes.flatMap((d) => d.packetIds.slice(0, 3)),
+        nextSteps: ["对比不同节点（如 nginx 前后）的 HTTP 状态码差异，定位错误来源。"]
+      });
+    } else {
+      checks.push({
+        key: "http",
+        label: "HTTP 状态码分布",
+        status: "ok",
+        summary: `响应码分布：${distribution.map((d) => `${d.code}(${d.count})`).join("、")}，全部正常。`,
+        packetIds: distribution.flatMap((d) => d.packetIds.slice(0, 1)),
+        nextSteps: []
+      });
+    }
+  }
+
+  const latencyStats = httpLatencyStats(packets);
+  if (latencyStats && latencyStats.outlierCount > 0) {
+    checks.push({
+      key: "http",
+      label: "HTTP 响应延迟",
+      status: "warn",
+      summary: `平均 ${latencyStats.avg}s，最大 ${latencyStats.max}s，${latencyStats.outlierCount} 个超过 3 倍平均。`,
+      packetIds: latencyStats.outlierPacketIds.slice(0, 5),
+      nextSteps: ["检查延迟异常的请求是否集中在特定后端或时间段。"]
+    });
+  }
+
+  if (requests.length > 1) {
+    const hostDist = httpHostDistribution(requests);
+    if (hostDist.length > 1) {
+      checks.push({
+        key: "http",
+        label: "HTTP Host 分布",
+        status: "ok",
+        summary: `涉及 ${hostDist.length} 个 Host：${hostDist.slice(0, 5).map((h) => `${h.host}(${h.count})`).join("、")}。`,
+        packetIds: [],
+        nextSteps: []
+      });
+    }
+  }
+
+  return checks;
+}
+
 export function createHttpAdapter(ctx: ProtocolAdapterContext): ProtocolAdapter {
   return {
     id: "http_transactions",
@@ -85,7 +188,7 @@ export function createHttpAdapter(ctx: ProtocolAdapterContext): ProtocolAdapter 
         "transaction"
       ));
       const protocolCorrelations = buildProtocolCorrelations(queryRunId, "http", packets, cards);
-      const check = httpCheck(packets);
+      const checks = buildHttpChecks(packets, protocolCorrelations);
       return ctx.protocolQueryAnswer({
         graph,
         queryRunId,
@@ -103,14 +206,7 @@ export function createHttpAdapter(ctx: ProtocolAdapterContext): ProtocolAdapter 
         ],
         evidenceCards: cards,
         protocolCorrelations,
-        checks: [{
-          key: "http",
-          label: "HTTP transaction",
-          status: check.status,
-          summary: `${check.summary}${protocolCorrelations.length ? ` 已生成 ${protocolCorrelations.length} 条 HTTP-to-TCP 关联。` : ""}`,
-          packetIds: check.packetIds,
-          nextSteps: ["查看 HTTP 状态码、request/response 是否成对，以及底层 TCP 是否存在 RST 或重传。"]
-        }],
+        checks,
         suggestedActions: ["结合 HTTP 状态码、响应耗时和底层 TCP session 判断失败发生在应用层还是传输层。"],
         handoffAgent: "ProtocolAgent"
       });

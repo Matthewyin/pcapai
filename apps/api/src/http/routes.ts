@@ -30,7 +30,7 @@ import { activateLlmProfile, deleteLlmProfiles, getLlmSettings, listLlmProfiles,
 import { buildCaseReportMarkdown } from "./reportBuilder.js";
 import { createAgentAnswerService } from "../services/agentAnswerService.js";
 import { createEvidenceOpenService } from "../services/evidenceOpenService.js";
-import { createPlannerService } from "../services/plannerService.js";
+import { createPlannerService, executeChain } from "../services/plannerService.js";
 import { createQueryRunService } from "../services/queryRunService.js";
 import { createStatisticsQueryService } from "../services/statisticsQueryService.js";
 import { createToolRunService } from "../services/toolRunService.js";
@@ -353,7 +353,9 @@ const {
   shouldExplainSelectedSessionProblem,
   shouldAskForTroubleshootingScope,
   planUserIntent,
-  executeAgentIntentPlan
+  planChain,
+  executeAgentIntentPlan,
+  executeChainStep
 } = plannerService;
 
 export const pathCorrelationTestHooks = {
@@ -1103,11 +1105,59 @@ export function createAgentRouter() {
 
     const requestStartedAt = Date.now();
     const plannerStartedAt = Date.now();
-    const plan = await planUserIntent(graph, parsedRequest.data.question, (text) => writeStreamEvent(res, "thought", { text }));
+    const chainPlan = await planChain(graph, parsedRequest.data.question, (text) => writeStreamEvent(res, "thought", { text }));
     const plannerDurationMs = Date.now() - plannerStartedAt;
+    const stepSummary = chainPlan.steps.map((step) => `${step.intent}(${step.purpose})`).join(" → ");
     writeStreamEvent(res, "thought", {
-      text: `Leader Intent Planner 识别：${plan.intent}（${plan.confidence}）${plan.reason ? `，${plan.reason}` : ""}`
+      text: `Chain Planner 识别：${chainPlan.planKind}（${chainPlan.confidence}）${stepSummary}${chainPlan.reason ? `，${chainPlan.reason}` : ""}`
     });
+
+    if (chainPlan.planKind === "chain") {
+      writeStreamEvent(res, "chain_start", { chainId: chainPlan.chainId, stepCount: chainPlan.steps.length });
+      try {
+        const { results, finalAnswer } = await executeChain(graph, chainPlan, (currentGraph, intent, params) => executeChainStep(currentGraph, parsedRequest.data.question, intent, params), {
+          onStepStart: (step, index, total) => {
+            writeStreamEvent(res, "step_start", { stepId: step.stepId, intent: step.intent, purpose: step.purpose, index, total });
+            writeStreamEvent(res, "thought", { text: `步骤 ${index + 1}/${total}：${step.purpose}` });
+          },
+          onStepDone: (step, result, index, total) => {
+            writeStreamEvent(res, "step_done", { stepId: step.stepId, status: result.status, summary: result.answer.answer.slice(0, 200), index, total });
+          },
+          onError: (step, error, index, total) => {
+            writeStreamEvent(res, "step_done", { stepId: step.stepId, status: "error", summary: `步骤失败：${error instanceof Error ? error.message : String(error)}`, index, total });
+          }
+        });
+        recordPlannerRun(graph.spec.caseId, parsedRequest.data.question, { intent: chainPlan.steps[0].intent, confidence: chainPlan.confidence, reason: chainPlan.reason, missingContext: chainPlan.missingContext }, plannerDurationMs);
+        recordAnswerRun(graph.spec.caseId, parsedRequest.data.question, { intent: chainPlan.steps[0].intent, confidence: chainPlan.confidence, reason: chainPlan.reason, missingContext: chainPlan.missingContext }, "chain_complete", finalAnswer, Date.now() - requestStartedAt);
+        Object.assign(agentRuntimeStatus, {
+          lastRunAt: new Date().toISOString(),
+          lastStatus: "chain_complete",
+          lastError: "",
+          lastCaseId: graph.spec.caseId,
+          lastModel: apiConfig.llm.model,
+          lastBaseURL: apiConfig.llm.baseURL
+        });
+        writeStreamEvent(res, "chain_done", { chainId: chainPlan.chainId, summaries: results.map((r) => ({ stepId: r.stepId, status: r.status })) });
+        writeStreamEvent(res, "delta", { text: finalAnswer.answer });
+        writeStreamEvent(res, "done", finalAnswer);
+        return res.end();
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        recordErrorRun(graph.spec.caseId, parsedRequest.data.question, { intent: chainPlan.steps[0].intent, confidence: chainPlan.confidence, reason: chainPlan.reason, missingContext: chainPlan.missingContext }, "chain_error", error, Date.now() - requestStartedAt);
+        Object.assign(agentRuntimeStatus, {
+          lastRunAt: new Date().toISOString(),
+          lastStatus: "chain_error",
+          lastError: message,
+          lastCaseId: graph.spec.caseId,
+          lastModel: apiConfig.llm.model,
+          lastBaseURL: apiConfig.llm.baseURL
+        });
+        writeStreamEvent(res, "error", { error: message });
+        return res.end();
+      }
+    }
+
+    const plan = { intent: chainPlan.steps[0].intent, confidence: chainPlan.confidence, reason: chainPlan.reason, missingContext: chainPlan.missingContext };
     try {
       const plannedResult = await executeAgentIntentPlan(graph, parsedRequest.data.question, plan);
       if (plannedResult) {

@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { Agent, MCPServerStdio, OpenAIProvider, run, setDefaultModelProvider, tool, withTrace } from "@openai/agents";
 import { z } from "zod";
-import type { AgentAnswer, CaseGraph } from "../../../../packages/shared/src/index.js";
+import { AgentIntentEnum, AnalysisChainPlanSchema, type AgentAnswer, type AnalysisChainPlan, type AnalysisChainStep, type CaseGraph } from "../../../../packages/shared/src/index.js";
 import { apiConfig } from "../config.js";
 
 type RuntimeInput = {
@@ -48,7 +48,9 @@ type CompatibilityInput = {
 
 const jsonOutputInstruction = [
   "最终只能输出一个 JSON 对象，不要使用 Markdown。",
-  "JSON 字段固定为 answer、evidenceIds、packetIds、sessionLinkIds、findingIds、missingContext、confidence、suggestedActions、handoffAgent。",
+  "JSON 字段固定为 answer、evidenceIds、packetIds、sessionLinkIds、findingIds、missingContext、confidence、suggestedActions、suggestedQueries、handoffAgent。",
+  "suggestedQueries 是一个数组，每项包含 question（可执行的问题文本）、reason（为什么建议这个查询）、intent（推荐 intent）。",
+  "如果调用过 suggest_next_query，把返回的建议放入 suggestedQueries。",
   "没有内容的数组填 []，没有 confidence 或 handoffAgent 时填 null。"
 ].join("\n");
 
@@ -88,6 +90,15 @@ function formatAgentAnswer(answer: AgentAnswer): AgentAnswer {
   return { ...answer, answer: lines.join("\n") };
 }
 
+function normalizeSuggestedQueries(value: unknown): Array<{ question: string; reason: string; intent: string }> {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is Record<string, unknown> => item && typeof item === "object" && typeof item.question === "string").map((item) => ({
+    question: String(item.question),
+    reason: typeof item.reason === "string" ? item.reason : "",
+    intent: typeof item.intent === "string" ? item.intent : "llm_explain"
+  }));
+}
+
 function normalizeAgentObject(value: Record<string, unknown>): AgentAnswer {
   const answer = {
     answer: typeof value.answer === "string" ? value.answer : JSON.stringify(value),
@@ -98,6 +109,7 @@ function normalizeAgentObject(value: Record<string, unknown>): AgentAnswer {
     missingContext: stringArrayFrom(value.missingContext),
     confidence: confidenceFrom(value.confidence),
     suggestedActions: stringArrayFrom(value.suggestedActions),
+    suggestedQueries: normalizeSuggestedQueries(value.suggestedQueries),
     handoffAgent: typeof value.handoffAgent === "string" && value.handoffAgent.trim() ? value.handoffAgent : undefined
   };
   return formatAgentAnswer(answer);
@@ -121,7 +133,8 @@ function parseAgentOutput(output: unknown): AgentAnswer {
     sessionLinkIds: [],
     findingIds: [],
     missingContext: [],
-    suggestedActions: []
+    suggestedActions: [],
+    suggestedQueries: []
   });
 }
 
@@ -170,6 +183,48 @@ function parseIntentOutput(output: unknown): AgentIntentPlan {
     if (value.missingContext === null || value.missingContext === undefined) value.missingContext = [];
   }
   return AgentIntentSchema.parse(parsed);
+}
+
+function parseChainPlanOutput(output: unknown, question: string): AnalysisChainPlan {
+  const text = typeof output === "string" ? output : JSON.stringify(output);
+  const jsonText = firstJsonObject(text);
+  if (!jsonText) throw new Error(`chain planner returned non-json output: ${text.slice(0, 500)}`);
+  const parsed = JSON.parse(jsonText);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(`chain planner returned non-object: ${text.slice(0, 500)}`);
+  }
+  const value = parsed as Record<string, unknown>;
+  let confidence = typeof value.confidence === "string" ? value.confidence.trim().toLowerCase() : "medium";
+  if (confidence === "certain" || confidence === "confident" || confidence === "确定") confidence = "high";
+  if (confidence === "needs_context" || confidence === "uncertain" || confidence === "不确定") confidence = "low";
+  if (confidence !== "high" && confidence !== "medium" && confidence !== "low") confidence = "medium";
+  value.confidence = confidence;
+  if (typeof value.missingContext === "string") value.missingContext = value.missingContext.trim() ? [value.missingContext] : [];
+  if (value.missingContext === null || value.missingContext === undefined) value.missingContext = [];
+  if (!value.chainId) value.chainId = `chain-${Date.now()}`;
+  if (!value.question) value.question = question;
+  if (!value.planKind) value.planKind = value.steps && Array.isArray(value.steps) && value.steps.length > 1 ? "chain" : "single";
+  if (!value.reason) value.reason = "";
+  const steps = Array.isArray(value.steps) ? value.steps : [];
+  const validIntents = new Set(AgentIntentEnum.options);
+  const validatedSteps: Array<{ stepId: string; intent: string; purpose: string; params?: unknown; paramsFrom?: unknown }> = steps.filter((step: unknown): step is Record<string, unknown> => {
+    if (!step || typeof step !== "object" || Array.isArray(step)) return false;
+    const s = step as Record<string, unknown>;
+    return typeof s.intent === "string" && validIntents.has(s.intent as z.infer<typeof AgentIntentEnum>);
+  }).map((step: Record<string, unknown>, index: number) => ({
+    stepId: typeof step.stepId === "string" ? step.stepId : `step-${index}`,
+    intent: step.intent as string,
+    purpose: typeof step.purpose === "string" ? step.purpose : String(step.intent),
+    params: step.params || undefined,
+    paramsFrom: step.paramsFrom || undefined
+  }));
+  if (!validatedSteps.length) {
+    value.planKind = "single";
+    value.steps = [{ stepId: "step-0", intent: "llm_explain", purpose: "默认 LLM 解释" }];
+  } else {
+    value.steps = validatedSteps;
+  }
+  return AnalysisChainPlanSchema.parse(value);
 }
 
 function intentPlannerContext(graph: CaseGraph, question: string) {
@@ -250,6 +305,62 @@ export async function runIntentPlanner(input: IntentPlannerInput): Promise<Agent
   const result = await run(plannerAgent, JSON.stringify(intentPlannerContext(input.graph, input.question)), { maxTurns: 2 });
   const plan = parseIntentOutput(result.finalOutput);
   input.onTrace?.(`Leader Intent Planner 输出：${plan.intent}（${plan.confidence}）- ${plan.reason}`);
+  return plan;
+}
+
+type ChainPlannerInput = {
+  graph: CaseGraph;
+  question: string;
+  onTrace?: (message: string) => void;
+};
+
+export async function runChainPlanner(input: ChainPlannerInput): Promise<AnalysisChainPlan> {
+  setDefaultModelProvider(new OpenAIProvider({
+    apiKey: apiConfig.llm.apiKey,
+    baseURL: apiConfig.llm.baseURL,
+    useResponses: apiConfig.llm.useResponses
+  }));
+
+  const chainPlannerAgent = new Agent({
+    name: "PcapChainPlanner",
+    instructions: [
+      "你是 pcapAI 的分析链规划器，根据用户问题和当前 case graph 规划分析步骤。",
+      "你必须输出一个 JSON 对象，不要 Markdown，不要解释。",
+      "字段固定为 plan_kind、steps、confidence、reason、missingContext。",
+      "",
+      "plan_kind 规则：",
+      "- 如果一个 intent 就能回答，输出 \"single\"，steps 只有 1 步。",
+      "- 如果需要多步推理（先查 A，用 A 的结果再查 B），输出 \"chain\"，steps 包含 2-5 步。",
+      "",
+      "steps 中每个 step 的字段：stepId（\"step-0\", \"step-1\"...）、intent、purpose（中文描述这一步要做什么）。",
+      "如果某个 step 的查询参数来自前序 step 的结果，用 paramsFrom 字段表达。",
+      "paramsFrom 的 key 是查询参数名（srcIp, dstIp, port, protocol），value 是路径表达式如 \"step-0.dstIp\"。",
+      "",
+      "intent 只能是以下之一：",
+      "- usage_help：用户问怎么使用、帮助、流程。",
+      "- protocol_statistics：协议种类、数量、分布。",
+      "- network_statistics：IP/端口/RST/重传/状态码等事实统计。",
+      "- tcp_session_query：分析访问、TCP session、路径候选。",
+      "- protocol_event_query：列出 DNS/HTTP/TLS/ICMP/UDP/RST/重传/Zero Window 事件。",
+      "- capture_correlation：多节点/多文件关联。",
+      "- mapping_hint_update：补充 NAT/F5/LB/代理/地址转换/时间偏移。",
+      "- selected_session_diagnosis：当前 session 诊断。",
+      "- active_query_explain：当前查询/证据/路径解释。",
+      "- report_request：生成报告、总结。",
+      "- needs_clarification：缺少关键条件。",
+      "- llm_explain：需要自然语言解释。",
+      "",
+      "不要硬编码特定故障场景。根据 case graph 的实际数据决定步骤。",
+      "如果不确定，输出 plan_kind=single，intent=needs_clarification。"
+    ].join("\n"),
+    model: apiConfig.llm.model,
+    modelSettings: modelSettings()
+  });
+  input.onTrace?.("Chain Planner 正在规划分析步骤。");
+  const result = await run(chainPlannerAgent, JSON.stringify(intentPlannerContext(input.graph, input.question)), { maxTurns: 2 });
+  const plan = parseChainPlanOutput(result.finalOutput, input.question);
+  const stepSummary = plan.steps.map((step: AnalysisChainStep) => `${step.intent}(${step.purpose})`).join(" → ");
+  input.onTrace?.(`Chain Planner 输出：${plan.planKind}（${plan.confidence}）${stepSummary}`);
   return plan;
 }
 
@@ -335,6 +446,7 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
     instructions: [
       "你是 pcapAI 的证据解释专家。",
       "必须先调用 load_case_graph，再按需要调用 get_case_statistics、get_active_query_run、get_evidence_cards、get_query_diagnosis、get_finding、get_evidence、get_session_link、get_packet_detail。",
+      "解释完证据后，调用 suggest_next_query 获取后续查询建议，将结果放入 suggestedQueries 字段。",
       "用户询问 TCP 通信对、连接数、时间范围、时间窗口、统计类问题时，优先调用 get_case_statistics，不能自己估算。",
       "用户询问当前案例所有捕获数据包的整体时间范围时，使用 get_case_statistics 返回的 timeRanges.allCapturedPackets；询问当前筛选结果时间范围时，使用 timeRanges.filteredPackets。",
       "用户询问证据卡、packet、RST、重传、Zero Window 时，优先引用 active QueryRun、evidenceCards 和 selectedDiagnosis.checks。",
@@ -353,6 +465,7 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
     instructions: [
       "你是 pcapAI 的多节点路径还原专家。",
       "必须先调用 load_case_graph，再调用 get_path_diagnosis 和 get_query_diagnosis。",
+      "解释完路径后，调用 suggest_next_query 获取后续查询建议，将结果放入 suggestedQueries 字段。",
       "只解释 PathHop、PathEdge、correlation、edge diagnosis、timeDeltaSeconds、mapping/time offset 依据。",
       "用户询问断点、哪一跳、路径、链路、上游下游、NAT/F5/LB/代理映射时，优先使用 get_path_diagnosis。",
       "如果 path edge 是 needs_context，要明确说需要补充映射、时间偏移、抓包方向或节点顺序；不能说成确定设备故障。",
@@ -369,6 +482,7 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
     instructions: [
       "你是 pcapAI 的协议专项诊断专家。",
       "必须先调用 load_case_graph，再调用 get_active_query_run、get_protocol_correlations、get_evidence_cards 和 get_query_diagnosis。",
+      "解释完协议关联后，调用 suggest_next_query 获取后续查询建议，将结果放入 suggestedQueries 字段。",
       "用户询问 DNS、TLS、SSL、SNI、HTTP、Host、URI、状态码、ICMP、UDP 或 L7 与 TCP 的关系时，优先使用 protocolCorrelations。",
       "只解释 DNS-to-TCP、TLS-SNI-to-TCP、HTTP-Host-to-TCP 的确定性关联，不自动推断 SSL 卸载、Cookie 会话保持或后端连接池。",
       "如果缺少 protocolCorrelations，要说明当前 QueryRun 没有生成 L7-to-TCP 关联，并建议补充协议查询或过滤条件。",

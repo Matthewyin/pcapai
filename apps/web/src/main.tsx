@@ -345,6 +345,7 @@ type ChatMessage = {
   content: string;
   thoughts?: string[];
   evidenceCards?: EvidenceCard[];
+  suggestedQueries?: Array<{ question: string; reason: string; intent: string }>;
   streaming?: boolean;
 };
 
@@ -1361,11 +1362,22 @@ function App() {
       const data = JSON.parse(dataLine);
       if (event === "thought") {
         setChatMessages((messages) => messages.map((message) => message.id === assistantId ? { ...message, thoughts: [...(message.thoughts || []), data.text] } : message));
+      } else if (event === "chain_start") {
+        setChatMessages((messages) => messages.map((message) => message.id === assistantId ? { ...message, thoughts: [...(message.thoughts || []), `开始分析链（共 ${data.stepCount} 步）`] } : message));
+      } else if (event === "step_start") {
+        setChatMessages((messages) => messages.map((message) => message.id === assistantId ? { ...message, thoughts: [...(message.thoughts || []), `▸ 步骤 ${data.index + 1}/${data.total}：${data.purpose}`] } : message));
+      } else if (event === "step_done") {
+        if (data.status === "error") {
+          setChatMessages((messages) => messages.map((message) => message.id === assistantId ? { ...message, thoughts: [...(message.thoughts || []), `  ✗ 步骤 ${data.index + 1} 失败：${data.summary}`] } : message));
+        }
+      } else if (event === "chain_done") {
+        const summaries = (data.summaries || []).map((s: { stepId: string; status: string }, i: number) => `${i + 1}. ${s.status}`).join("；");
+        setChatMessages((messages) => messages.map((message) => message.id === assistantId ? { ...message, thoughts: [...(message.thoughts || []), `分析链完成：${summaries}`] } : message));
       } else if (event === "delta") {
         setChatMessages((messages) => messages.map((message) => message.id === assistantId ? { ...message, content: message.content + data.text } : message));
       } else if (event === "done") {
         setAnswer(data.answer || "");
-        setChatMessages((messages) => messages.map((message) => message.id === assistantId ? { ...message, content: data.answer || message.content, evidenceCards: data.evidenceCards || [], streaming: false } : message));
+        setChatMessages((messages) => messages.map((message) => message.id === assistantId ? { ...message, content: data.answer || message.content, evidenceCards: data.evidenceCards || [], suggestedQueries: data.suggestedQueries || [], streaming: false } : message));
         void refreshGraph(currentCaseId);
       } else if (event === "error") {
         setChatMessages((messages) => messages.map((message) => message.id === assistantId ? { ...message, content: data.error, streaming: false } : message));
@@ -2085,6 +2097,13 @@ function App() {
 	                      ))}
 	                    </div>
 	                  ) : null}
+                  {message.suggestedQueries?.length ? (
+                    <div className="suggestedQueries">
+                      {message.suggestedQueries.map((sq, index) => (
+                        <button type="button" className="suggestedQuery" key={`${message.id}-sq-${index}`} title={sq.reason} onClick={() => { setQuestion(sq.question); }}>{sq.question}</button>
+                      ))}
+                    </div>
+                  ) : null}
                 </article>
               )) : (
                 <article className="chatBubble assistantBubble">
