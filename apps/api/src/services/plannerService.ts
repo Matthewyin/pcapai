@@ -120,7 +120,7 @@ export function createPlannerService(input: {
   }
 
   async function executeChainStep(graph: CaseGraph, question: string, intent: string, params: Record<string, unknown>): Promise<PlannedResult> {
-    const stepQuestion = typeof params.question === "string" ? params.question : question;
+    const stepQuestion = typeof params.question === "string" ? params.question : (typeof params.purpose === "string" ? params.purpose : question);
     switch (intent) {
       case "usage_help":
         return { status: "usage_help", answer: input.usageHelpAnswer() };
@@ -255,6 +255,7 @@ export async function executeChain(
     const startedAt = Date.now();
     try {
       const params = resolveStepParams(step, results);
+      if (!params.question && !params.purpose) params.purpose = step.purpose;
       const result = await executeStep(graph, step.intent, params);
       const durationMs = Date.now() - startedAt;
       const stepResult = ChainStepResultSchema.parse({
