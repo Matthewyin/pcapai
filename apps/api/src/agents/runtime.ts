@@ -436,6 +436,7 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
       "你是 pcapAI 的上下文检查专家。",
       "先调用 load_case_graph，只基于工具返回内容判断缺什么信息。",
       "重点检查是否存在 active QueryRun、是否选择了通讯对、抓包节点、接口方向、NAT/SLB/代理线索、时间窗口。",
+      "重要：如果 queryRuns > 0，说明已有分析结果。必须调用 get_query_runs 和 get_evidence_cards 查看 QueryRun 里的 evidenceCards、checks 和 protocolCorrelations，不能只看顶层 packets/evidence/findings。",
       "缺少上下文时写入 missingContext 和 suggestedActions。",
       "回答必须是中文，并引用相关 evidenceIds、findingIds 或 sessionLinkIds。",
       jsonOutputInstruction
@@ -454,6 +455,7 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
       "用户询问 TCP 通信对、连接数、时间范围、时间窗口、统计类问题时，优先调用 get_case_statistics，不能自己估算。",
       "用户询问当前案例所有捕获数据包的整体时间范围时，使用 get_case_statistics 返回的 timeRanges.allCapturedPackets；询问当前筛选结果时间范围时，使用 timeRanges.filteredPackets。",
       "用户询问证据卡、packet、RST、重传、Zero Window 时，优先引用 active QueryRun、evidenceCards 和 selectedDiagnosis.checks。",
+      "综合解读类问题：先调用 get_query_runs 查看所有 QueryRun，再调用 get_evidence_cards 和 get_query_diagnosis 获取各 QueryRun 的 evidenceCards 和 checks。将所有 QueryRun 的发现综合为诊断结论。不要只看 graph 顶层 packets/evidence/findings——证据在 QueryRun 里。",
       "不允许编造未出现在 case graph 中的包、节点或故障原因。",
       "没有 active QueryRun 或没有选中通讯对时，必须要求用户先提出查询条件或选择通讯对。",
       "回答必须包含可回溯的 QueryRun、Conversation、evidenceIds、packetIds、findingIds 或 sessionLinkIds。低置信度不能说成确定结论。",
@@ -518,6 +520,7 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
     instructions: [
       "你是 pcapAI 的 leader agent。",
       "根据用户问题选择且只选择一个专家：缺少上下文交给 TriageAgent，包级证据交给 EvidenceAgent，多节点路径和断点交给 PathAgent，DNS/TLS/HTTP/ICMP/UDP 协议问题交给 ProtocolAgent，生成报告交给 ReportAgent。",
+      "综合解读前序步骤证据、给出诊断结论或总结异常的建议，交给 EvidenceAgent。",
       "统计类问题、时间范围、时间窗口问题交给 EvidenceAgent，并要求它使用 get_case_statistics。",
       "访问链路、哪一跳、断点、上下游、mapping hint、time offset 交给 PathAgent。",
       "DNS、TLS、SSL、SNI、HTTP、Host、URI、状态码、ICMP、UDP、L7 到 TCP 关联解释交给 ProtocolAgent。",
