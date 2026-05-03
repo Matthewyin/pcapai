@@ -345,7 +345,11 @@ const plannerService = createPlannerService({
   selectedSessionProblemAnswer,
   activeQueryRunAnswer,
   reportAnswer,
-  troubleshootingScopeAnswer
+  troubleshootingScopeAnswer,
+  runLlmExplain: async (graph, question) => {
+    const answer = await runPcapTroubleshootingAgent({ graph, question });
+    return answer;
+  }
 });
 const {
   shouldAnswerUsageHelp,
@@ -1127,8 +1131,27 @@ export function createAgentRouter() {
             writeStreamEvent(res, "step_done", { stepId: step.stepId, status: "error", summary: `步骤失败：${error instanceof Error ? error.message : String(error)}`, index, total });
           }
         });
+        const hasLlmStep = chainPlan.steps.some((s) => s.intent === "llm_explain");
+        let enrichedAnswer = finalAnswer;
+        if (!hasLlmStep && apiConfig.llm.apiKey) {
+          writeStreamEvent(res, "thought", { text: "综合解读证据，生成诊断结论..." });
+          try {
+            const synthesisQuestion = `基于以下分析链结果，综合解读异常并给出诊断结论：\n${finalAnswer.answer}`;
+            const llmAnswer = await runPcapTroubleshootingAgent({ graph, question: synthesisQuestion });
+            enrichedAnswer = {
+              ...finalAnswer,
+              answer: `${finalAnswer.answer}\n\n---\n### 综合解读\n${llmAnswer.answer}`,
+              thoughts: [...(finalAnswer.thoughts || []), ...(llmAnswer.thoughts || [])],
+              evidenceCards: [...(finalAnswer.evidenceCards || []), ...(llmAnswer.evidenceCards || [])],
+              suggestedQueries: llmAnswer.suggestedQueries,
+              handoffAgent: llmAnswer.handoffAgent
+            };
+          } catch {
+            // LLM 解读失败不影响已有结果
+          }
+        }
         recordPlannerRun(graph.spec.caseId, parsedRequest.data.question, { intent: chainPlan.steps[0].intent, confidence: chainPlan.confidence, reason: chainPlan.reason, missingContext: chainPlan.missingContext }, plannerDurationMs);
-        recordAnswerRun(graph.spec.caseId, parsedRequest.data.question, { intent: chainPlan.steps[0].intent, confidence: chainPlan.confidence, reason: chainPlan.reason, missingContext: chainPlan.missingContext }, "chain_complete", finalAnswer, Date.now() - requestStartedAt);
+        recordAnswerRun(graph.spec.caseId, parsedRequest.data.question, { intent: chainPlan.steps[0].intent, confidence: chainPlan.confidence, reason: chainPlan.reason, missingContext: chainPlan.missingContext }, "chain_complete", enrichedAnswer, Date.now() - requestStartedAt);
         Object.assign(agentRuntimeStatus, {
           lastRunAt: new Date().toISOString(),
           lastStatus: "chain_complete",
@@ -1138,8 +1161,8 @@ export function createAgentRouter() {
           lastBaseURL: apiConfig.llm.baseURL
         });
         writeStreamEvent(res, "chain_done", { chainId: chainPlan.chainId, summaries: results.map((r) => ({ stepId: r.stepId, status: r.status })) });
-        writeStreamEvent(res, "delta", { text: finalAnswer.answer });
-        writeStreamEvent(res, "done", finalAnswer);
+        writeStreamEvent(res, "delta", { text: enrichedAnswer.answer });
+        writeStreamEvent(res, "done", enrichedAnswer);
         return res.end();
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);

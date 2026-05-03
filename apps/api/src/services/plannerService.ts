@@ -35,6 +35,7 @@ export function createPlannerService(input: {
   activeQueryRunAnswer: (graph: CaseGraph, question: string) => AgentAnswer;
   reportAnswer: (graph: CaseGraph) => AgentAnswer;
   troubleshootingScopeAnswer: () => AgentAnswer;
+  runLlmExplain: (graph: CaseGraph, question: string) => Promise<AgentAnswer>;
 }) {
   const matchesUsageHelp = patternMatcher(input.fallbackPatterns.usageHelp);
   const matchesNetworkStatistics = patternMatcher(input.fallbackPatterns.networkStatistics);
@@ -147,7 +148,7 @@ export function createPlannerService(input: {
       case "needs_clarification":
         return { status: "needs_query_scope", answer: input.troubleshootingScopeAnswer() };
       case "llm_explain":
-        return null;
+        return { status: "llm_explain", answer: await input.runLlmExplain(graph, stepQuestion) };
       default:
         return null;
     }
@@ -180,7 +181,7 @@ export function createPlannerService(input: {
       case "needs_clarification":
         return { status: "needs_query_scope", answer: input.troubleshootingScopeAnswer() };
       case "llm_explain":
-        return null;
+        return { status: "llm_explain", answer: await input.runLlmExplain(graph, question) };
       default:
         return null;
     }

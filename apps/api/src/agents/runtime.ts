@@ -351,7 +351,11 @@ export async function runChainPlanner(input: ChainPlannerInput): Promise<Analysi
       "- llm_explain：需要自然语言解释。",
       "",
       "不要硬编码特定故障场景。根据 case graph 的实际数据决定步骤。",
-      "如果不确定，输出 plan_kind=single，intent=needs_clarification。"
+      "如果不确定，输出 plan_kind=single，intent=needs_clarification。",
+      "",
+      "重要：当用户问题是开放性分析问题（如\"分析异常\"、\"有什么问题\"、\"帮我看看\"）时，必须先安排确定性步骤收集证据，最后一步必须是 llm_explain 来综合解读证据并给出诊断结论。",
+      "llm_explain 步骤的 purpose 应描述为\"综合解读前序步骤的证据，给出诊断结论和建议\"。",
+      "纯统计问题（如\"协议分布\"、\"端口排名\"）不需要 llm_explain。"
     ].join("\n"),
     model: apiConfig.llm.model,
     modelSettings: modelSettings()
