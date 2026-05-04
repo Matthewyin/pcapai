@@ -31,7 +31,7 @@ async function resetSessionPairsAnswer(ctx: ProtocolAdapterContext, graph: Param
   const captures = ctx.captureQueryInputs(graph);
   if (!captures.length) return ctx.noCaptureAnswer();
   const query = await ctx.displayFilterFromQuestion(graph, question);
-  const result = await ctx.listTcpResets({ captures, displayFilter: query.displayFilter, limit: ctx.queryPacketLimit });
+  const result = await ctx.listTcpResets({ captures, displayFilter: query.displayFilter, limit: ctx.queryPacketLimit || undefined });
   return ctx.packetPairAnswer({
     graph,
     queryInput: query.input,
@@ -58,7 +58,7 @@ async function retransmissionSessionPairsAnswer(ctx: ProtocolAdapterContext, gra
   if (!captures.length) return ctx.noCaptureAnswer();
   const limit = ctx.requestedLimit(question, 10);
   const query = await ctx.displayFilterFromQuestion(graph, question);
-  const result = await ctx.listTcpRetransmissions({ captures, displayFilter: query.displayFilter, limit: ctx.queryPacketLimit });
+  const result = await ctx.listTcpRetransmissions({ captures, displayFilter: query.displayFilter, limit: ctx.queryPacketLimit || undefined });
   return ctx.packetPairAnswer({
     graph,
     queryInput: query.input,
@@ -85,7 +85,7 @@ async function zeroWindowSessionPairsAnswer(ctx: ProtocolAdapterContext, graph: 
   if (!captures.length) return ctx.noCaptureAnswer();
   const limit = ctx.requestedLimit(question, 10);
   const query = await ctx.displayFilterFromQuestion(graph, question);
-  const result = await ctx.listTcpZeroWindow({ captures, displayFilter: query.displayFilter, limit: ctx.queryPacketLimit });
+  const result = await ctx.listTcpZeroWindow({ captures, displayFilter: query.displayFilter, limit: ctx.queryPacketLimit || undefined });
   return ctx.packetPairAnswer({
     graph,
     queryInput: query.input,
@@ -113,7 +113,7 @@ async function synNoSynAckSessionPairsAnswer(ctx: ProtocolAdapterContext, graph:
   const limit = ctx.requestedLimit(question, 10);
   const query = await ctx.displayFilterFromQuestion(graph, question);
   const synFilter = `${query.displayFilter} && tcp.flags.syn == 1`;
-  const result = await ctx.queryPackets({ captures, displayFilter: synFilter, limit: ctx.queryPacketLimit });
+  const result = await ctx.queryPackets({ captures, displayFilter: synFilter, limit: ctx.queryPacketLimit || undefined });
   const groups = new Map<string, ProtocolPacket[]>();
   for (const packet of result.packets) {
     groups.set(ctx.pairKey(packet), [...(groups.get(ctx.pairKey(packet)) || []), packet]);
@@ -152,7 +152,7 @@ async function oneWaySessionPairsAnswer(ctx: ProtocolAdapterContext, graph: Para
   if (!captures.length) return ctx.noCaptureAnswer();
   const limit = ctx.requestedLimit(question, 10);
   const query = await ctx.displayFilterFromQuestion(graph, question);
-  const result = await ctx.queryPackets({ captures, displayFilter: query.displayFilter, limit: ctx.queryPacketLimit });
+  const result = await ctx.queryPackets({ captures, displayFilter: query.displayFilter, limit: ctx.queryPacketLimit || undefined });
   const groups = new Map<string, ProtocolPacket[]>();
   for (const packet of result.packets) {
     if (!packet.srcIp || !packet.dstIp || packet.srcPort === undefined || packet.dstPort === undefined) continue;
@@ -191,9 +191,9 @@ async function tcpIssuesOverviewAnswer(ctx: ProtocolAdapterContext, graph: Param
   if (!captures.length) return ctx.noCaptureAnswer();
   const query = await ctx.displayFilterFromQuestion(graph, question);
   const [rstResult, retransResult, zeroWinResult] = await Promise.all([
-    ctx.listTcpResets({ captures, displayFilter: query.displayFilter, limit: ctx.queryPacketLimit }),
-    ctx.listTcpRetransmissions({ captures, displayFilter: query.displayFilter, limit: ctx.queryPacketLimit }),
-    ctx.listTcpZeroWindow({ captures, displayFilter: query.displayFilter, limit: ctx.queryPacketLimit })
+    ctx.listTcpResets({ captures, displayFilter: query.displayFilter, limit: ctx.queryPacketLimit || undefined }),
+    ctx.listTcpRetransmissions({ captures, displayFilter: query.displayFilter, limit: ctx.queryPacketLimit || undefined }),
+    ctx.listTcpZeroWindow({ captures, displayFilter: query.displayFilter, limit: ctx.queryPacketLimit || undefined })
   ]);
   const allPackets = [...rstResult.packets, ...retransResult.packets, ...zeroWinResult.packets];
   if (!allPackets.length) {

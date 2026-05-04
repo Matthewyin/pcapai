@@ -15,12 +15,13 @@ export function createUdpAdapter(ctx: ProtocolAdapterContext): ProtocolAdapter {
     async run(graph, question) {
       const captures = ctx.captureQueryInputs(graph);
       if (!captures.length) return ctx.noCaptureAnswer();
-      const limit = ctx.requestedLimit(question, 20);
+      const displayLimit = ctx.requestedLimit(question, 20);
       const query = await ctx.displayFilterFromQuestion(graph, question, "udp");
-      const result = await ctx.listUdpPackets({ captures, displayFilter: query.displayFilter, limit: ctx.queryPacketLimit });
-      const pairs = ctx.groupPacketPairs(result.packets, query.displayFilter).slice(0, limit);
+      const result = await ctx.listUdpPackets({ captures, displayFilter: query.displayFilter, limit: ctx.queryPacketLimit || undefined });
+      const allPairs = ctx.groupPacketPairs(result.packets, query.displayFilter);
+      const displayPairs = allPairs.slice(0, displayLimit);
       const queryRunId = `udp-${Date.now()}`;
-      const cards = pairs.map((pair, index) => ({
+      const cards = displayPairs.map((pair, index) => ({
         cardId: `udp-flow-${queryRunId}-${index + 1}`,
         kind: "conversation" as const,
         title: `${index + 1}. ${pair.src} <-> ${pair.dst}`,
@@ -37,21 +38,21 @@ export function createUdpAdapter(ctx: ProtocolAdapterContext): ProtocolAdapter {
         queryInput: query.input,
         displayFilter: query.displayFilter,
         protocol: "udp",
-        title: `前 ${limit} 个 UDP flow`,
+        title: allPairs.length > displayLimit ? `共 ${allPairs.length} 个 UDP flow（展示前 ${displayLimit} 个）` : `${allPairs.length} 个 UDP flow`,
         packets: result.packets,
         noResult: "当前查询范围内没有发现 UDP flow。",
         thoughts: [
           "识别为 L4 UDP flow 查询。",
           `构造 display filter：${query.displayFilter}`,
-          "调用 tshark-query MCP 查询 UDP 包，并按 endpoint pair 聚合。"
+          `tshark 查询返回 ${result.packets.length} 个匹配包，${allPairs.length} 个 flow。`
         ],
         evidenceCards: cards,
         checks: [{
           key: "udp",
           label: "UDP flow 聚合",
-          status: cards.length ? "unknown" : "ok",
-          summary: cards.length ? `发现 ${cards.length} 个 UDP flow；UDP 是否异常需要结合响应方向和 ICMP unreachable 判断。` : "未发现 UDP flow。",
-          packetIds: pairs.flatMap((pair) => pair.packetIds.slice(0, 5)),
+          status: allPairs.length ? "unknown" : "ok",
+          summary: allPairs.length ? `发现 ${allPairs.length} 个 UDP flow；UDP 是否异常需要结合响应方向和 ICMP unreachable 判断。` : "未发现 UDP flow。",
+          packetIds: displayPairs.flatMap((pair) => pair.packetIds.slice(0, 5)),
           nextSteps: ["结合 ICMP unreachable 和应用协议响应判断 UDP 是否无响应。"]
         }],
         suggestedActions: ["结合 ICMP unreachable 和应用协议响应判断 UDP 是否无响应。"],

@@ -20,7 +20,7 @@
     },
     "query": {
       "candidateGroupLimit": 40,
-      "queryPacketLimit": 1000,
+      "queryPacketLimit": 0,
       "conversationPacketLimit": 400,
       "retainedQueryRunLimit": 30
     },

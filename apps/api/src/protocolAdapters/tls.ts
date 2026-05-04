@@ -144,32 +144,34 @@ export function createTlsAdapter(ctx: ProtocolAdapterContext): ProtocolAdapter {
     async run(graph, question) {
       const captures = ctx.captureQueryInputs(graph);
       if (!captures.length) return ctx.noCaptureAnswer();
-      const limit = ctx.requestedLimit(question, 20);
+      const displayLimit = ctx.requestedLimit(question, 20);
       const query = await ctx.displayFilterFromQuestion(graph, question, "tls");
-      const result = await ctx.listTlsPackets({ captures, displayFilter: query.displayFilter, limit: ctx.queryPacketLimit });
-      const packets = result.packets.slice(0, limit);
+      const result = await ctx.listTlsPackets({ captures, displayFilter: query.displayFilter, limit: ctx.queryPacketLimit || undefined });
+      const allPackets = result.packets;
+      const displayPackets = allPackets.slice(0, displayLimit);
       const queryRunId = `tls-${Date.now()}`;
-      const cards = packets.map((packet) => ctx.protocolPacketCard(
+      const cards = displayPackets.map((packet) => ctx.protocolPacketCard(
         packet,
         queryRunId,
         `${tlsEventLabel(packet)} / Frame ${packet.frameNumber}`,
         `${packet.srcIp || "*"} -> ${packet.dstIp || "*"}，SNI=${packet.tlsSni || "-"}，${packet.summary || "TLS 事件"}`,
         "protocol_event"
       ));
-      const protocolCorrelations = buildProtocolCorrelations(queryRunId, "tls", packets, cards);
-      const checks = buildTlsChecks(packets, protocolCorrelations);
+      const protocolCorrelations = buildProtocolCorrelations(queryRunId, "tls", allPackets, cards);
+      const checks = buildTlsChecks(allPackets, protocolCorrelations);
       return ctx.protocolQueryAnswer({
         graph,
         queryRunId,
         queryInput: query.input,
         displayFilter: query.displayFilter,
         protocol: "tls",
-        title: `前 ${limit} 个 TLS 事件`,
-        packets,
+        title: allPackets.length > displayLimit ? `共 ${allPackets.length} 个 TLS 事件（展示前 ${displayLimit} 个）` : `${allPackets.length} 个 TLS 事件`,
+        packets: displayPackets,
         noResult: "当前查询范围内没有发现 TLS 事件。",
         thoughts: [
           "识别为 L7 TLS 握手/Alert 查询。",
           `构造 display filter：${query.displayFilter}`,
+          `tshark 查询返回 ${allPackets.length} 个匹配包。`,
           "调用 tshark-query MCP 查询 TLS 包，并提取握手类型、SNI 和 Alert。",
           "将 TLS SNI 关联回承载它的 TCP flow。"
         ],

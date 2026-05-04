@@ -98,16 +98,17 @@ export function createDnsAdapter(ctx: ProtocolAdapterContext): ProtocolAdapter {
     async run(graph, question) {
       const captures = ctx.captureQueryInputs(graph);
       if (!captures.length) return ctx.noCaptureAnswer();
-      const limit = ctx.requestedLimit(question, 20);
+      const displayLimit = ctx.requestedLimit(question, 20);
       const query = await ctx.displayFilterFromQuestion(graph, question, "dns");
-      const result = await ctx.listDnsPackets({ captures, displayFilter: query.displayFilter, limit: ctx.queryPacketLimit });
+      const result = await ctx.listDnsPackets({ captures, displayFilter: query.displayFilter, limit: ctx.queryPacketLimit || undefined });
       const groups = new Map<string, PacketSummary[]>();
       for (const packet of result.packets) groups.set(dnsTransactionKey(packet), [...(groups.get(dnsTransactionKey(packet)) || []), packet]);
-      const suspicious = [...groups.values()].filter((packets) => {
+      const allSuspicious = [...groups.values()].filter((packets) => {
         const responses = packets.filter((packet) => packet.dnsIsResponse);
         return !responses.length || responses.some((packet) => packet.dnsRcode !== undefined && packet.dnsRcode !== 0);
-      }).slice(0, limit);
-      const evidencePackets = suspicious.map((packets) => packets.find((packet) => packet.dnsIsResponse) || packets[0]);
+      });
+      const displaySuspicious = allSuspicious.slice(0, displayLimit);
+      const evidencePackets = displaySuspicious.map((packets) => packets.find((packet) => packet.dnsIsResponse) || packets[0]);
       const queryRunId = `dns-${Date.now()}`;
       const cards = evidencePackets.map((packet) => ctx.protocolPacketCard(
         packet,
@@ -124,12 +125,13 @@ export function createDnsAdapter(ctx: ProtocolAdapterContext): ProtocolAdapter {
         queryInput: query.input,
         displayFilter: query.displayFilter,
         protocol: "dns",
-        title: `前 ${limit} 个 DNS 可疑 transaction`,
+        title: allSuspicious.length > displayLimit ? `共 ${allSuspicious.length} 个 DNS 可疑 transaction（展示前 ${displayLimit} 个）` : `${allSuspicious.length} 个 DNS 可疑 transaction`,
         packets: evidencePackets,
         noResult: "当前查询范围内没有发现 DNS 失败或无响应 transaction。",
         thoughts: [
           "识别为 L7 DNS 解析问题查询。",
           `构造 display filter：${query.displayFilter}`,
+          `tshark 查询返回 ${result.packets.length} 个匹配包，${allSuspicious.length} 个可疑 transaction。`,
           "调用 tshark-query MCP 查询 DNS 包，并按 dns.id / qname 聚合。",
           "将 DNS response address 关联为后续 TCP 访问过滤器。"
         ],

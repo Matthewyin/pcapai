@@ -3,12 +3,12 @@ import { buildProtocolCorrelations, buildHttpCrossConnectionCorrelation } from "
 import type { ProtocolAdapter, ProtocolAdapterContext } from "./types.js";
 
 function shouldListHttpTransactions(question: string) {
-  return /\bhttp\b|状态码|status|[45]xx|\b[45]\d\d\b|host|uri|url/i.test(question) && !/\bhttps\b|tls|ssl/i.test(question);
+  return /(?<!\w)http|状态码|status|[45]xx|(?<!\d)[45]\d\d(?!\d)|host|uri|url/i.test(question) && !/\bhttps\b|tls|ssl/i.test(question);
 }
 
 function httpStatusFilter(question: string) {
   if (/[45]xx|4xx|5xx|错误状态|异常状态/i.test(question)) return "http.response.code >= 400";
-  const statusCode = question.match(/\b([1-5]\d\d)\b/)?.[1];
+  const statusCode = question.match(/(?<!\d)([1-5]\d\d)(?!\d)/)?.[1];
   if (statusCode) return `http.response.code == ${statusCode}`;
   return "";
 }
@@ -173,14 +173,15 @@ export function createHttpAdapter(ctx: ProtocolAdapterContext): ProtocolAdapter 
     async run(graph, question) {
       const captures = ctx.captureQueryInputs(graph);
       if (!captures.length) return ctx.noCaptureAnswer();
-      const limit = ctx.requestedLimit(question, 20);
+      const displayLimit = ctx.requestedLimit(question, 20);
       const query = await ctx.displayFilterFromQuestion(graph, question, "http");
       const statusFilter = httpStatusFilter(question);
       const displayFilter = [query.displayFilter, statusFilter].filter(Boolean).join(" && ");
-      const result = await ctx.listHttpPackets({ captures, displayFilter, limit: ctx.queryPacketLimit });
-      const packets = result.packets.slice(0, limit);
+      const result = await ctx.listHttpPackets({ captures, displayFilter, limit: ctx.queryPacketLimit || undefined });
+      const allPackets = result.packets;
+      const displayPackets = allPackets.slice(0, displayLimit);
       const queryRunId = `http-${Date.now()}`;
-      const cards = packets.map((packet) => ctx.protocolPacketCard(
+      const cards = displayPackets.map((packet) => ctx.protocolPacketCard(
         packet,
         queryRunId,
         `${httpLabel(packet)} / Frame ${packet.frameNumber}`,
@@ -188,22 +189,23 @@ export function createHttpAdapter(ctx: ProtocolAdapterContext): ProtocolAdapter 
         "transaction"
       ));
       const protocolCorrelations = [
-        ...buildProtocolCorrelations(queryRunId, "http", packets, cards),
-        ...buildHttpCrossConnectionCorrelation(queryRunId, packets, cards)
+        ...buildProtocolCorrelations(queryRunId, "http", allPackets, cards),
+        ...buildHttpCrossConnectionCorrelation(queryRunId, allPackets, cards)
       ];
-      const checks = buildHttpChecks(packets, protocolCorrelations);
+      const checks = buildHttpChecks(allPackets, protocolCorrelations);
       return ctx.protocolQueryAnswer({
         graph,
         queryRunId,
         queryInput: query.input,
         displayFilter,
         protocol: "http",
-        title: `前 ${limit} 个 HTTP transaction 证据`,
-        packets,
+        title: allPackets.length > displayLimit ? `共 ${allPackets.length} 个 HTTP transaction（展示前 ${displayLimit} 个）` : `${allPackets.length} 个 HTTP transaction 证据`,
+        packets: displayPackets,
         noResult: "当前查询范围内没有发现 HTTP request/response。",
         thoughts: [
           "识别为 L7 HTTP transaction 查询。",
           `构造 display filter：${displayFilter}`,
+          `tshark 查询返回 ${allPackets.length} 个匹配包。`,
           "调用 tshark-query MCP 查询 HTTP 包，并提取 method、host、uri、status code 和响应耗时。",
           "将 HTTP Host/URI 关联回承载它的 TCP flow。"
         ],

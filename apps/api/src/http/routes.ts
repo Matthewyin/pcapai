@@ -282,7 +282,7 @@ async function loadGraphWithInsights(caseId: string): Promise<CaseGraph> {
     try {
       const inputs = captureQueryInputs(graph);
       if (inputs.length) {
-        const { packets } = await queryPacketsWithMcp({ captures: inputs, displayFilter: "", limit: 2000 });
+        const { packets } = await queryPacketsWithMcp({ captures: inputs, displayFilter: "" });
         if (packets.length) {
           const enriched = { ...graph, packets };
           writeCaseGraph(enriched);
@@ -901,9 +901,9 @@ export function createAgentRouter() {
     }
   });
 
-  router.get("/cases/:caseId", (req, res) => {
+  router.get("/cases/:caseId", async (req, res) => {
     try {
-      return res.json(loadGraph(String(req.params.caseId)));
+      return res.json(await loadGraphWithInsights(String(req.params.caseId)));
     } catch {
       return res.status(404).json({ error: "case not found" });
     }

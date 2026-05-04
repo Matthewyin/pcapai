@@ -1060,8 +1060,9 @@ export function createQueryRunService(deps: {
     const listedConversations = normalizeConversations(listedResults.flatMap((result) => result.conversations), queryRunId);
     const conversations = rankedCandidateConversations(listedConversations, input);
     const candidateGroups = buildAccessCandidateGroups(conversations, input);
-    const packetResults = await Promise.all(displayFilters.map((filter) => queryPacketsWithMcp({ captures, displayFilter: filter, limit: deps.queryPacketLimit })));
-    const packets = uniquePackets(packetResults.flatMap((result) => result.packets)).slice(0, deps.queryPacketLimit);
+    const packetResults = await Promise.all(displayFilters.map((filter) => queryPacketsWithMcp({ captures, displayFilter: filter, limit: deps.queryPacketLimit || undefined })));
+    const allPackets = uniquePackets(packetResults.flatMap((result) => result.packets));
+    const packets = deps.queryPacketLimit ? allPackets.slice(0, deps.queryPacketLimit) : allPackets;
     const selectedCandidateGroupId = candidateGroups[0]?.groupId;
     const selectedConversationId = candidateGroups[0]?.selectedConversationId || conversations[0]?.conversationId;
     const pathResult = selectedConversationId ? buildQueryPath(graph, queryRunId, selectedConversationId, conversations) : undefined;

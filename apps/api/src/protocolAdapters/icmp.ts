@@ -24,12 +24,13 @@ export function createIcmpAdapter(ctx: ProtocolAdapterContext): ProtocolAdapter 
     async run(graph, question) {
       const captures = ctx.captureQueryInputs(graph);
       if (!captures.length) return ctx.noCaptureAnswer();
-      const limit = ctx.requestedLimit(question, 20);
+      const displayLimit = ctx.requestedLimit(question, 20);
       const query = await ctx.displayFilterFromQuestion(graph, question, "icmp");
-      const result = await ctx.listIcmpEvents({ captures, displayFilter: query.displayFilter, limit });
-      const packets = result.packets.slice(0, limit);
+      const result = await ctx.listIcmpEvents({ captures, displayFilter: query.displayFilter, limit: ctx.queryPacketLimit || undefined });
+      const allPackets = result.packets;
+      const displayPackets = allPackets.slice(0, displayLimit);
       const queryRunId = `icmp-${Date.now()}`;
-      const cards = packets.map((packet) => ctx.protocolPacketCard(
+      const cards = displayPackets.map((packet) => ctx.protocolPacketCard(
         packet,
         queryRunId,
         `${icmpLabel(packet)} / Frame ${packet.frameNumber}`,
@@ -42,21 +43,21 @@ export function createIcmpAdapter(ctx: ProtocolAdapterContext): ProtocolAdapter 
         queryInput: query.input,
         displayFilter: query.displayFilter,
         protocol: "icmp",
-        title: `前 ${limit} 个 ICMP 事件`,
-        packets,
+        title: allPackets.length > displayLimit ? `共 ${allPackets.length} 个 ICMP 事件（展示前 ${displayLimit} 个）` : `${allPackets.length} 个 ICMP 事件`,
+        packets: displayPackets,
         noResult: "当前查询范围内没有发现 ICMP/ICMPv6 事件。",
         thoughts: [
           "识别为 L3 ICMP 事件查询。",
           `构造 display filter：${query.displayFilter}`,
-          "调用 tshark-query MCP 查询 ICMP/ICMPv6 包。"
+          `tshark 查询返回 ${allPackets.length} 个匹配包。`
         ],
         evidenceCards: cards,
         checks: [{
           key: "icmp",
           label: "ICMP 控制消息",
-          status: cards.length ? "problem" : "ok",
-          summary: cards.length ? `发现 ${cards.length} 个 ICMP/ICMPv6 事件。` : "未发现 ICMP/ICMPv6 事件。",
-          packetIds: packets.map((packet) => packet.packetId),
+          status: allPackets.length ? "problem" : "ok",
+          summary: allPackets.length ? `发现 ${allPackets.length} 个 ICMP/ICMPv6 事件。` : "未发现 ICMP/ICMPv6 事件。",
+          packetIds: displayPackets.map((packet) => packet.packetId),
           nextSteps: ["查看 ICMP 返回源地址和 type/code，判断是哪一跳返回控制消息。"]
         }],
         suggestedActions: ["优先查看 unreachable / TTL exceeded 的源地址，判断是哪一跳返回控制消息。"],
