@@ -2,7 +2,7 @@
 
 ## 架构概览
 
-pcapAI 是 Agent-first 本地浏览器工作台，用于离线分析网络故障。核心流程：用户上传 pcap 并提问 → Chain Planner 规划分析链 → 确定性 protocol adapter 运行 tshark 产出证据 → Agent 综合解读证据链 → 输出诊断结论。
+pcapAI 是 Agent-first 本地浏览器工作台，用于离线分析网络故障。当前主流程以 `/api/cases/:caseId/agent/stream` 为准：用户上传 pcap 并提问 → Chain Planner 规划分析链 → 确定性 handler / protocol adapter 运行 tshark 产出证据 → 必要时进入 Leader Agent 综合解读证据链 → SSE 输出诊断结论。
 
 Protocol adapter 路由采用三层 fallback：硬编码 regex → 学习到的 pattern → agent（带 tshark-query MCP）。学习到的 pattern 由 LLM 动态生成并持久化到 `data/learned_patterns.json`。
 
@@ -15,7 +15,7 @@ flowchart LR
   Opener --> Wireshark["本地 Wireshark"]
   API --> Planner["Chain Planner"]
   Planner --> Adapters["Protocol Adapters"]
-  Planner --> Agent["Leader Agent"]
+  Planner --> Agent["Leader Agent / Subagents"]
   Adapters --> Graph["case graph"]
   Agent --> CaseGraph["case-graph MCP"]
   Agent --> Query
@@ -71,14 +71,14 @@ Chain Planner (LLM 或本地兜底)
 #### Agent 层 (`src/agents/`)
 - **runtime.ts** — OpenAI Agents SDK runtime：
   - `runChainPlanner()` — 规划分析链，输出 `AnalysisChainPlan`
-  - `runIntentPlanner()` — 单步意图分类（无 LLM 时的兜底）
+  - `runIntentPlanner()` — 单步意图分类，用于普通 `/agent` 路径；无 LLM 时由 `plannerService.ts` 本地兜底
   - `runPcapTroubleshootingAgent()` — Leader Agent + 5 个 handoff subagent：
-    - **TriageAgent** — 问题分流，决定交由哪个专业 subagent
-    - **EvidenceAgent** — 综合解读证据链，读取 QueryRun evidenceCards 和 checks
+    - **DiagnosticInterviewAgent** — 诊断访谈，收集故障现象、网络拓扑、抓包位置
+    - **HypothesisAgent** — 假设验证，优先读取 insights，再按需调用 tshark-query MCP
     - **PathAgent** — 多节点路径分析和跨链路关联
     - **ProtocolAgent** — 协议级行为分析，可直接调用 tshark-query MCP 查询原始包数据
     - **ReportAgent** — 生成结构化诊断报告
-  - 所有 agent 同时使用 case-graph MCP 和 tshark-query MCP
+  - 排障 Leader Agent 和 5 个 subagent 同时使用 case-graph MCP 和 tshark-query MCP；Planner Agent 不使用 MCP
   - 返回 `AgentAnswerWithToolCalls`，包含 tool call 名称用于 pattern learning
 
 #### Planner 层 (`src/services/`)
@@ -105,7 +105,7 @@ Chain Planner (LLM 或本地兜底)
 - `types.ts` 中 `runProtocolAdapter()` 实现三层路由：hardcoded regex → learned patterns → null（由调用方 fallback 到 agent）
 
 #### Insight Engine (`src/services/insightEngine.ts`)
-27 个确定性分析器，在每次 agent 查询时对 case graph 的 packets 运行，产出 `PacketInsight[]`。无阈值过滤，所有检测到的模式均报告：
+27 个确定性分析器，在 HTTP 层加载 agent 查询 graph 时懒运行：`loadGraphWithInsights()` 仅在 `graph.packets.length > 0` 且当前 graph 没有 `insights` 时执行，结果写回 case graph。它不在 `runtime.ts` 内部运行，也不会在每次请求都强制重算。无阈值过滤，所有检测到的模式均报告：
 - **TCP（12 个）**：连接生命周期、ACK Gap、TCP 时序（RTT/空闲/突发）、窗口趋势、RST 方向、握手重试、延迟 ACK、连接洪泛、段异常、Keepalive、吞吐量、TCP 选项
 - **ICMP（2 个）**：Echo 配对（丢包/RTT）、ICMP 高级（Unreachable/PMTU/Traceroute/Redirect）
 - **HTTP（4 个）**：状态链（重定向/5xx/4xx）、Header 异常（未匹配/混合端口）、Timing、高级（Host/SNI/错误突发/认证/压缩/Cache-Control/WebSocket/Content-Length/XFF）
@@ -153,13 +153,13 @@ Zod schema + TypeScript 类型，定义完整领域模型：
 三个基于 stdio 的 MCP 服务器（`@modelcontextprotocol/sdk`）：
 
 #### `mcp/tshark-query` — tshark 查询引擎
-18 个工具：`build_display_filter`、`get_capture_time_range`、`list_protocols`、`get_network_statistics`、`list_tcp_conversations`、`query_packets`、`list_tcp_resets`、`list_tcp_retransmissions`、`list_tcp_zero_window`、`list_icmp_events`、`list_dns_packets`、`list_udp_packets`、`list_tls_packets`、`list_http_packets`、`get_conversation_packets`、`list_tcp_streams`、`follow_tcp_stream`、`get_expert_info`
+19 个工具：`build_display_filter`、`get_capture_time_range`、`list_protocols`、`get_network_statistics`、`list_tcp_conversations`、`query_packets`、`get_conversation_packets`、`get_tshark_packet_detail`、`list_tcp_resets`、`list_tcp_retransmissions`、`list_tcp_zero_window`、`list_icmp_events`、`list_dns_packets`、`list_udp_packets`、`list_tls_packets`、`list_http_packets`、`list_tcp_streams`、`follow_tcp_stream`、`get_expert_info`
 
 #### `mcp/evidence-opener` — Wireshark 打开器
 用 pcap 路径 + display filter 打开本地 Wireshark。不分析数据包。
 
-#### `mcp/case-graph` — Agent 只读工具层
-16 个工具，Agent 通过这些工具只读 case graph：
+#### `mcp/case-graph` — Agent 的 case graph 工具层
+20 个工具。大多数工具只读 case graph；`update_network_topology` 会写入本次 Agent runtime 使用的临时 case graph 快照，用于诊断访谈中的拓扑记录，不直接写入持久化 case 文件：
 - `load_case_graph` — 读取 case graph 摘要
 - `get_case_statistics` — 确定性统计（TCP 通信对、诊断标签、时间范围）
 - `get_query_runs` — 读取所有 QueryRun 列表
@@ -175,12 +175,15 @@ Zod schema + TypeScript 类型，定义完整领域模型：
 - `get_session_link` — 按 ID 读取跨节点会话关联
 - `get_packet_detail` — 按 ID 读取数据包详情
 - `explain_path` — 读取当前 QueryRun 通讯路径 hop
+- `get_network_topology` — 读取用户提供的网络拓扑和数据路径信息
+- `update_network_topology` — 将访谈中提取的拓扑信息写入临时 case graph 快照
 - `suggest_next_query` — 基于证据模式返回最多 5 个建议后续查询
+- `get_insights` — 读取 Insight Engine 生成的数据包洞察
 - `export_report` — 导出 Markdown 报告草稿
 
 ## 查询管线
 
-### Agent 查询（`POST /api/cases/:caseId/agent`）
+### 流式 Agent 查询（`POST /api/cases/:caseId/agent/stream`）
 
 ```
 用户问题
@@ -206,6 +209,8 @@ Zod schema + TypeScript 类型，定义完整领域模型：
     → 通过 case-graph MCP + tshark-query MCP
     → 诊断结论 + suggestedQueries
 ```
+
+普通 `POST /api/cases/:caseId/agent` 仍保留单步兼容路径：`planUserIntent()` → `executeAgentIntentPlan()` → 必要时 `runPcapTroubleshootingAgent()`。它不完全等同于上面的 Chain Planner 主路径。
 
 ### QueryRun 创建（`POST /api/cases/:caseId/query-runs`）
 
@@ -265,7 +270,7 @@ Protocol adapter 路由采用三层 fallback：
 
 ## Agent 边界
 
-Leader Agent 通过 case-graph MCP 只读 case graph，通过 tshark-query MCP 查询原始包数据。Agent 不自行解析 pcap 文件，不执行 shell。
+Leader Agent 通过 case-graph MCP 读取 case graph，通过 tshark-query MCP 查询原始包数据。Agent 不自行解析 pcap 文件，不执行 shell；真正的 tshark 调用发生在 `tshark-query` MCP 内。`case-graph` MCP 中除 `update_network_topology` 会写临时快照外，其余工具按只读证据访问使用。
 
 如果没有 QueryRun 或没有选中通讯对，Agent 必须追问查询条件，不能给确定断点结论。
 
