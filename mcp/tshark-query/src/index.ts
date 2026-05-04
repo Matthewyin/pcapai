@@ -247,7 +247,8 @@ function numberOrUndefined(value: string | undefined) {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
-function parseFlag(value: string, label: string) {
+function parseFlag(value: string | undefined, label: string) {
+  if (!value) return [];
   return value === "1" || value.toLowerCase() === "true" ? [label] : [];
 }
 
@@ -430,7 +431,7 @@ export function parseTsharkRows(output: string, capture: CaptureInput) {
       icmpCode: numberOrUndefined(icmpCode || icmpv6Code),
       dnsId: dnsId || undefined,
       dnsQueryName: dnsQueryName || undefined,
-      dnsIsResponse: dnsIsResponse ? dnsIsResponse === "1" || dnsIsResponse.toLowerCase() === "true" : undefined,
+      dnsIsResponse: dnsIsResponse ? dnsIsResponse === "1" || dnsIsResponse?.toLowerCase() === "true" : undefined,
       dnsRcode: numberOrUndefined(dnsRcode),
       dnsResponseAddress: dnsA || dnsAaaa || undefined,
       tlsHandshakeType: numberOrUndefined(tlsHandshakeType),
@@ -717,8 +718,8 @@ function endpoint(ip?: string, port?: number) {
 }
 
 function transportProtocol(packet: z.infer<typeof PacketSchema>) {
-  if (packet.srcPort !== undefined || packet.dstPort !== undefined) return "tcp";
-  return packet.protocol;
+  if (packet.srcPort !== undefined && packet.dstPort !== undefined) return "tcp";
+  return packet.protocol?.toLowerCase() || "unknown";
 }
 
 function conversationKey(packet: z.infer<typeof PacketSchema>) {
