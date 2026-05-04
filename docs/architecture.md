@@ -2,67 +2,131 @@
 
 ## 架构概览
 
-pcapAI 是 Agent-first 本地浏览器工作台，用于离线分析网络故障。当前主流程以 `/api/cases/:caseId/agent/stream` 为准：用户上传 pcap 并提问 → Chain Planner 规划分析链 → 确定性 handler / protocol adapter 运行 tshark 产出证据 → 必要时进入 Leader Agent 综合解读证据链 → SSE 输出诊断结论。
+pcapAI 是 Agent-first 本地浏览器工作台，用于离线分析网络故障。主流程以 `POST /api/cases/:caseId/agent/stream` 为准：用户上传 pcap 并提问 → Insight Engine 确定性分析 → Chain Planner (LLM) 规划分析链 → 确定性 protocol adapter 运行 tshark 产出证据 → 必要时 Leader Agent 通过 MCP 工具综合解读证据链 → SSE 输出诊断结论。
 
-Protocol adapter 路由采用三层 fallback：硬编码 regex → 学习到的 pattern → agent（带 tshark-query MCP）。学习到的 pattern 由 LLM 动态生成并持久化到 `data/learned_patterns.json`。
+## 系统架构图
 
 ```mermaid
-flowchart LR
-  Web["聊天工作台"] --> API["apps/api"]
-  API --> Query["tshark-query MCP"]
-  API --> Opener["evidence-opener MCP"]
-  Query --> Tshark["tshark"]
-  Opener --> Wireshark["本地 Wireshark"]
-  API --> Planner["Chain Planner"]
-  Planner --> Adapters["Protocol Adapters"]
-  Planner --> Agent["Leader Agent / Subagents"]
-  Adapters --> Graph["case graph"]
-  Agent --> CaseGraph["case-graph MCP"]
-  Agent --> Query
-  CaseGraph --> Graph
-  Web --> SSE["SSE 流式输出"]
+flowchart TB
+  subgraph Web["apps/web — React 工作台"]
+    UI["聊天界面<br/>SSE 流式输出"]
+  end
+
+  subgraph API["apps/api — Express + Agent Runtime"]
+    Router["routes.ts<br/>REST + SSE 端点"]
+    Planner["Chain Planner<br/>(LLM / 本地兜底)"]
+    ChainExec["executeChain<br/>链式执行引擎"]
+    Adapters["Protocol Adapters<br/>TCP/DNS/TLS/HTTP/ICMP/UDP"]
+    InsightEng["Insight Engine<br/>29 个确定性分析器"]
+    PatternLearner["Pattern Learner"]
+    CaseStore["caseStore<br/>data/cases/:id/case.json"]
+  end
+
+  subgraph LLM["LLM Provider"]
+    Model["OpenAI 兼容 API<br/>(Doubao/Claude/GPT)"]
+  end
+
+  subgraph AgentRuntime["Agent Runtime (OpenAI Agents SDK)"]
+    Leader["Leader Agent"]
+    Triage["DiagnosticInterview<br/>Agent"]
+    Hypo["Hypothesis<br/>Agent"]
+    PathA["Path<br/>Agent"]
+    Proto["Protocol<br/>Agent"]
+    Report["Report<br/>Agent"]
+    Leader --> Triage
+    Leader --> Hypo
+    Leader --> PathA
+    Leader --> Proto
+    Leader --> Report
+  end
+
+  subgraph MCP["MCP Servers (stdio)"]
+    CG["case-graph MCP<br/>20 个工具"]
+    TQ["tshark-query MCP<br/>19 个工具"]
+    EO["evidence-opener MCP<br/>1 个工具"]
+  end
+
+  subgraph External["外部工具"]
+    Tshark["tshark"]
+    Wireshark["Wireshark"]
+  end
+
+  UI -->|"HTTP / SSE"| Router
+  Router -->|"planChain()"| Planner
+  Planner -->|"AnalysisChainPlan"| ChainExec
+  Planner --> LLM
+  ChainExec -->|"单步路由"| Adapters
+  ChainExec -->|"llm_explain"| AgentRuntime
+  Router -->|"agent fallback"| AgentRuntime
+  AgentRuntime --> LLM
+
+  Adapters -->|"tsharkQueryClient"| TQ
+  AgentRuntime --> CG
+  AgentRuntime --> TQ
+  Router --> EO
+
+  TQ --> Tshark
+  EO --> Wireshark
+
+  CG -->|"读取"| CaseStore
+  Router -->|"loadGraphWithInsights"| InsightEng
+  InsightEng -->|"写回 insights"| CaseStore
+  Adapters -->|"写入 QueryRun"| CaseStore
+  ChainExec -->|"reloadGraph"| CaseStore
+
+  Router -->|"agent 成功后"| PatternLearner
+  PatternLearner --> LLM
+
+  Shared["packages/shared<br/>Zod Schema + TypeScript 类型"] -.-> API
+  Shared -.-> Web
+  Shared -.-> MCP
+  Config["config/defaults.json<br/>PCAPAI_* 环境变量"] -.-> API
+  Config -.-> Web
+  Config -.-> MCP
 ```
 
-## 三层处理管线
+## 请求处理流程
 
 ```
-用户问题
+用户提问
   ↓
-Chain Planner (LLM 或本地兜底)
-  ↓ 输出 AnalysisChainPlan (planKind: single | chain)
+1. loadGraphWithInsights() — 懒运行 Insight Engine（29 个确定性分析器）
   ↓
-┌─────────────────────────────────────────┐
-│ 确定性层 (protocol adapters)             │
-│ TCP / DNS / TLS / HTTP / ICMP / UDP     │
-│ 三层路由：                               │
-│   1. hardcoded regex match              │
-│   2. learned patterns (JSON 文件)       │
-│   3. agent fallback + 学习              │
-│ 直接运行 tshark，产出 evidenceCards     │
-│ + checks + protocolCorrelations         │
-└─────────────────────────────────────────┘
-  ↓ 多步链: executeChain + graph reload
+2. Chain Planner (LLM 或本地正则兜底) → AnalysisChainPlan
   ↓
-┌─────────────────────────────────────────┐
-│ 综合解读层 (LLM agent)                   │
-│ llm_explain intent → Leader Agent       │
-│ 或自动综合 (无 llm_explain 步骤时追加)   │
-│ 通过 case-graph MCP 只读 case graph     │
-│ 通过 tshark-query MCP 查询原始包数据    │
-│ 产出诊断结论 + suggestedQueries         │
-└─────────────────────────────────────────┘
+3a. chain 路径 (planKind=chain):
+    executeChain → 逐步执行，每步后 reloadGraph
+    确定性步骤 → protocol adapter → tshark → evidenceCards
+    llm_explain 步骤 → Leader Agent → handoff subagent
+    无 llm_explain → 自动追加 LLM 综合解读
+  ↓
+3b. single 确定性路径:
+    protocol adapter 三层路由:
+      hardcoded regex → tshark 查询
+      learned pattern → tshark 查询
+      无匹配 → agent fallback (Leader Agent + case-graph + tshark-query MCP)
+    → evidenceCards + checks + protocolCorrelations → 写入 QueryRun
+  ↓
+3c. llm_explain 路径:
+    Leader Agent → handoff → subagent
+    → case-graph MCP 读取 case graph
+    → tshark-query MCP 查询原始包数据
+    → 诊断结论 + suggestedQueries
+  ↓
+4. SSE 流式输出 → Web 聊天气泡
 ```
 
-## 组件
+## 组件详解
 
-### `apps/api` — Express API + Agent runtime
+### `apps/api` — Express API + Agent Runtime
 
 #### HTTP 层 (`src/http/`)
-- **routes.ts** — REST 端点 + SSE 流式 agent 回答。Chain 执行流程：
-  1. `planChain()` 规划分析链
-  2. `executeChain()` 逐步执行，每步后 `reloadGraph()` 刷新 case graph
-  3. 无 `llm_explain` 步骤时自动追加 LLM 综合解读
-  4. 新增路由：`GET /api/cases/:caseId/tcp-streams`（TCP 流列表）、`GET /api/cases/:caseId/tcp-streams/:streamIndex/content`（TCP 流内容）
+- **routes.ts** — REST 端点 + SSE 流式 agent 回答：
+  1. `loadGraphWithInsights()` 懒运行 Insight Engine
+  2. `planChain()` 规划分析链
+  3. `executeChain()` 逐步执行，每步后 `reloadGraph()` 刷新 case graph
+  4. 无 `llm_explain` 步骤时自动追加 LLM 综合解读
+  5. agent fallback 成功后异步触发 Pattern Learner
 - **caseStore.ts** — case 持久化：`data/cases/:caseId/case.json`
 - **capturePreprocess.ts** — 通过 `editcap -s` 裁剪 payload
 - **reportBuilder.ts** — 从 case graph 生成结构化 Markdown 报告
@@ -78,7 +142,8 @@ Chain Planner (LLM 或本地兜底)
     - **PathAgent** — 多节点路径分析和跨链路关联
     - **ProtocolAgent** — 协议级行为分析，可直接调用 tshark-query MCP 查询原始包数据
     - **ReportAgent** — 生成结构化诊断报告
-  - 排障 Leader Agent 和 5 个 subagent 同时使用 case-graph MCP 和 tshark-query MCP；Planner Agent 不使用 MCP
+  - Leader Agent 和所有 subagent 同时挂载 case-graph MCP 和 tshark-query MCP；Chain Planner Agent 不使用 MCP
+  - MCP 连接方式：`MCPServerStdio`，每次 `runPcapTroubleshootingAgent` 调用时创建临时 case graph JSON 文件并通过 `PCAPAI_CASE_GRAPH_PATH` 环境变量传给 case-graph MCP
   - 返回 `AgentAnswerWithToolCalls`，包含 tool call 名称用于 pattern learning
 
 #### Planner 层 (`src/services/`)
@@ -98,14 +163,14 @@ Chain Planner (LLM 或本地兜底)
 - **tcp.ts** — RST session pairs、retransmission pairs、zero-window pairs、SYN-no-SYN/ACK、one-way traffic、TCP issues overview
 - **dns.ts** — DNS 失败/无响应事务，rcode 分组，多 check 输出
 - **tls.ts** — TLS 握手事件（ClientHello/ServerHello/Alert），握手完整性检查，多 check 输出
-- **http.ts** — HTTP 事务（4xx/5xx），请求/响应匹配，多 check 输出
+- **http.ts** — HTTP 事务（4xx/5xx），请求/响应匹配，多 check 输出，跨连接关联
 - **icmp.ts** — ICMP Unreachable/TTL Exceeded/Fragmentation
 - **udp.ts** — UDP 流聚合
 - 共享逻辑在 `builders.ts`：packet pair 分组、evidence card 创建、L7→TCP protocol correlations（DNS→TCP、TLS SNI→TCP、HTTP Host→TCP、ICMP→TCP）以及 HTTP 跨连接关联（`http_to_http`，用于七层代理/SSL 卸载场景）
 - `types.ts` 中 `runProtocolAdapter()` 实现三层路由：hardcoded regex → learned patterns → null（由调用方 fallback 到 agent）
 
 #### Insight Engine (`src/services/insightEngine.ts`)
-29 个确定性分析器，在 HTTP 层加载 agent 查询 graph 时懒运行：`loadGraphWithInsights()` 仅在 `graph.packets.length > 0` 且当前 graph 没有 `insights` 时执行，结果写回 case graph。它不在 `runtime.ts` 内部运行，也不会在每次请求都强制重算。无阈值过滤，所有检测到的模式均报告：
+29 个确定性分析器，在 `routes.ts` 的 `loadGraphWithInsights()` 中懒运行：仅在 `graph.packets.length > 0` 且当前 graph 没有 `insights` 时执行，结果写回 case graph。不在 `runtime.ts` 内部运行，不会在每次请求都强制重算。无阈值过滤，所有检测到的模式均报告：
 - **TCP（12 个）**：连接生命周期、ACK Gap、TCP 时序（RTT/空闲/突发）、窗口趋势、RST 方向、握手重试、延迟 ACK、连接洪泛、段异常、Keepalive、吞吐量、TCP 选项
 - **ICMP（2 个）**：Echo 配对（丢包/RTT）、ICMP 高级（Unreachable/PMTU/Traceroute/Redirect）
 - **HTTP（4 个）**：状态链（重定向/5xx/4xx）、Header 异常（未匹配/混合端口）、Timing、高级（Host/SNI/错误突发/认证/压缩/Cache-Control/WebSocket/Content-Length/XFF）
@@ -144,7 +209,7 @@ Zod schema + TypeScript 类型，定义完整领域模型：
 - `ConnectionLink` — 七层代理/SSL 卸载场景中两条独立 TCP 连接的关联（前端→代理 / 代理→后端）
 - `AnalysisChainPlan`, `AnalysisChainStep`, `ChainStepResult`
 - `AgentAnswer`（含 `protocolCorrelations` 字段）, `QueryDiagnosis`
-- `CaseGraph` — 聚合所有上述数据（含 `connectionLinks`）
+- `CaseGraph` — 聚合所有上述数据（含 `connectionLinks`、`insights`）
 
 ### `config/defaults.json` — 集中配置
 
@@ -152,36 +217,23 @@ Zod schema + TypeScript 类型，定义完整领域模型：
 
 ### MCP 服务器
 
-三个基于 stdio 的 MCP 服务器（`@modelcontextprotocol/sdk`）：
+三个基于 stdio 的 MCP 服务器（`@modelcontextprotocol/sdk`），由 API 和 Agent Runtime 通过 `MCPServerStdio` 连接：
 
-#### `mcp/tshark-query` — tshark 查询引擎
-19 个工具：`build_display_filter`、`get_capture_time_range`、`list_protocols`、`get_network_statistics`、`list_tcp_conversations`、`query_packets`、`get_conversation_packets`、`get_tshark_packet_detail`、`list_tcp_resets`、`list_tcp_retransmissions`、`list_tcp_zero_window`、`list_icmp_events`、`list_dns_packets`、`list_udp_packets`、`list_tls_packets`、`list_http_packets`、`list_tcp_streams`、`follow_tcp_stream`、`get_expert_info`
+#### `mcp/tshark-query` — tshark 查询引擎（19 个工具）
+被两个调用方使用：
+- **API 层**（`tsharkQueryClient.ts`）：protocol adapter 和 routes.ts 直接调用 tshark 查询
+- **Agent Runtime**：Leader Agent 和 subagent 通过 MCP 协议调用，查询原始包数据
 
-#### `mcp/evidence-opener` — Wireshark 打开器
-用 pcap 路径 + display filter 打开本地 Wireshark。不分析数据包。
+工具：`build_display_filter`、`get_capture_time_range`、`list_protocols`、`get_network_statistics`、`list_tcp_conversations`、`query_packets`、`get_conversation_packets`、`get_tshark_packet_detail`、`list_tcp_resets`、`list_tcp_retransmissions`、`list_tcp_zero_window`、`list_icmp_events`、`list_dns_packets`、`list_udp_packets`、`list_tls_packets`、`list_http_packets`、`list_tcp_streams`、`follow_tcp_stream`、`get_expert_info`
 
-#### `mcp/case-graph` — Agent 的 case graph 工具层
-20 个工具。大多数工具只读 case graph；`update_network_topology` 会写入本次 Agent runtime 使用的临时 case graph 快照，用于诊断访谈中的拓扑记录，不直接写入持久化 case 文件：
-- `load_case_graph` — 读取 case graph 摘要
-- `get_case_statistics` — 确定性统计（TCP 通信对、诊断标签、时间范围）
-- `get_query_runs` — 读取所有 QueryRun 列表
-- `get_query_run` — 按 ID 读取单个 QueryRun
-- `get_active_query_run` — 读取当前激活的 QueryRun
-- `get_conversation` — 按 ID 读取通讯对
-- `get_query_diagnosis` — 读取 selectedDiagnosis（checks、findings、nextSteps）
-- `get_path_diagnosis` — 读取 PathHop、PathEdge 和边判断
-- `get_protocol_correlations` — 读取 DNS/TLS/HTTP→TCP 关联
-- `get_evidence_cards` — 读取证据卡片
-- `get_finding` — 按 ID 读取判断结果
-- `get_evidence` — 按 ID 读取证据事件
-- `get_session_link` — 按 ID 读取跨节点会话关联
-- `get_packet_detail` — 按 ID 读取数据包详情
-- `explain_path` — 读取当前 QueryRun 通讯路径 hop
-- `get_network_topology` — 读取用户提供的网络拓扑和数据路径信息
-- `update_network_topology` — 将访谈中提取的拓扑信息写入临时 case graph 快照
-- `suggest_next_query` — 基于证据模式返回最多 5 个建议后续查询
-- `get_insights` — 读取 Insight Engine 生成的数据包洞察
-- `export_report` — 导出 Markdown 报告草稿
+#### `mcp/evidence-opener` — Wireshark 打开器（1 个工具）
+仅被 API 层（`evidenceOpenerClient.ts`）调用。用 pcap 路径 + display filter 打开本地 Wireshark。不分析数据包。
+- 工具：`open_in_wireshark`
+
+#### `mcp/case-graph` — Agent 的 case graph 工具层（20 个工具）
+仅被 Agent Runtime 调用。从临时 JSON 文件（`PCAPAI_CASE_GRAPH_PATH`）读取 case graph。大多数工具只读；`update_network_topology` 写入临时快照，不直接修改持久化文件。
+
+工具：`load_case_graph`、`get_case_statistics`、`get_query_runs`、`get_query_run`、`get_active_query_run`、`get_conversation`、`get_query_diagnosis`、`get_path_diagnosis`、`get_protocol_correlations`、`get_evidence_cards`、`get_finding`、`get_evidence`、`get_session_link`、`get_packet_detail`、`explain_path`、`get_network_topology`、`update_network_topology`、`suggest_next_query`、`get_insights`、`export_report`
 
 ## 查询管线
 
@@ -190,15 +242,17 @@ Zod schema + TypeScript 类型，定义完整领域模型：
 ```
 用户问题
   ↓
-1. Chain Planner 分类 → AnalysisChainPlan
+1. loadGraphWithInsights() — 懒运行 Insight Engine
   ↓
-2a. Chain path (planKind=chain):
+2. Chain Planner 分类 → AnalysisChainPlan
+  ↓
+3a. Chain path (planKind=chain):
     executeChain → 逐步执行
     每步后 reloadGraph 刷新 case graph
     支持 paramsFrom 参数绑定
     无 llm_explain 步骤 → 自动追加 LLM 综合解读
   ↓
-2b. Single deterministic path:
+3b. Single deterministic path:
     protocol adapter 三层路由:
       hardcoded regex match → tshark 查询
       learned pattern match → tshark 查询
@@ -206,7 +260,7 @@ Zod schema + TypeScript 类型，定义完整领域模型：
     → evidenceCards + checks + protocolCorrelations
     → 写入 QueryRun
   ↓
-2c. Agent path (llm_explain intent):
+3c. Agent path (llm_explain intent):
     Leader Agent → handoff → subagent
     → 通过 case-graph MCP + tshark-query MCP
     → 诊断结论 + suggestedQueries
