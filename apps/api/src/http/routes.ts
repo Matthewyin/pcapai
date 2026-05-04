@@ -273,9 +273,34 @@ function resetAnalysis(graph: CaseGraph) {
   };
 }
 
-function loadGraphWithInsights(caseId: string): CaseGraph {
+async function loadGraphWithInsights(caseId: string): Promise<CaseGraph> {
   const graph = loadGraph(caseId);
-  if (graph.packets.length && !graph.insights?.length) {
+  if (graph.insights?.length) return graph;
+
+  // 如果 graph 没有 packets 但有 captures，先用 tshark 查一次基础包数据
+  if (!graph.packets.length && graph.captures.length) {
+    try {
+      const inputs = captureQueryInputs(graph);
+      if (inputs.length) {
+        const { packets } = await queryPacketsWithMcp({ captures: inputs, displayFilter: "", limit: 2000 });
+        if (packets.length) {
+          const enriched = { ...graph, packets };
+          writeCaseGraph(enriched);
+          cases.set(caseId, enriched);
+          const insights = runLevel1Insights(enriched);
+          if (insights.length) {
+            const nextGraph = { ...enriched, insights };
+            writeCaseGraph(nextGraph);
+            cases.set(caseId, nextGraph);
+            return nextGraph;
+          }
+          return enriched;
+        }
+      }
+    } catch { /* tshark 查询失败不阻塞后续流程 */ }
+  }
+
+  if (graph.packets.length) {
     const insights = runLevel1Insights(graph);
     if (insights.length) {
       const nextGraph = { ...graph, insights };
@@ -351,7 +376,26 @@ const plannerService = createPlannerService({
   applyCorrelationContextAndRerun,
   createCaptureCorrelationQueryRun,
   runProtocolEventQuery: async (graph, question) => {
-    const matching = protocolAdapters.filter((candidate) => candidate.match(question));
+    let matching = protocolAdapters.filter((candidate) => candidate.match(question));
+
+    // 如果多个 adapter 匹配，用协议关键词优先级筛选
+    if (matching.length > 1) {
+      const protocolHints: Record<string, RegExp> = {
+        dns: /\bdns\b|解析|域名|nxdomain|servfail/i,
+        tcp: /\btcp\b|重传|rst|zero.?window|握手|syn/i,
+        tls: /\btls\b|ssl|证书|cipher|handshake/i,
+        icmp: /\bicmp\b|unreachable|ttl|fragment/i,
+        udp: /\budp\b|quic/i,
+        http: /\bhttp\b|状态码|status.?code/i
+      };
+      const prioritized = matching.filter((adapter) => {
+        const hint = protocolHints[adapter.id];
+        return hint && hint.test(question);
+      });
+      if (prioritized.length === 1) matching = prioritized;
+      else if (prioritized.length > 1) matching = prioritized;
+    }
+
     if (!matching.length) {
       const learnedPatterns = loadLearnedPatterns();
       const adapterResult = await runProtocolAdapter(protocolAdapters, graph, question, learnedPatterns);
@@ -955,7 +999,7 @@ export function createAgentRouter() {
   router.post("/cases/:caseId/agent", async (req, res) => {
     let graph: CaseGraph;
     try {
-      graph = loadGraphWithInsights(String(req.params.caseId));
+      graph = await loadGraphWithInsights(String(req.params.caseId));
     } catch {
       return res.status(404).json({ error: "case not found" });
     }
@@ -1217,7 +1261,7 @@ export function createAgentRouter() {
   router.post("/cases/:caseId/agent/stream", async (req, res) => {
     let graph: CaseGraph;
     try {
-      graph = loadGraphWithInsights(String(req.params.caseId));
+      graph = await loadGraphWithInsights(String(req.params.caseId));
     } catch {
       return res.status(404).json({ error: "case not found" });
     }

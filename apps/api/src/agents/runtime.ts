@@ -738,7 +738,7 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
     const contextMessage = input.chatHistory?.length
       ? `之前的对话上下文：\n${input.chatHistory.map((m) => `${m.role === "user" ? "用户" : "Agent"}：${m.content}`).join("\n")}\n\n用户最新回复：${input.question}`
       : input.question;
-    const result = await withTrace("pcapAI leader agent", () => run(leaderAgent, contextMessage, { maxTurns: 8 }), {
+    const result = await withTrace("pcapAI leader agent", () => run(leaderAgent, contextMessage, { maxTurns: 16 }), {
       groupId: input.graph.spec.caseId,
       metadata: {
         caseId: input.graph.spec.caseId,
