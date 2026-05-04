@@ -11,6 +11,7 @@ pcapAI 是一个 Agent-first 本地浏览器工作台，用于离线分析网络
 支持的分析类型：
 
 - TCP 连接异常：SYN 丢失、SYN 无 SYN-ACK、RST、重传、Zero Window、单向流量、窗口趋势、RST 方向、握手重试、延迟 ACK、连接洪泛、段异常、Keepalive、吞吐量、TCP 选项
+- NAT/代理检测：七层代理识别（Via/XFF 头、SSL 卸载模式、TCP 连接分离）、NAT 启发式检测（多目标连接模式、ISN 跳跃、孤立 SYN）
 - DNS 解析异常：NXDOMAIN、SERVFAIL、无响应、查询突发、Zone Transfer、截断响应、成功率统计
 - TLS 握手问题：ClientHello/ServerHello 缺失、Alert、版本/SNI 异常、弃用协议、弱加密套件、证书 SAN 不匹配、会话恢复、ALPN、重协商
 - HTTP 状态异常：4xx/5xx 响应、延迟异常、重定向链、Host/SNI 不匹配、错误突发、认证失败、压缩缺失
@@ -29,7 +30,7 @@ pcapAI 是一个 Agent-first 本地浏览器工作台，用于离线分析网络
 - 手工录入 MappingHint（NAT、SLB、代理、网关、隧道）
 - Chain Planner 动态生成 1-5 步分析链（不硬编码任何故障场景）
 - 6 个确定性 protocol adapter（TCP/DNS/TLS/HTTP/ICMP/UDP）
-- 27 个确定性 insight 分析器（TCP/ICMP/HTTP/TLS/DNS/UDP/QUIC/NTP/SSH），无阈值过滤，完整报告所有检测到的模式
+- 29 个确定性 insight 分析器（TCP/ICMP/HTTP/TLS/DNS/UDP/QUIC/NTP/SSH + L7 代理检测 + NAT 启发式检测），无阈值过滤，完整报告所有检测到的模式
 - Protocol adapter 自改进：三层路由（hardcoded regex → learned patterns → agent fallback）
 - Leader Agent + 5 个 handoff subagent（Triage/Evidence/Path/Protocol/Report）
 - Agent 同时使用 case-graph MCP 和 tshark-query MCP
@@ -70,7 +71,8 @@ pcapAI 是一个 Agent-first 本地浏览器工作台，用于离线分析网络
 - `QueryRun`：一次查询的完整结果——display filter、conversations、candidateGroups、evidenceCards、selectedDiagnosis（checks）、protocolCorrelations。
 - `QueryPath`：跨节点路径还原（PathHop/PathEdge）。
 - `EvidenceCard`：可点击的证据卡，包含 Wireshark filter。
-- `ProtocolCorrelation`：L7 协议到 TCP 的关联（DNS→TCP、TLS SNI→TCP、HTTP Host→TCP、ICMP→TCP）。
+- `ProtocolCorrelation`：L7 协议到 TCP 的关联（DNS→TCP、TLS SNI→TCP、HTTP Host→TCP、ICMP→TCP、HTTP 跨连接 `http_to_http`）。
+- `ConnectionLink`：七层代理/SSL 卸载场景中两条独立 TCP 连接的关联（前端→代理 / 代理→后端），包含关联方法（HTTP URI/Cookie/Timing/SSL 卸载/时序模式/手工）。
 - `PacketInsight`：确定性分析器产出的诊断洞察，由 insightEngine 生成。
 - `AnalysisChainPlan`/`AnalysisChainStep`：分析链计划。
 - `AgentAnswer`：Agent 回复——answer、evidenceCards、checks、suggestedQueries、protocolCorrelations。
@@ -79,13 +81,14 @@ pcapAI 是一个 Agent-first 本地浏览器工作台，用于离线分析网络
 
 - **确定性优先**：protocol adapter 运行 tshark 直接产出证据，不依赖 LLM。
 - **三层路由**：hardcoded regex → learned patterns（`data/learned_patterns.json`）→ agent fallback（tshark-query MCP）。
+- **HTTP 跨连接关联**：HTTP adapter 同时生成 L7→TCP 和 `http_to_http` 跨连接关联，用于识别同一请求出现在两条不同 TCP 连接（客户端→代理 / 代理→后端）的场景。
 - **自改进**：agent fallback 后 LLM 生成 regex pattern + adapterId，持久化供下次确定性路由使用。无硬编码映射。
 - **链式编排**：Chain Planner 动态规划多步计划，步骤间通过 `paramsFrom` JSON 路径表达式传递参数，不硬编码场景。
 - **Graph reload**：链式执行中每步完成后刷新 case graph，后续步骤可读到前序步骤写入的 QueryRun。
 - **Agent 只读 graph + tshark**：Agent 通过 case-graph MCP 读取 case graph，通过 tshark-query MCP 查询原始包数据。不修改证据、不解析 pcap 文件、不执行 shell。
 - **综合解读**：链的最后一个步骤由 LLM 综合前序步骤的 QueryRun evidenceCards 和 checks，给出诊断结论。如果没有 LLM key，系统只输出确定性统计结果。
 - **聊天是读结论的地方，链接页是操作 Wireshark 的地方**：聊天气泡保留所有文字分析（Markdown 渲染），证据卡片在新标签页展示（Blob URL）。
-- **Insight 引擎无阈值过滤**：27 个确定性分析器报告所有检测到的模式，severity 仅作为视觉标记，不做阈值过滤。
+- **Insight 引擎无阈值过滤**：29 个确定性分析器报告所有检测到的模式，severity 仅作为视觉标记，不做阈值过滤。
 
 ## 置信度策略
 

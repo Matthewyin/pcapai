@@ -190,41 +190,39 @@ const tsharkFields = [
   "http.transfer_encoding",
   "http.authorization",
   "http.www_authenticate",
-  "http.via",
   "http.upgrade",
   "http.accept_encoding",
   "http.content_encoding",
   "http.cache_control",
-  "tls.cipher",
-  "tls.cipher_suite",
   "x509sat.printableString",
   "x509ce.dNSName",
-  "tls.session_id",
-  "tls.ext.alpn",
-  "tls.ext.session_ticket",
   "dns.qry.type",
-  "dns.ttl",
   "dns.cname",
   "dns.flags.truncated",
   "dns.a",
   "dns.count.answers",
+  "dns.resp.ttl",
   "icmp.ident",
   "icmp.seq",
-  "icmp.mtu_next_hop",
+  "icmp.mtu",
   "ip.flags.df",
   "udp.length",
   "quic.version",
-  "quic.connection_id",
-  "quic.packet_type",
   "quic.frame_type",
+  "quic.scid",
+  "quic.dcid",
+  "quic.header_form",
   "ntp.refid",
   "ntp.stratum",
   "ntp.rootdelay",
   "ntp.xmt",
   "ntp.org",
-  "ssh.message",
+  "tls.handshake.ciphersuite",
+  "tls.handshake.session_id",
+  "tls.handshake.extensions.session_ticket",
   "ssh.direction",
-  "ssh.protocol"
+  "ssh.protocol",
+  "ssh.message_code"
 ];
 
 const networkStatFields = [
@@ -589,7 +587,18 @@ async function queryCapturePackets(capture: CaptureInput, displayFilter = "tcp",
     "occurrence=f",
     ...tsharkFields.flatMap((field) => ["-e", field])
   ];
-  const { stdout } = await execFileAsync(tsharkCommand, args, { maxBuffer });
+  let stdout: string;
+  try {
+    ({ stdout } = await execFileAsync(tsharkCommand, args, { maxBuffer }));
+  } catch (err: unknown) {
+    // tshark 在存在不支持的字段名时仍可能输出有效数据，但退出码为 1
+    const e = err as { stdout?: string; stderr?: string };
+    if (e.stdout && e.stdout.trim().length > 0) {
+      stdout = e.stdout;
+    } else {
+      throw err;
+    }
+  }
   const rows = parseTsharkRows(stdout, capture);
   return limit ? rows.slice(0, limit) : rows;
 }

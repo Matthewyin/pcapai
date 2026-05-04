@@ -71,7 +71,7 @@ POST /agent/stream
 | ICMP | Unreachable, TTL exceeded, fragmentation | Error event summary |
 | UDP | Flow aggregation by endpoint pair | Flow distribution |
 
-Each adapter builds evidence cards and L7-to-TCP protocol correlations without LLM involvement.
+Each adapter builds evidence cards and L7-to-TCP protocol correlations without LLM involvement. HTTP adapter also produces cross-connection correlations (`http_to_http`) to identify proxy/LB scenarios where the same request appears on two independent TCP connections.
 
 ### Protocol adapter self-improvement
 
@@ -110,3 +110,17 @@ npm run test               # run tests (apps/api + mcp/tshark-query)
 - MCP (Model Context Protocol) over stdio
 - tshark / Wireshark for packet analysis
 - npm workspaces monorepo
+
+## Insight Engine
+
+29 deterministic analyzers run on each case graph, reporting all detected patterns without threshold filtering:
+
+- **TCP (12)**: lifecycle, ACK gap, timing, window trend, RST direction, handshake retry, delayed ACK, flood, segment anomaly, keepalive, throughput, TCP options
+- **ICMP (2)**: echo pairing, advanced (Unreachable/PMTU/Traceroute)
+- **HTTP (4)**: status chain, header anomaly, timing, advanced
+- **TLS (2)**: handshake, advanced (version/cipher/cert/resumption)
+- **DNS (2)**: anomaly, advanced (burst/AXFR/TTL/CNAME)
+- **Cross-protocol**: DNS→TCP→TLS→HTTP waterfall
+- **UDP (1)**: multi-port/burst/one-way
+- **QUIC, NTP, SSH**: connection/handshake/stratum/message distribution
+- **NAT/L7 proxy (2)**: L7 proxy detection (Via/XFF headers, SSL offload, TCP connection split), NAT heuristic (multi-target connections, ISN jumps, orphan SYN)

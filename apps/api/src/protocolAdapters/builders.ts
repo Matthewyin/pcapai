@@ -430,3 +430,137 @@ export function buildProtocolCorrelations(queryRunId: string, protocol: string, 
     return [];
   });
 }
+
+// ── HTTP 跨连接关联（七层代理/SSL 卸载场景） ─────────────────────────
+
+interface HttpTransaction {
+  packetId: string;
+  srcIp: string;
+  srcPort: number;
+  dstIp: string;
+  dstPort: number;
+  host?: string;
+  uri?: string;
+  method?: string;
+  statusCode?: number;
+  timestamp: number;
+  xff?: string;
+  via?: string;
+  cookie?: string;
+}
+
+function httpTransactionsFromPackets(packets: PacketSummary[]): HttpTransaction[] {
+  const result: HttpTransaction[] = [];
+  for (const p of packets) {
+    if (!p.srcIp || !p.dstIp || p.srcPort == null || p.dstPort == null) continue;
+    if (p.httpRequestMethod) {
+      result.push({
+        packetId: p.packetId, srcIp: p.srcIp, srcPort: p.srcPort,
+        dstIp: p.dstIp, dstPort: p.dstPort, host: p.httpHost,
+        uri: p.httpRequestUri, method: p.httpRequestMethod, timestamp: p.timestamp,
+        xff: p.httpXForwardedFor
+      });
+    }
+    if (p.httpResponseCode != null) {
+      result.push({
+        packetId: p.packetId, srcIp: p.srcIp, srcPort: p.srcPort,
+        dstIp: p.dstIp, dstPort: p.dstPort, host: p.httpHost,
+        uri: p.httpRequestUri, statusCode: p.httpResponseCode, timestamp: p.timestamp,
+        xff: p.httpXForwardedFor, via: p.httpVia, cookie: p.httpSetCookie
+      });
+    }
+  }
+  return result;
+}
+
+/**
+ * 检测同一 Host/URI 在不同 TCP 连接（不同五元组）之间出现，
+ * 关联客户端→代理和代理→后端两条独立连接。
+ */
+export function buildHttpCrossConnectionCorrelation(
+  queryRunId: string,
+  packets: PacketSummary[],
+  cards: EvidenceCard[]
+): ProtocolCorrelation[] {
+  const txns = httpTransactionsFromPackets(packets);
+  if (txns.length < 2) return [];
+
+  // 按 Host+URI 分组
+  const byResource = new Map<string, HttpTransaction[]>();
+  for (const t of txns) {
+    const key = `${t.host || ""}|${t.uri || ""}`;
+    const group = byResource.get(key) || [];
+    group.push(t);
+    byResource.set(key, group);
+  }
+
+  const correlations: ProtocolCorrelation[] = [];
+  let idx = 0;
+
+  for (const [resource, group] of byResource) {
+    if (group.length < 2) continue;
+
+    // 找出不同的五元组方向
+    const flowKeys = new Map<string, HttpTransaction[]>();
+    for (const t of group) {
+      const fk = `${t.srcIp}:${t.srcPort}->${t.dstIp}:${t.dstPort}`;
+      const fGroup = flowKeys.get(fk) || [];
+      fGroup.push(t);
+      flowKeys.set(fk, fGroup);
+    }
+
+    if (flowKeys.size < 2) continue;
+
+    const [host, uri] = resource.split("|");
+    const flows = [...flowKeys.values()];
+
+    // 找一对流：一个包含请求（method），一个包含请求且指向不同后端
+    for (let i = 0; i < flows.length; i++) {
+      for (let j = i + 1; j < flows.length; j++) {
+        const flowA = flows[i];
+        const flowB = flows[j];
+        const aHasRequest = flowA.some(t => t.method);
+        const bHasRequest = flowB.some(t => t.method);
+        if (!aHasRequest && !bHasRequest) continue;
+
+        // 两个流的 dstIp 或 dstPort 不同 → 不同的 TCP 连接
+        const aDst = `${flowA[0].dstIp}:${flowA[0].dstPort}`;
+        const bDst = `${flowB[0].dstIp}:${flowB[0].dstPort}`;
+        if (aDst === bDst) continue;
+
+        // 检查是否有一方包含 XFF/Via（更强的代理证据）
+        const hasProxyHeaders = [...flowA, ...flowB].some(t => t.xff || t.via);
+        const confidence: "high" | "low" = hasProxyHeaders ? "high" : "low";
+
+        const sourceTxn = aHasRequest ? flowA[0] : flowB[0];
+        const targetTxn = aHasRequest ? flowB[0] : flowA[0];
+        const sourceCardId = cards.find(c => c.frameNumber === parseInt(sourceTxn.packetId.split("-").pop() || ""))?.cardId;
+
+        idx++;
+        correlations.push({
+          correlationId: `corr-${queryRunId}-xc-${idx}`,
+          kind: "http_to_http",
+          sourcePacketId: sourceTxn.packetId,
+          sourceEvidenceCardId: sourceCardId,
+          targetDisplayFilter: `ip.addr == ${targetTxn.dstIp} && tcp.port == ${targetTxn.dstPort}`,
+          relation: `Host ${host} 的同一请求 ${uri || "/"} 出现在两条不同 TCP 连接中，可能经过七层代理转发`,
+          confidence,
+          summary: `客户端→${aDst} 与 ${bDst} 两条连接包含同一 HTTP 请求（${host}${uri}），疑似代理/LB 转发${hasProxyHeaders ? "（存在 XFF/Via 头）" : ""}`,
+          reasons: [
+            `连接 A: ${flowA[0].srcIp}:${flowA[0].srcPort} → ${aDst}`,
+            `连接 B: ${flowB[0].srcIp}:${flowB[0].srcPort} → ${bDst}`,
+            hasProxyHeaders ? "存在 XFF 或 Via 代理头" : "无直接代理头，仅基于 URI 匹配"
+          ],
+          nextSteps: [
+            `用 display filter 检查两条连接的完整会话`,
+            "检查 mapping hint 是否记录了此代理关系"
+          ]
+        });
+
+        break; // 每对资源只关联一次
+      }
+    }
+  }
+
+  return correlations;
+}

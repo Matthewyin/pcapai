@@ -30,7 +30,7 @@ Tests live in `apps/api/test/` and cover protocol correlations, path correlation
 npm workspace monorepo with three workspace groups:
 
 ### `packages/shared` — Shared schemas (`@pcapai/shared`)
-Zod schemas + TypeScript types for the entire domain model: `CaseSpec`, `CaptureNode`, `MappingHint`, `TimeOffsetHint`, `PacketSummary`, `Conversation`, `QueryRun`, `QueryPath`, `SessionSegment`, `SessionLink`, `EvidenceEvent`, `Finding`, `PathGraph`, `AnalysisRun`, `CaseGraph`, `AgentAnswer`, `QueryDiagnosis`, `ProtocolCorrelation`, `EvidenceCard`, `AccessCandidateGroup`, `PacketInsight`, `TcpStreamSummary`, `ToolRun`, `AnalysisChainPlan`, `AnalysisChainStep`, `ChainStepResult`. All other packages consume these types. API imports shared via a relative path (`../../../../packages/shared/src/index.js`).
+Zod schemas + TypeScript types for the entire domain model: `CaseSpec`, `CaptureNode`, `MappingHint`, `TimeOffsetHint`, `PacketSummary`, `Conversation`, `QueryRun`, `QueryPath`, `SessionSegment`, `SessionLink`, `EvidenceEvent`, `Finding`, `PathGraph`, `AnalysisRun`, `CaseGraph`, `AgentAnswer`, `QueryDiagnosis`, `ProtocolCorrelation`, `EvidenceCard`, `AccessCandidateGroup`, `PacketInsight`, `TcpStreamSummary`, `ToolRun`, `ConnectionLink`, `AnalysisChainPlan`, `AnalysisChainStep`, `ChainStepResult`. All other packages consume these types. API imports shared via a relative path (`../../../../packages/shared/src/index.js`).
 
 ### `config/defaults.json` — Central configuration
 All runtime defaults live here: API host/port (default `30022`), CORS origins, MCP server launch commands, LLM settings (default: Doubao/ByteDance Ark endpoint), tshark config, query limits, diagnosis thresholds, and web settings. Every config value can be overridden via `PCAPAI_*` env vars. The API, web Vite config, and MCP servers all resolve the workspace root by walking up to find `config/defaults.json`.
@@ -59,14 +59,14 @@ All runtime defaults live here: API host/port (default `30022`), CORS origins, M
 - **`src/http/llmSettings.ts`** — LLM profile management in `.env` file (profiles stored as `PCAPAI_LLM_PROFILE_*` env vars)
 - **`src/protocolAdapters/`** — 6 deterministic protocol-specific query subsystems (bypass LLM):
   - `types.ts` — `ProtocolAdapter` interface and `runProtocolAdapter()` dispatcher; three-tier routing: hardcoded regex match → learned patterns from `data/learned_patterns.json` → agent fallback
-  - `builders.ts` — shared logic: packet pair grouping, evidence card creation, `QueryRun` construction, L7-to-TCP protocol correlations (DNS→TCP, TLS SNI→TCP, HTTP Host→TCP, ICMP→TCP)
+  - `builders.ts` — shared logic: packet pair grouping, evidence card creation, `QueryRun` construction, L7-to-TCP protocol correlations (DNS→TCP, TLS SNI→TCP, HTTP Host→TCP, ICMP→TCP) and HTTP cross-connection correlation (`http_to_http` for L7 proxy/SSL offload scenarios)
   - `tcp.ts` — RST session pairs, retransmission pairs, zero-window pairs, SYN-no-SYN/ACK pairs, one-way traffic pairs, TCP issues overview
   - `dns.ts` — DNS failure/unresponsive transactions with rcode grouping and multi-check output
   - `tls.ts` — TLS handshake events (ClientHello, ServerHello, alerts) with handshake completeness checks and multi-check output
-  - `http.ts` — HTTP transactions with status code filtering (4xx/5xx), request/response matching, and multi-check output
+  - `http.ts` — HTTP transactions with status code filtering (4xx/5xx), request/response matching, multi-check output, and cross-connection correlation via `buildHttpCrossConnectionCorrelation()`
   - `icmp.ts` — ICMP unreachable/TTL exceeded/fragmentation events
   - `udp.ts` — UDP flow aggregation by endpoint pair
-- **`src/services/insightEngine.ts`** — 27 deterministic analyzers run on every agent query to produce `PacketInsight[]`: TCP lifecycle/ACK gap/timing/window trend/RST direction/handshake retry/delayed ACK/connection flood/segment anomaly/keepalive/throughput/TCP options, ICMP echo pair, HTTP status chain/header anomaly/timing/advanced, TLS handshake/advanced, DNS anomaly/advanced, cross-protocol chain, UDP, ICMP advanced, QUIC, NTP, SSH. No threshold filtering — all detected patterns are reported.
+- **`src/services/insightEngine.ts`** — 29 deterministic analyzers run on every agent query to produce `PacketInsight[]`: TCP lifecycle/ACK gap/timing/window trend/RST direction/handshake retry/delayed ACK/connection flood/segment anomaly/keepalive/throughput/TCP options, ICMP echo pair, HTTP status chain/header anomaly/timing/advanced, TLS handshake/advanced, DNS anomaly/advanced, cross-protocol chain, UDP, ICMP advanced, QUIC, NTP, SSH, L7 proxy detection (Via/XFF/SSL offload/TCP connection split), NAT heuristic (multi-target/ISN jump/orphan SYN). No threshold filtering — all detected patterns are reported.
 - **`src/services/patternLearner.ts`** — self-improvement module for protocol adapter routing:
   - `loadLearnedPatterns()` — loads learned regex→adapterId pairs from `data/learned_patterns.json`
   - `learnFromAgentRun()` — after agent handles a fallback query, uses LLM to generate a regex pattern and target adapterId; validates and persists to JSON
@@ -140,7 +140,8 @@ The learning module (`src/services/patternLearner.ts`) has no hardcoded tool→a
 - Case data persists as JSON files under `data/cases/:caseId/`. In-memory `Map<string, CaseGraph>` caches recently loaded graphs.
 - LLM profiles are stored as `PCAPAI_LLM_PROFILE_*` entries in `.env`. The active profile is tracked via `PCAPAI_LLM_ACTIVE_PROFILE`.
 - `QueryDiagnosis` runs deterministic checks (handshake completeness, RST, retransmission burst, zero window, bidirectional traffic, FIN close) with thresholds from `config/defaults.json` `api.diagnosis`.
-- **Insight engine reports all patterns without threshold filtering** — every detected pattern is reported; severity is a visual marker only.
+- **Insight engine reports all patterns without threshold filtering** — every detected pattern is reported; severity is a visual marker only. 29 analyzers including L7 proxy and NAT heuristic detection.
+- HTTP adapter produces `http_to_http` cross-connection correlations alongside standard L7→TCP correlations, identifying L7 proxy/SSL offload scenarios where the same request appears on two independent TCP connections.
 - Graph reload between chain steps ensures subsequent steps can read QueryRuns written by previous steps.
 - Auto-synthesis: when a chain has no `llm_explain` step but LLM is configured, routes.ts automatically appends LLM interpretation after chain completes.
 - Evidence cards are shown in a new browser tab via Blob URL, not in the chat bubble. Chat is for reading conclusions; the link page is for Wireshark operations.

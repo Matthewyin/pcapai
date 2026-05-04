@@ -1,5 +1,5 @@
 import type { PacketSummary } from "../../../../packages/shared/src/index.js";
-import { buildProtocolCorrelations } from "./builders.js";
+import { buildProtocolCorrelations, buildHttpCrossConnectionCorrelation } from "./builders.js";
 import type { ProtocolAdapter, ProtocolAdapterContext } from "./types.js";
 
 function shouldListHttpTransactions(question: string) {
@@ -187,7 +187,10 @@ export function createHttpAdapter(ctx: ProtocolAdapterContext): ProtocolAdapter 
         httpCardSummary(packet),
         "transaction"
       ));
-      const protocolCorrelations = buildProtocolCorrelations(queryRunId, "http", packets, cards);
+      const protocolCorrelations = [
+        ...buildProtocolCorrelations(queryRunId, "http", packets, cards),
+        ...buildHttpCrossConnectionCorrelation(queryRunId, packets, cards)
+      ];
       const checks = buildHttpChecks(packets, protocolCorrelations);
       return ctx.protocolQueryAnswer({
         graph,

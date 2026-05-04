@@ -223,7 +223,10 @@ export const DiagnosticTagKindSchema = z.enum([
   "fin_without_peer_fin_ack",
   "session_seen_on_one_node_only",
   "nat_mapping_required_but_missing",
-  "time_window_not_overlapped"
+  "time_window_not_overlapped",
+  "tcp_termination_by_proxy",
+  "ssl_offload_detected",
+  "nat_heuristic_detected"
 ]);
 export type DiagnosticTagKind = z.infer<typeof DiagnosticTagKindSchema>;
 
@@ -361,7 +364,7 @@ export type QueryPath = z.infer<typeof QueryPathSchema>;
 
 export const ProtocolCorrelationSchema = z.object({
   correlationId: z.string(),
-  kind: z.enum(["dns_to_tcp", "tls_sni_to_tcp", "http_host_to_tcp", "icmp_to_tcp"]),
+  kind: z.enum(["dns_to_tcp", "tls_sni_to_tcp", "http_host_to_tcp", "icmp_to_tcp", "http_to_http"]),
   sourcePacketId: z.string(),
   sourceEvidenceCardId: z.string().optional(),
   targetConversationId: z.string().optional(),
@@ -529,7 +532,10 @@ export const PacketInsightSchema = z.object({
     "icmp_redirect",
     "quic_anomaly",
     "ntp_anomaly",
-    "ssh_anomaly"
+    "ssh_anomaly",
+    "l7_proxy_detected",
+    "nat_heuristic",
+    "tcp_connection_split"
   ]),
   severity: z.enum(["info", "warning", "critical"]),
   packetIds: z.array(z.string()),
@@ -550,6 +556,19 @@ export const TcpStreamSummarySchema = z.object({
   displayFilter: z.string()
 });
 export type TcpStreamSummary = z.infer<typeof TcpStreamSummarySchema>;
+
+export const ConnectionLinkSchema = z.object({
+  linkId: z.string(),
+  frontNodeId: z.string(),
+  backNodeId: z.string(),
+  frontEndpoints: z.string().optional(),
+  backEndpoints: z.string().optional(),
+  correlationMethod: z.enum(["http_uri", "http_cookie", "http_timing", "ssl_offload", "timing_pattern", "manual"]),
+  matchReasons: z.array(z.string()).default([]),
+  confidence: ConfidenceSchema,
+  detail: z.record(z.string(), z.unknown()).default({})
+});
+export type ConnectionLink = z.infer<typeof ConnectionLinkSchema>;
 
 export const TcpStreamContentSchema = z.object({
   streamIndex: z.number().int(),
@@ -582,7 +601,8 @@ export const CaseGraphSchema = z.object({
   activeRunId: z.string().optional(),
   toolRuns: z.array(ToolRunSchema).default([]),
   networkTopology: NetworkTopologySchema.optional(),
-  insights: z.array(PacketInsightSchema).default([])
+  insights: z.array(PacketInsightSchema).default([]),
+  connectionLinks: z.array(ConnectionLinkSchema).default([])
 });
 export type CaseGraph = z.infer<typeof CaseGraphSchema>;
 

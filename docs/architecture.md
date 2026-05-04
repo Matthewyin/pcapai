@@ -101,11 +101,11 @@ Chain Planner (LLM 或本地兜底)
 - **http.ts** — HTTP 事务（4xx/5xx），请求/响应匹配，多 check 输出
 - **icmp.ts** — ICMP Unreachable/TTL Exceeded/Fragmentation
 - **udp.ts** — UDP 流聚合
-- 共享逻辑在 `builders.ts`：packet pair 分组、evidence card 创建、L7→TCP protocol correlations（DNS→TCP、TLS SNI→TCP、HTTP Host→TCP、ICMP→TCP）
+- 共享逻辑在 `builders.ts`：packet pair 分组、evidence card 创建、L7→TCP protocol correlations（DNS→TCP、TLS SNI→TCP、HTTP Host→TCP、ICMP→TCP）以及 HTTP 跨连接关联（`http_to_http`，用于七层代理/SSL 卸载场景）
 - `types.ts` 中 `runProtocolAdapter()` 实现三层路由：hardcoded regex → learned patterns → null（由调用方 fallback 到 agent）
 
 #### Insight Engine (`src/services/insightEngine.ts`)
-27 个确定性分析器，在 HTTP 层加载 agent 查询 graph 时懒运行：`loadGraphWithInsights()` 仅在 `graph.packets.length > 0` 且当前 graph 没有 `insights` 时执行，结果写回 case graph。它不在 `runtime.ts` 内部运行，也不会在每次请求都强制重算。无阈值过滤，所有检测到的模式均报告：
+29 个确定性分析器，在 HTTP 层加载 agent 查询 graph 时懒运行：`loadGraphWithInsights()` 仅在 `graph.packets.length > 0` 且当前 graph 没有 `insights` 时执行，结果写回 case graph。它不在 `runtime.ts` 内部运行，也不会在每次请求都强制重算。无阈值过滤，所有检测到的模式均报告：
 - **TCP（12 个）**：连接生命周期、ACK Gap、TCP 时序（RTT/空闲/突发）、窗口趋势、RST 方向、握手重试、延迟 ACK、连接洪泛、段异常、Keepalive、吞吐量、TCP 选项
 - **ICMP（2 个）**：Echo 配对（丢包/RTT）、ICMP 高级（Unreachable/PMTU/Traceroute/Redirect）
 - **HTTP（4 个）**：状态链（重定向/5xx/4xx）、Header 异常（未匹配/混合端口）、Timing、高级（Host/SNI/错误突发/认证/压缩/Cache-Control/WebSocket/Content-Length/XFF）
@@ -114,6 +114,7 @@ Chain Planner (LLM 或本地兜底)
 - **跨协议**：cross_protocol_chain（DNS→TCP→TLS→HTTP 瀑布图）
 - **UDP（1 个）**：多端口/突发/单向流/QUIC 检测
 - **新协议**：QUIC（连接概览/握手/版本）、NTP（Stratum/延迟）、SSH（消息分布/断开/认证/版本）
+- **NAT/L7 代理检测（2 个）**：L7 Proxy Detection（Via/XFF 头检测、SSL 卸载模式、TCP 连接分离）、NAT Heuristic（多目标连接模式、ISN 跳跃、孤立 SYN）
 
 ### `apps/web` — React 工作台
 
@@ -139,10 +140,11 @@ Zod schema + TypeScript 类型，定义完整领域模型：
 - `CaseSpec`, `CaptureNode`, `MappingHint`, `TimeOffsetHint`
 - `PacketSummary`（含 QUIC/NTP/SSH 字段）, `Conversation`
 - `QueryRun`, `QueryPath`, `EvidenceCard`
-- `ProtocolCorrelation`, `AccessCandidateGroup`, `PacketInsight`
+- `ProtocolCorrelation`（含 `http_to_http` 跨连接关联类型）, `AccessCandidateGroup`, `PacketInsight`
+- `ConnectionLink` — 七层代理/SSL 卸载场景中两条独立 TCP 连接的关联（前端→代理 / 代理→后端）
 - `AnalysisChainPlan`, `AnalysisChainStep`, `ChainStepResult`
 - `AgentAnswer`（含 `protocolCorrelations` 字段）, `QueryDiagnosis`
-- `CaseGraph` — 聚合所有上述数据
+- `CaseGraph` — 聚合所有上述数据（含 `connectionLinks`）
 
 ### `config/defaults.json` — 集中配置
 
@@ -290,7 +292,8 @@ Leader Agent 通过 case-graph MCP 读取 case graph，通过 tshark-query MCP �
 ## 当前限制
 
 - 上传 pcap 不全量解析 rawPackets，只有 QueryRun 按 display filter 读取有限样本
-- NAT/LB 自动推断暂不强做，先依赖节点顺序和手工线索
+- NAT/LB 自动推断依赖启发式检测（TTL 差异、端口模式、ISN 跳跃），不保证覆盖所有场景；MappingHint 仍需手工录入
+- L7 代理/SSL 卸载检测基于 HTTP 头（Via/XFF）和连接时序模式，多跳代理链路还原依赖 MappingHint
 - 单 pcap 只返回单节点 hop，不伪造多跳
 - Wireshark 采用本地桌面打开方式，不嵌入浏览器
 - LLM 综合解读质量取决于模型遵循指令的能力，可能需要迭代调整 agent 指令

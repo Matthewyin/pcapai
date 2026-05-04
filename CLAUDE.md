@@ -30,7 +30,7 @@ Tests live in `apps/api/test/` and cover protocol correlations, path correlation
 npm workspace monorepo with three workspace groups:
 
 ### `packages/shared` — Shared schemas (`@pcapai/shared`)
-Zod schemas + TypeScript types for the entire domain model: `CaseSpec`, `CaptureNode`, `MappingHint`, `TimeOffsetHint`, `PacketSummary`, `Conversation`, `QueryRun`, `QueryPath`, `SessionSegment`, `SessionLink`, `EvidenceEvent`, `Finding`, `PathGraph`, `AnalysisRun`, `CaseGraph`, `AgentAnswer`, `QueryDiagnosis`, `ProtocolCorrelation`, `EvidenceCard`, `AccessCandidateGroup`, `PacketInsight`, `TcpStreamSummary`, `ToolRun`. All other packages consume these types. API imports shared via a relative path (`../../../../packages/shared/src/index.js`).
+Zod schemas + TypeScript types for the entire domain model: `CaseSpec`, `CaptureNode`, `MappingHint`, `TimeOffsetHint`, `PacketSummary`, `Conversation`, `QueryRun`, `QueryPath`, `SessionSegment`, `SessionLink`, `EvidenceEvent`, `Finding`, `PathGraph`, `AnalysisRun`, `CaseGraph`, `AgentAnswer`, `QueryDiagnosis`, `ProtocolCorrelation`, `EvidenceCard`, `AccessCandidateGroup`, `PacketInsight`, `TcpStreamSummary`, `ToolRun`, `ConnectionLink`. All other packages consume these types. API imports shared via a relative path (`../../../../packages/shared/src/index.js`).
 
 ### `config/defaults.json` — Central configuration
 All runtime defaults live here: API host/port (default `30022`), CORS origins, MCP server launch commands, LLM settings (default: Doubao/ByteDance Ark endpoint), tshark config, query limits, diagnosis thresholds, and web settings. Every config value can be overridden via `PCAPAI_*` env vars. The API, web Vite config, and MCP servers all resolve the workspace root by walking up to find `config/defaults.json`.
@@ -59,15 +59,15 @@ All runtime defaults live here: API host/port (default `30022`), CORS origins, M
 - **`src/http/llmSettings.ts`** — LLM profile management in `.env` file (profiles stored as `PCAPAI_LLM_PROFILE_*` env vars)
 - **`src/protocolAdapters/`** — deterministic protocol-specific query subsystem:
   - `types.ts` — `ProtocolAdapter` interface and `runProtocolAdapter()` dispatcher; three-tier routing: hardcoded regex → learned patterns → agent fallback
-  - `builders.ts` — shared logic: packet pair grouping, evidence card creation, `QueryRun` construction, L7-to-TCP protocol correlations (DNS→TCP, TLS SNI→TCP, HTTP Host→TCP, ICMP→TCP)
+  - `builders.ts` — shared logic: packet pair grouping, evidence card creation, `QueryRun` construction, L7-to-TCP protocol correlations (DNS→TCP, TLS SNI→TCP, HTTP Host→TCP, ICMP→TCP), and HTTP cross-connection correlation (`http_to_http` for L7 proxy/SSL offload)
   - `tcp.ts` — RST session pairs, retransmission pairs, zero-window pairs, SYN-no-SYN/ACK pairs, one-way traffic pairs, TCP issues overview
   - `dns.ts` — DNS failure/unresponsive transactions with rcode grouping
   - `tls.ts` — TLS handshake events (ClientHello, ServerHello, alerts) with handshake completeness checks
-  - `http.ts` — HTTP transactions with status code filtering (4xx/5xx) and request/response matching
+  - `http.ts` — HTTP transactions with status code filtering (4xx/5xx), request/response matching, and cross-connection correlation
   - `icmp.ts` — ICMP unreachable/TTL exceeded/fragmentation events
   - `udp.ts` — UDP flow aggregation by endpoint pair
 - **`src/services/patternLearner.ts`** — self-improvement module: loads learned regex→adapterId pairs from `data/learned_patterns.json`; after agent fallback, uses LLM to generate regex and adapterId (no hardcoded mapping)
-- **`src/services/insightEngine.ts`** — 27 deterministic analyzers: TCP lifecycle/ACK gap/timing/window trend/RST direction/handshake retry/delayed ACK/connection flood/segment anomaly/keepalive/throughput/TCP options, ICMP echo pair, HTTP status chain/header anomaly/timing/advanced, TLS handshake/advanced, DNS anomaly/advanced, cross-protocol chain, UDP, ICMP advanced, QUIC, NTP, SSH. Entry point: `runLevel1Insights(graph)` returns `PacketInsight[]`. No thresholds — reports all detected patterns.
+- **`src/services/insightEngine.ts`** — 29 deterministic analyzers: TCP lifecycle/ACK gap/timing/window trend/RST direction/handshake retry/delayed ACK/connection flood/segment anomaly/keepalive/throughput/TCP options, ICMP echo pair, HTTP status chain/header anomaly/timing/advanced, TLS handshake/advanced, DNS anomaly/advanced, cross-protocol chain, UDP, ICMP advanced, QUIC, NTP, SSH, L7 proxy detection (Via/XFF/SSL offload/TCP split), NAT heuristic (multi-target/ISN/orphan SYN). Entry point: `runLevel1Insights(graph)` returns `PacketInsight[]`. No thresholds — reports all detected patterns.
 - **`src/mcp/tsharkQueryClient.ts`** — stdio MCP client for tshark-query; wraps 18 tool calls (including `list_tcp_streams`, `follow_tcp_stream`, `get_expert_info`)
 - **`src/mcp/evidenceOpenerClient.ts`** — stdio MCP client for evidence-opener
 - **`src/agents/runtime.ts`** — OpenAI Agents SDK runtime with three phases:
@@ -136,7 +136,7 @@ The learning module has no hardcoded tool→adapter mapping. The LLM determines 
 - Case data persists as JSON files under `data/cases/:caseId/`. In-memory `Map<string, CaseGraph>` caches recently loaded graphs.
 - LLM profiles are stored as `PCAPAI_LLM_PROFILE_*` entries in `.env`. The active profile is tracked via `PCAPAI_LLM_ACTIVE_PROFILE`.
 - `QueryDiagnosis` runs deterministic checks (handshake completeness, RST, retransmission burst, zero window, bidirectional traffic, FIN close) with thresholds from `config/defaults.json` `api.diagnosis`.
-- **Insight engine reports all patterns without threshold filtering** — every detected pattern is reported; severity is a visual marker only.
+- **Insight engine reports all patterns without threshold filtering** — every detected pattern is reported; severity is a visual marker only. 29 analyzers including L7 proxy and NAT heuristic detection.
 - Evidence cards are shown in a new browser tab via Blob URL, not in the chat bubble. Chat is for reading conclusions; the link page is for Wireshark operations.
 
 ## Skill routing

@@ -86,7 +86,8 @@ export function createEmptyCase(spec: CaseSpec) {
     queryRuns: [],
     analysisRuns: [],
     toolRuns: [],
-    insights: []
+    insights: [],
+    connectionLinks: []
   };
   writeCaseGraph(graph);
   return graph;

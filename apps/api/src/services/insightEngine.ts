@@ -2988,6 +2988,215 @@ function analyzeSsh(packets: PacketSummary[], acc: InsightAccumulator) {
   }
 }
 
+// ── Analyzer: L7 Proxy Detection ──────────────────────────────────────
+
+function analyzeL7ProxyDetection(packets: PacketSummary[], acc: InsightAccumulator) {
+  let idx = acc.length;
+
+  const tcpPackets = packets.filter(p => p.protocol.toLowerCase() === "tcp");
+  const httpRequests = packets.filter(p => p.httpRequestMethod);
+  const httpResponses = packets.filter(p => p.httpResponseCode != null);
+
+  // 1. Via 头检测——存在即表明经过代理
+  const viaResponses = httpResponses.filter(p => p.httpVia);
+  if (viaResponses.length > 0) {
+    const viaValues = [...new Set(viaResponses.map(p => p.httpVia!).filter(Boolean))];
+    acc.push({
+      insightId: insightId("l7-proxy", idx++),
+      type: "l7_proxy_detected",
+      severity: "info",
+      packetIds: viaResponses.map(p => p.packetId).slice(0, 10),
+      description: `检测到 HTTP Via 头，表明存在中间代理（${viaValues.join(", ")}）`,
+      detail: { viaValues, count: viaResponses.length },
+      scenario: "Via 头表明请求经过了 HTTP 代理、CDN 或反向代理"
+    });
+  }
+
+  // 2. XFF 头检测——可能暴露客户端真实 IP 和代理链
+  const xffResponses = httpResponses.filter(p => p.httpXForwardedFor);
+  if (xffResponses.length > 0) {
+    const xffIps = [...new Set(xffResponses.flatMap(p => p.httpXForwardedFor!.split(",").map(s => s.trim())))];
+    acc.push({
+      insightId: insightId("l7-proxy", idx++),
+      type: "l7_proxy_detected",
+      severity: "info",
+      packetIds: xffResponses.map(p => p.packetId).slice(0, 10),
+      description: `检测到 X-Forwarded-For 头，客户端真实 IP 可能是 ${xffIps.join(", ")}`,
+      detail: { xffIps, count: xffResponses.length },
+      scenario: "XFF 头表明请求经过了一层或多层代理/LB，可用于还原真实客户端地址"
+    });
+  }
+
+  // 3. TLS + 明文 HTTP 时序异常——同一时间窗口内客户端一侧用 TLS，服务端一侧用明文 HTTP
+  const tlsClientHellos = packets.filter(p => p.tlsHandshakeType === 1);
+  if (tlsClientHellos.length > 0 && httpRequests.length > 0) {
+    const tlsIps = new Set(tlsClientHellos.flatMap(p => [p.srcIp, p.dstIp].filter(Boolean)));
+    const httpIps = new Set(httpRequests.flatMap(p => [p.srcIp, p.dstIp].filter(Boolean)));
+    const overlap = [...tlsIps].filter(ip => httpIps.has(ip));
+    if (overlap.length > 0) {
+      acc.push({
+        insightId: insightId("l7-proxy", idx++),
+        type: "l7_proxy_detected",
+        severity: "warning",
+        packetIds: [...tlsClientHellos.slice(0, 3), ...httpRequests.slice(0, 3)].map(p => p.packetId),
+        description: `检测到 SSL 卸载模式：IP ${overlap.join(", ")} 同时参与 TLS 握手和明文 HTTP 通信`,
+        detail: { overlapIps: overlap },
+        scenario: "七层代理/SSL 卸载设备终止客户端 TLS 连接，用明文 HTTP 向后端发请求"
+      });
+    }
+  }
+
+  // 4. TCP 连接分离检测——相近时间窗口内出现两组不同五元组的 TCP 连接
+  if (tcpPackets.length > 4) {
+    const synPackets = tcpPackets.filter(p => {
+      const flags = p.tcpFlags.map(f => f.toUpperCase());
+      return flags.includes("SYN") && !flags.includes("ACK") && p.srcIp && p.dstIp;
+    });
+    if (synPackets.length >= 2) {
+      const bySrcIp = new Map<string, PacketSummary[]>();
+      for (const syn of synPackets) {
+        const group = bySrcIp.get(syn.srcIp!) || [];
+        group.push(syn);
+        bySrcIp.set(syn.srcIp!, group);
+      }
+
+      for (const [srcIp, syns] of bySrcIp) {
+        if (syns.length < 2) continue;
+        const targets = [...new Set(syns.map(s => `${s.dstIp}:${s.dstPort}`))];
+        if (targets.length < 2) continue;
+
+        const times = syns.map(s => s.timestamp).sort((a, b) => a - b);
+        if (times[times.length - 1] - times[0] > 5) continue;
+
+        acc.push({
+          insightId: insightId("l7-proxy", idx++),
+          type: "tcp_connection_split",
+          severity: "info",
+          packetIds: syns.map(p => p.packetId).slice(0, 10),
+          description: `${srcIp} 在 ${(times[times.length - 1] - times[0]).toFixed(1)}s 内向 ${targets.length} 个不同目标发 SYN（${targets.join(", ")}）`,
+          detail: { srcIp, targets, timeSpan: times[times.length - 1] - times[0] },
+          scenario: "同一客户端短时间内连接多个不同后端，可能是代理/LB 分发、重试、或连接池行为"
+        });
+      }
+    }
+  }
+}
+
+// ── Analyzer: NAT Heuristic Detection ────────────────────────────────
+
+function analyzeNatHeuristic(packets: PacketSummary[], acc: InsightAccumulator) {
+  let idx = acc.length;
+
+  const tcpPackets = packets.filter(p =>
+    p.protocol.toLowerCase() === "tcp" && p.srcIp && p.dstIp
+  );
+  if (tcpPackets.length < 4) return;
+
+  const synPackets = tcpPackets.filter(p => {
+    const flags = p.tcpFlags.map(f => f.toUpperCase());
+    return flags.includes("SYN") && !flags.includes("ACK");
+  });
+
+  // 1. 同一 srcIp 连接多个不同 dstIp（NAT 端口分配模式）
+  if (synPackets.length >= 3) {
+    const bySrcIp = new Map<string, PacketSummary[]>();
+    for (const syn of synPackets) {
+      const group = bySrcIp.get(syn.srcIp!) || [];
+      group.push(syn);
+      bySrcIp.set(syn.srcIp!, group);
+    }
+
+    for (const [srcIp, syns] of bySrcIp) {
+      if (syns.length < 3) continue;
+      const srcPorts = syns.map(s => s.srcPort!).sort((a, b) => a - b);
+      const uniqueDstIps = [...new Set(syns.map(s => s.dstIp!))];
+
+      if (uniqueDstIps.length >= 3) {
+        acc.push({
+          insightId: insightId("nat-heuristic", idx++),
+          type: "nat_heuristic",
+          severity: "info",
+          packetIds: syns.map(p => p.packetId).slice(0, 10),
+          description: `${srcIp} 向 ${uniqueDstIps.length} 个不同 IP 发起连接（端口范围 ${srcPorts[0]}-${srcPorts[srcPorts.length - 1]}），可能经过 NAT`,
+          detail: {
+            srcIp,
+            dstIps: uniqueDstIps,
+            connectionCount: syns.length,
+            portRange: srcPorts[srcPorts.length - 1] - srcPorts[0],
+            srcPorts: srcPorts.slice(0, 10)
+          },
+          scenario: "NAT 后的设备通常表现为单一 IP 向多个目标发起连接，端口频繁变化"
+        });
+      }
+    }
+  }
+
+  // 2. TCP ISN 跳跃异常——暗示中间设备干预
+  if (synPackets.length >= 2) {
+    const byDst = new Map<string, PacketSummary[]>();
+    for (const syn of synPackets) {
+      const key = `${syn.srcIp}->${syn.dstIp}:${syn.dstPort}`;
+      const group = byDst.get(key) || [];
+      group.push(syn);
+      byDst.set(key, group);
+    }
+
+    for (const [key, syns] of byDst) {
+      if (syns.length < 2) continue;
+      const seqs = syns.map(s => s.tcpSeq).filter((s): s is number => s != null);
+      if (seqs.length < 2) continue;
+
+      for (let i = 1; i < seqs.length; i++) {
+        const diff = Math.abs(seqs[i] - seqs[i - 1]);
+        if (diff > 100_000_000) {
+          acc.push({
+            insightId: insightId("nat-heuristic", idx++),
+            type: "nat_heuristic",
+            severity: "info",
+            packetIds: syns.map(p => p.packetId).slice(0, 5),
+            description: `${key} 的 TCP ISN 跳跃异常（差值 ${(diff / 1_000_000).toFixed(0)}M），可能存在中间设备`,
+            detail: { key, seqs, diff },
+            scenario: "TCP ISN 的异常跳跃可能表明中间设备（NAT/FW）修改了序列号"
+          });
+          break;
+        }
+      }
+    }
+  }
+
+  // 3. 孤立 SYN——无对应 SYN/ACK（NAT 映射丢失或防火墙丢弃）
+  if (synPackets.length >= 2) {
+    const synAckPackets = tcpPackets.filter(p => {
+      const flags = p.tcpFlags.map(f => f.toUpperCase());
+      return flags.includes("SYN") && flags.includes("ACK");
+    });
+
+    const orphanSyns = synPackets.filter(syn => {
+      return !synAckPackets.some(sa =>
+        sa.srcIp === syn.dstIp && sa.dstIp === syn.srcIp
+        && sa.srcPort === syn.dstPort && sa.dstPort === syn.srcPort
+      );
+    });
+
+    if (orphanSyns.length >= 2) {
+      const orphanTargets = [...new Set(orphanSyns.map(s => `${s.dstIp}:${s.dstPort}`))];
+      acc.push({
+        insightId: insightId("nat-heuristic", idx++),
+        type: "nat_heuristic",
+        severity: "warning",
+        packetIds: orphanSyns.map(p => p.packetId).slice(0, 10),
+        description: `${orphanSyns.length} 个 SYN 未收到 SYN/ACK（目标：${orphanTargets.join(", ")}）`,
+        detail: {
+          orphanCount: orphanSyns.length,
+          targets: orphanTargets,
+          srcIps: [...new Set(orphanSyns.map(s => s.srcIp!))]
+        },
+        scenario: "SYN 无 SYN/ACK 可能是服务端不响应、防火墙丢弃、或 NAT 映射丢失"
+      });
+    }
+  }
+}
+
 // ── Main Engine ───────────────────────────────────────────────────────
 
 export function runLevel1Insights(graph: CaseGraph): PacketInsight[] {
@@ -3031,6 +3240,10 @@ export function runLevel1Insights(graph: CaseGraph): PacketInsight[] {
   analyzeQuic(packets, acc);
   analyzeNtp(packets, acc);
   analyzeSsh(packets, acc);
+
+  // NAT / L7 代理检测
+  analyzeL7ProxyDetection(packets, acc);
+  analyzeNatHeuristic(packets, acc);
 
   return acc;
 }
