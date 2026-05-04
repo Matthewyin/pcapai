@@ -319,6 +319,7 @@ type ChainPlannerInput = {
 };
 
 export async function runChainPlanner(input: ChainPlannerInput): Promise<AnalysisChainPlan> {
+  input.onTrace?.(`Chain Planner 使用模型：${apiConfig.llm.model}，端点：${apiConfig.llm.baseURL}`);
   setDefaultModelProvider(new OpenAIProvider({
     apiKey: apiConfig.llm.apiKey,
     baseURL: apiConfig.llm.baseURL,
@@ -426,6 +427,7 @@ function extractToolCalls(result: any): string[] {
 }
 
 export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<AgentAnswerWithToolCalls> {
+  input.onTrace?.(`Agent 使用模型：${apiConfig.llm.model}，端点：${apiConfig.llm.baseURL}`);
   setDefaultModelProvider(new OpenAIProvider({
     apiKey: apiConfig.llm.apiKey,
     baseURL: apiConfig.llm.baseURL,

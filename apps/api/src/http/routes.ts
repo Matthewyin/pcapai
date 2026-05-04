@@ -966,6 +966,10 @@ export function createAgentRouter() {
     if (requestedProfileId && !activateLlmProfile(requestedProfileId)) {
       return res.status(404).json({ error: "llm profile not found" });
     }
+    const volcengineHint = apiConfig.llm.baseURL.includes("volces.com") && !apiConfig.llm.model.toLowerCase().includes("doubao");
+    if (volcengineHint) {
+      return res.status(400).json({ error: `配置不匹配：端点 ${apiConfig.llm.baseURL} 不支持模型 ${apiConfig.llm.model}。请检查 LLM 设置中的 baseURL 是否与模型对应。` });
+    }
     const requestStartedAt = Date.now();
     const plannerStartedAt = Date.now();
     const plan = await planUserIntent(graph, parsedRequest.data.question);
@@ -1223,6 +1227,12 @@ export function createAgentRouter() {
     const requestedProfileId = parsedRequest.data.profileId;
     if (requestedProfileId && !activateLlmProfile(requestedProfileId)) {
       return res.status(404).json({ error: "llm profile not found" });
+    }
+
+    // 检测 baseURL/model 不匹配——Volcengine 端点不支持非 Doubao 模型
+    const volcengineHint = apiConfig.llm.baseURL.includes("volces.com") && !apiConfig.llm.model.toLowerCase().includes("doubao");
+    if (volcengineHint) {
+      return res.status(400).json({ error: `配置不匹配：端点 ${apiConfig.llm.baseURL} 不支持模型 ${apiConfig.llm.model}。请检查 LLM 设置中的 baseURL 是否与模型对应。` });
     }
 
     res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
