@@ -23,14 +23,14 @@ npm run dev -w apps/web    # web only (vite)
 npm run build -w packages/shared   # build shared schemas
 ```
 
-Tests live in `apps/api/test/` and cover protocol correlations, path correlation, and report builder.
+Tests live in `apps/api/test/` and cover protocol correlations, path correlation, report builder, insight engine (27 analyzers), and builder utilities. Run with `cd apps/api && NODE_ENV=test npx tsx --test test/*.test.ts`.
 
 ## Architecture
 
 npm workspace monorepo with three workspace groups:
 
 ### `packages/shared` — Shared schemas (`@pcapai/shared`)
-Zod schemas + TypeScript types for the entire domain model: `CaseSpec`, `CaptureNode`, `MappingHint`, `TimeOffsetHint`, `PacketSummary`, `Conversation`, `QueryRun`, `QueryPath`, `SessionSegment`, `SessionLink`, `EvidenceEvent`, `Finding`, `PathGraph`, `AnalysisRun`, `CaseGraph`, `AgentAnswer`, `QueryDiagnosis`, `ProtocolCorrelation`, `EvidenceCard`, `AccessCandidateGroup`, `ToolRun`. All other packages consume these types. API imports shared via a relative path (`../../../../packages/shared/src/index.js`).
+Zod schemas + TypeScript types for the entire domain model: `CaseSpec`, `CaptureNode`, `MappingHint`, `TimeOffsetHint`, `PacketSummary`, `Conversation`, `QueryRun`, `QueryPath`, `SessionSegment`, `SessionLink`, `EvidenceEvent`, `Finding`, `PathGraph`, `AnalysisRun`, `CaseGraph`, `AgentAnswer`, `QueryDiagnosis`, `ProtocolCorrelation`, `EvidenceCard`, `AccessCandidateGroup`, `PacketInsight`, `TcpStreamSummary`, `ToolRun`. All other packages consume these types. API imports shared via a relative path (`../../../../packages/shared/src/index.js`).
 
 ### `config/defaults.json` — Central configuration
 All runtime defaults live here: API host/port (default `30022`), CORS origins, MCP server launch commands, LLM settings (default: Doubao/ByteDance Ark endpoint), tshark config, query limits, diagnosis thresholds, and web settings. Every config value can be overridden via `PCAPAI_*` env vars. The API, web Vite config, and MCP servers all resolve the workspace root by walking up to find `config/defaults.json`.
@@ -48,6 +48,8 @@ All runtime defaults live here: API host/port (default `30022`), CORS origins, M
   - `GET /api/cases/:caseId/query-runs/:queryRunId`
   - `POST /api/cases/:caseId/query-runs/:queryRunId/conversations/:conversationId/select`
   - `POST /api/cases/:caseId/query-runs/:queryRunId/open-wireshark`
+  - `GET /api/cases/:caseId/tcp-streams?nodeId=xxx` — lists TCP streams
+  - `GET /api/cases/:caseId/tcp-streams/:streamIndex/content?format=ascii&nodeId=xxx` — gets TCP stream content
   - `POST /api/cases/:caseId/evidence/open` — opens pcap evidence in local Wireshark via evidence-opener MCP
   - `GET /api/cases/:caseId/report` — Markdown report from case graph via `reportBuilder.ts`
   - `POST /api/cases/:caseId/agent`, `POST /api/cases/:caseId/agent/stream` — SSE streaming agent answers
@@ -57,7 +59,7 @@ All runtime defaults live here: API host/port (default `30022`), CORS origins, M
 - **`src/http/llmSettings.ts`** — LLM profile management in `.env` file (profiles stored as `PCAPAI_LLM_PROFILE_*` env vars)
 - **`src/protocolAdapters/`** — deterministic protocol-specific query subsystem:
   - `types.ts` — `ProtocolAdapter` interface and `runProtocolAdapter()` dispatcher; three-tier routing: hardcoded regex → learned patterns → agent fallback
-  - `builders.ts` — shared logic: packet pair grouping, evidence card creation, `QueryRun` construction, L7-to-TCP protocol correlations (DNS→TCP, TLS SNI→TCP, HTTP Host→TCP)
+  - `builders.ts` — shared logic: packet pair grouping, evidence card creation, `QueryRun` construction, L7-to-TCP protocol correlations (DNS→TCP, TLS SNI→TCP, HTTP Host→TCP, ICMP→TCP)
   - `tcp.ts` — RST session pairs, retransmission pairs, zero-window pairs, SYN-no-SYN/ACK pairs, one-way traffic pairs, TCP issues overview
   - `dns.ts` — DNS failure/unresponsive transactions with rcode grouping
   - `tls.ts` — TLS handshake events (ClientHello, ServerHello, alerts) with handshake completeness checks
@@ -65,7 +67,8 @@ All runtime defaults live here: API host/port (default `30022`), CORS origins, M
   - `icmp.ts` — ICMP unreachable/TTL exceeded/fragmentation events
   - `udp.ts` — UDP flow aggregation by endpoint pair
 - **`src/services/patternLearner.ts`** — self-improvement module: loads learned regex→adapterId pairs from `data/learned_patterns.json`; after agent fallback, uses LLM to generate regex and adapterId (no hardcoded mapping)
-- **`src/mcp/tsharkQueryClient.ts`** — stdio MCP client for tshark-query; wraps 15 tool calls
+- **`src/services/insightEngine.ts`** — 27 deterministic analyzers: TCP lifecycle/ACK gap/timing/window trend/RST direction/handshake retry/delayed ACK/connection flood/segment anomaly/keepalive/throughput/TCP options, ICMP echo pair, HTTP status chain/header anomaly/timing/advanced, TLS handshake/advanced, DNS anomaly/advanced, cross-protocol chain, UDP, ICMP advanced, QUIC, NTP, SSH. Entry point: `runLevel1Insights(graph)` returns `PacketInsight[]`. No thresholds — reports all detected patterns.
+- **`src/mcp/tsharkQueryClient.ts`** — stdio MCP client for tshark-query; wraps 18 tool calls (including `list_tcp_streams`, `follow_tcp_stream`, `get_expert_info`)
 - **`src/mcp/evidenceOpenerClient.ts`** — stdio MCP client for evidence-opener
 - **`src/agents/runtime.ts`** — OpenAI Agents SDK runtime with three phases:
   1. **Chain planner** (`runChainPlanner`) — plans single-step or multi-step analysis chains; outputs `AnalysisChainPlan` with ordered steps, each referencing one of 12 intents. Falls back to single-step `runIntentPlanner` when no LLM key.
@@ -83,10 +86,14 @@ Single-file React 19 app (`src/main.tsx`). Chat-first layout with session histor
 - Chat-style agent Q&A with SSE streaming
 - LLM settings management with profile CRUD and connectivity testing
 - Dark/light theme toggle
+- TCP stream viewer with list → content drill-down, client/server dual-column display
+- Waterfall chart (pure SVG) for cross-protocol chain timing visualization
+- Topology diagram (pure SVG) from network topology data
+- Insight rendering in chat for diagnostic patterns
 
 ### `mcp/*` — MCP servers
 Three stdio-based MCP servers using `@modelcontextprotocol/sdk`:
-- **`tshark-query`** — reads capture metadata with `capinfos`, builds display filters, and runs `tshark` for conversations, packet queries, packet details, TCP resets/retransmissions/zero-window, ICMP events, DNS packets, UDP flows, TLS events, HTTP packets, protocol listing, and network statistics. 15 tools.
+- **`tshark-query`** — reads capture metadata with `capinfos`, builds display filters, and runs `tshark` for conversations, packet queries, packet details, TCP resets/retransmissions/zero-window, ICMP events, DNS packets, UDP flows, TLS events, HTTP packets, protocol listing, and network statistics. 18 tools (including `list_tcp_streams`, `follow_tcp_stream`, `get_expert_info`, `get_tshark_packet_detail`).
 - **`evidence-opener`** — opens local Wireshark for a pcap path and display filter. It does not analyze packets.
 - **`case-graph`** — Read-only MCP server for agents. Reads case graph from temp file set via `PCAPAI_CASE_GRAPH_PATH`. Tools: `load_case_graph`, `get_case_statistics`, `get_finding`, `get_evidence`, `get_session_link`, `get_packet_detail`, `explain_path`, `suggest_next_query` (returns follow-up query suggestions based on current evidence patterns), `export_report`.
 
@@ -129,6 +136,7 @@ The learning module has no hardcoded tool→adapter mapping. The LLM determines 
 - Case data persists as JSON files under `data/cases/:caseId/`. In-memory `Map<string, CaseGraph>` caches recently loaded graphs.
 - LLM profiles are stored as `PCAPAI_LLM_PROFILE_*` entries in `.env`. The active profile is tracked via `PCAPAI_LLM_ACTIVE_PROFILE`.
 - `QueryDiagnosis` runs deterministic checks (handshake completeness, RST, retransmission burst, zero window, bidirectional traffic, FIN close) with thresholds from `config/defaults.json` `api.diagnosis`.
+- **Insight engine reports all patterns without threshold filtering** — every detected pattern is reported; severity is a visual marker only.
 - Evidence cards are shown in a new browser tab via Blob URL, not in the chat bubble. Chat is for reading conclusions; the link page is for Wireshark operations.
 
 ## Skill routing

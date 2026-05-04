@@ -409,6 +409,24 @@ export function buildProtocolCorrelations(queryRunId: string, protocol: string, 
         nextSteps: [`用过滤器 ${filter} 查看该 HTTP 所在 TCP session。`]
       }];
     }
+    // ICMP Unreachable / Fragmentation Needed → 对应 TCP 流
+    if ((protocol === "icmp" || packet.protocol.toLowerCase() === "icmp") && packet.icmpType === 3 && packet.dstIp) {
+      const filter = `ip.addr == ${packet.dstIp}`;
+      const unreachableDesc: Record<number, string> = { 0: "Network Unreachable", 1: "Host Unreachable", 3: "Port Unreachable", 4: "Fragmentation Needed" };
+      const desc = unreachableDesc[packet.icmpCode ?? -1] || `Code ${packet.icmpCode}`;
+      return [{
+        correlationId: `corr-${queryRunId}-${index + 1}`,
+        kind: "icmp_to_tcp" as const,
+        sourcePacketId: packet.packetId,
+        sourceEvidenceCardId,
+        targetDisplayFilter: filter,
+        relation: `ICMP ${desc} 指向 ${packet.dstIp}，可能影响到达该地址的 TCP 连接。`,
+        confidence: "high" as const,
+        summary: `${packet.srcIp} 发送 ICMP ${desc} 给 ${packet.dstIp}，可能导致相关 TCP 连接中断。`,
+        reasons: [`type=${packet.icmpType}/code=${packet.icmpCode}`, `src=${packet.srcIp}`, `dst=${packet.dstIp}`],
+        nextSteps: [`用过滤器 ${filter} 查看受影响的 TCP 会话。`, packet.icmpCode === 4 ? "检查 Path MTU Discovery 设置，ICMP 被过滤可能导致 PMTU 黑洞。" : ""].filter(Boolean)
+      }];
+    }
     return [];
   });
 }

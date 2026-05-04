@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
@@ -48,6 +48,20 @@ type CaseGraph = {
     createdAt: string;
   }>;
   activeQueryRunId?: string;
+  networkTopology?: {
+    devices: Array<{ deviceId: string; name: string; type: string; description?: string; configurations?: string[] }>;
+    dataPath?: Array<{ hopIndex: number; deviceName?: string; clientSideCapture?: string; serverSideCapture?: string; description?: string }>;
+    notes?: string;
+  };
+  insights?: Array<{
+    insightId: string;
+    type: string;
+    severity: string;
+    packetIds: string[];
+    description: string;
+    detail: Record<string, unknown>;
+    scenario?: string;
+  }>;
 };
 
 const server = new McpServer({ name: "case-graph-mcp", version: "0.1.0" });
@@ -585,6 +599,61 @@ server.registerTool(
   }
 );
 
+server.registerTool(
+  "get_network_topology",
+  {
+    title: "Get network topology",
+    description: "读取用户提供的网络拓扑和数据路径信息。包括网络设备（防火墙、LB、WAF、SSL 等）和抓包位置。",
+    inputSchema: {}
+  },
+  async () => {
+    const graph = loadGraph();
+    const topology = graph.networkTopology || null;
+    if (!topology) {
+      return { content: [{ type: "text", text: "当前案例尚未收集网络拓扑信息。请在诊断访谈中向用户询问网络路径和抓包位置。" }] };
+    }
+    return { content: [{ type: "text", text: JSON.stringify(topology) }] };
+  }
+);
+
+server.registerTool(
+  "update_network_topology",
+  {
+    title: "Update network topology",
+    description: "保存从用户对话中提取的网络拓扑信息。包括网络设备和数据路径。",
+    inputSchema: {
+      devices: z.array(z.object({
+        deviceId: z.string(),
+        name: z.string(),
+        type: z.enum(["firewall", "switch", "load_balancer", "ssl_terminator", "waf", "router", "proxy", "cdn", "nat_gateway", "other"]),
+        description: z.string().optional(),
+        configurations: z.array(z.string()).optional()
+      })),
+      dataPath: z.array(z.object({
+        hopIndex: z.number(),
+        deviceName: z.string().optional(),
+        clientSideCapture: z.string().optional(),
+        serverSideCapture: z.string().optional(),
+        description: z.string().optional()
+      })).optional(),
+      notes: z.string().optional()
+    }
+  },
+  async (input: { devices: Array<{ deviceId: string; name: string; type: string; description?: string; configurations?: string[] }>; dataPath?: Array<{ hopIndex: number; deviceName?: string; clientSideCapture?: string; serverSideCapture?: string; description?: string }>; notes?: string }) => {
+    const graphPath = process.env.PCAPAI_CASE_GRAPH_PATH;
+    if (!graphPath) throw new Error("PCAPAI_CASE_GRAPH_PATH is required");
+    const graph = JSON.parse(readFileSync(graphPath, "utf8")) as CaseGraph;
+    const existing = graph.networkTopology || { devices: [], dataPath: [], notes: "" };
+    graph.networkTopology = {
+      devices: input.devices,
+      dataPath: input.dataPath || existing.dataPath,
+      notes: input.notes || existing.notes
+    };
+    writeFileSync(graphPath, JSON.stringify(graph, null, 2));
+    return { content: [{ type: "text", text: `网络拓扑已更新：${input.devices.length} 个设备。` }] };
+  }
+);
+
 function suggestNextQueries(graph: CaseGraph) {
   const suggestions: Array<{ question: string; reason: string; intent: string; params?: Record<string, unknown> }> = [];
   const activeQueryRun = (graph.queryRuns || []).find((run) => run.queryRunId === graph.activeQueryRunId);
@@ -681,6 +750,34 @@ server.registerTool(
   async () => ({
     content: [{ type: "text", text: JSON.stringify(suggestNextQueries(loadGraph())) }]
   })
+);
+
+server.registerTool(
+  "get_insights",
+  {
+    title: "Get packet insights",
+    description: "获取数据包洞察分析结果，包含连接生命周期异常、ACK 缺失、TCP 时序等问题。这些是在 pcap 上传时自动运行的分析结果。",
+    inputSchema: {
+      severity: z.enum(["info", "warning", "critical"]).optional().describe("按严重度过滤")
+    }
+  },
+  async (input: { severity?: string }) => {
+    const graph = loadGraph();
+    const insights = (graph.insights || []) as Array<{
+      insightId: string; type: string; severity: string;
+      packetIds: string[]; description: string; detail: Record<string, unknown>;
+      scenario?: string;
+    }>;
+    const filtered = input.severity ? insights.filter((i) => i.severity === input.severity) : insights;
+    if (!filtered.length) {
+      return { content: [{ type: "text", text: "暂无洞察分析结果。" }] };
+    }
+    const lines = filtered.map((insight) => {
+      const sev = insight.severity === "critical" ? "严重" : insight.severity === "warning" ? "警告" : "信息";
+      return `[${sev}] [${insight.type}] ${insight.description}${insight.scenario ? `\n  可能场景：${insight.scenario}` : ""}`;
+    });
+    return { content: [{ type: "text", text: `共 ${filtered.length} 条洞察：\n\n${lines.join("\n\n")}` }] };
+  }
 );
 
 server.registerTool(

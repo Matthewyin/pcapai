@@ -84,6 +84,21 @@ type CaseGraph = {
   analysisRuns: AnalysisRun[];
   activeRunId?: string;
   toolRuns: ToolRun[];
+  insights?: PacketInsight[];
+  networkTopology?: {
+    devices: { deviceId: string; name: string; type: string; description?: string }[];
+    dataPath: { hopIndex: number; deviceName: string }[];
+  };
+};
+
+type PacketInsight = {
+  insightId: string;
+  type: "connection_lifecycle" | "ack_gap" | "tcp_timing" | "tcp_window_trend" | "tcp_rst_direction" | "tcp_handshake_retry" | "tcp_delayed_ack" | "tcp_connection_flood" | "tcp_segment_anomaly" | "tcp_keepalive" | "tcp_throughput" | "tcp_options" | "http_status_chain" | "http_header_anomaly" | "http_timing" | "icmp_echo_pair" | "icmp_unreachable" | "icmp_mtu" | "icmp_redirect" | "cross_protocol_chain" | "tls_handshake" | "dns_anomaly" | "udp_anomaly" | "udp_flow" | "quic_anomaly" | "ntp_anomaly" | "ssh_anomaly";
+  severity: "info" | "warning" | "critical";
+  packetIds: string[];
+  description: string;
+  detail: Record<string, unknown>;
+  scenario?: string;
 };
 
 type Conversation = {
@@ -350,7 +365,15 @@ type CaptureDraft = {
   capturePosition: string;
 };
 
-type DetailView = "path" | "findings" | "sessions" | "links" | "packets" | "events";
+type DetailView = "path" | "findings" | "sessions" | "links" | "packets" | "events" | "topology" | "tcp_stream";
+type DiagnosticHypothesis = {
+  id: string;
+  description: string;
+  status: "pending" | "testing" | "confirmed" | "ruled_out";
+  evidenceFor: string[];
+  evidenceAgainst: string[];
+};
+
 type ChatMessage = {
   id: string;
   role: "user" | "assistant";
@@ -368,6 +391,10 @@ type ChatMessage = {
   missingContext?: string[];
   suggestedActions?: string[];
   protocolCorrelations?: ProtocolCorrelation[];
+  followUpQuestions?: string[];
+  diagnosticPhase?: "interview" | "hypothesis" | "testing" | "conclusion";
+  hypotheses?: DiagnosticHypothesis[];
+  stepEvidence?: Record<number, { purpose: string; evidenceCards: EvidenceCard[] }>;
 };
 
 function fileStem(filename: string) {
@@ -472,45 +499,47 @@ const PINNED_CASES_KEY = "pcapai-pinned-case-ids";
 const CHAT_PROFILE_ID_KEY = "pcapai-chat-profile-id";
 const THINKING_DEPTH_KEY = "pcapai-thinking-depth";
 const REASONING_DEPTH_KEY = "pcapai-reasoning-depth";
-const CHAT_HISTORY_PREFIX = "pcapai-chat-history:";
 const THINKING_DEPTHS = ["快速", "标准", "深入"];
 const REASONING_DEPTHS = ["低", "标准", "高"];
 
-function chatHistoryKey(caseId: string) {
-  return `${CHAT_HISTORY_PREFIX}${caseId}`;
-}
-
-function normalizeStoredChatMessages(value: unknown): ChatMessage[] {
-  if (!Array.isArray(value)) return [];
-  return value.flatMap((item) => {
-    if (!item || typeof item !== "object") return [];
-    const message = item as Partial<ChatMessage>;
-    if (message.role !== "user" && message.role !== "assistant") return [];
-    return [{
-      id: typeof message.id === "string" ? message.id : `${message.role}-${Date.now()}`,
-      role: message.role,
-      content: typeof message.content === "string" ? message.content : "",
-      thoughts: Array.isArray(message.thoughts) ? message.thoughts.map(String) : [],
-      evidenceCards: Array.isArray((message as { evidenceCards?: unknown }).evidenceCards) ? (message as { evidenceCards: EvidenceCard[] }).evidenceCards : [],
-      streaming: false
-    }];
-  });
-}
-
-function loadStoredChatMessages(caseId: string) {
+async function loadChatMessages(caseId: string): Promise<ChatMessage[]> {
   try {
-    return normalizeStoredChatMessages(JSON.parse(localStorage.getItem(chatHistoryKey(caseId)) || "[]"));
-  } catch {
-    return [];
-  }
+    const res = await fetch(`/api/cases/${caseId}/chat`);
+    if (!res.ok) return [];
+    const data = await res.json();
+    return Array.isArray(data.messages) ? data.messages : [];
+  } catch { return []; }
 }
 
-function storeChatMessages(caseId: string, messages: ChatMessage[]) {
-  const stableMessages = messages
-    .map((message) => ({ ...message, streaming: false }))
-    .filter((message) => message.content.trim() || message.thoughts?.length)
-    .slice(-webConfig.chatHistoryLimit);
-  localStorage.setItem(chatHistoryKey(caseId), JSON.stringify(stableMessages));
+async function saveChatMessages(caseId: string, messages: ChatMessage[]): Promise<void> {
+  const clean = messages
+    .map((m) => ({ ...m, streaming: false }))
+    .filter((m) => m.content?.trim() || m.thoughts?.length)
+    .slice(-200);
+  try {
+    await fetch(`/api/cases/${caseId}/chat`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ messages: clean })
+    });
+  } catch { /* non-critical */ }
+}
+
+async function loadTcpStreams(caseId: string) {
+  try {
+    const res = await fetch(`/api/cases/${caseId}/tcp-streams`);
+    if (!res.ok) return [];
+    const data = await res.json();
+    return Array.isArray(data.streams) ? data.streams : [];
+  } catch { return []; }
+}
+
+async function loadTcpStreamContent(caseId: string, streamIndex: number, format: string = "ascii") {
+  try {
+    const res = await fetch(`/api/cases/${caseId}/tcp-streams/${streamIndex}/content?format=${format}`);
+    if (!res.ok) return null;
+    return await res.json();
+  } catch { return null; }
 }
 
 function loadPinnedCaseIds() {
@@ -527,12 +556,78 @@ function loadStoredChoice(key: string, allowedValues: string[], fallback: string
   return value && allowedValues.includes(value) ? value : fallback;
 }
 
+// 瀑布图组件
+function WaterfallChart({ stages }: { stages: Array<{ stage: string; timestamp: number; deltaMs: number; summary: string }> }) {
+  if (!stages.length) return null;
+  const protocolColors: Record<string, string> = { DNS: "#4A90D9", TCP: "#7BC67E", TLS: "#E8913A", HTTP: "#9B59B6", ICMP: "#E74C3C" };
+  const getColor = (stage: string) => {
+    const upper = stage.toUpperCase();
+    for (const [proto, color] of Object.entries(protocolColors)) {
+      if (upper.includes(proto)) return color;
+    }
+    return "#95A5A6";
+  };
+  const rowH = 32, padL = 120, padR = 20, padT = 10;
+  const maxDelta = Math.max(...stages.map(s => s.deltaMs), 1);
+  const chartW = 500, barMaxW = chartW - padL - padR;
+  const scaleX = (ms: number) => padL + (ms / maxDelta) * barMaxW;
+  const totalH = padT + stages.length * rowH;
+  return (
+    <svg className="waterfallChart" viewBox={`0 0 ${chartW} ${totalH}`} preserveAspectRatio="xMidYMid meet">
+      {stages.map((s, i) => {
+        const x = scaleX(s.deltaMs);
+        const color = getColor(s.stage);
+        return (
+          <g key={i}>
+            <text x={padL - 8} y={padT + i * rowH + 16} textAnchor="end" fontSize={11} fill="var(--text-secondary)">{s.stage}</text>
+            <rect x={x} y={padT + i * rowH + 2} width={Math.max(barMaxW * 0.15, 60)} height={22} fill={color} rx={3} opacity={0.85} />
+            <text x={x + 6} y={padT + i * rowH + 17} fontSize={10} fill="white">{s.deltaMs.toFixed(0)}ms</text>
+            {i > 0 && <line x1={scaleX(stages[i - 1].deltaMs)} y1={padT + i * rowH - 4} x2={x} y2={padT + i * rowH + 4} stroke="var(--border)" strokeDasharray="3,2" />}
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
+// 拓扑图组件
+function TopologyDiagram({ devices, dataPath, captures }: { devices: Array<{ deviceId: string; name: string; type: string; description?: string }>; dataPath: Array<{ hopIndex: number; deviceName: string }>; captures: Array<{ nodeId: string; pcapFilename?: string }> }) {
+  const nodeW = 130, nodeH = 44, gapX = 180, padX = 40, padY = 30;
+  const typeColors: Record<string, string> = { client: "#4A90D9", server: "#7BC67E", firewall: "#E74C3C", load_balancer: "#E8913A", switch_: "#9B59B6", router: "#1ABC9C", unknown: "#95A5A6" };
+  const nodes = devices.map((d, i) => ({
+    id: d.deviceId, label: d.name, type: d.type,
+    x: padX + i * gapX, y: padY, color: typeColors[d.type] || typeColors.unknown,
+    isCapture: captures.some(c => c.nodeId === d.deviceId)
+  }));
+  const edges = nodes.length > 1 ? nodes.slice(0, -1).map((n, i) => ({ from: n, to: nodes[i + 1] })) : [];
+  const totalW = padX * 2 + Math.max(devices.length - 1, 0) * gapX + nodeW;
+  const totalH = padY * 2 + nodeH + (nodes.some(n => n.isCapture) ? 40 : 0);
+  return (
+    <svg className="topologySvg" viewBox={`0 0 ${totalW} ${totalH}`} preserveAspectRatio="xMidYMid meet">
+      {edges.map((e, i) => (
+        <line key={i} x1={e.from.x + nodeW} y1={e.from.y + nodeH / 2} x2={e.to.x} y2={e.to.y + nodeH / 2} stroke="var(--border)" strokeWidth={2} />
+      ))}
+      {nodes.map((n) => (
+        <g key={n.id} transform={`translate(${n.x},${n.y})`}>
+          <rect width={nodeW} height={nodeH} rx={6} fill={n.color} opacity={0.9} />
+          <text x={nodeW / 2} y={20} textAnchor="middle" fontSize={12} fill="white" fontWeight="bold">{n.label}</text>
+          <text x={nodeW / 2} y={35} textAnchor="middle" fontSize={9} fill="rgba(255,255,255,0.8)">{n.type}</text>
+          {n.isCapture && <circle cx={nodeW - 10} cy={10} r={6} fill="#FFD700" stroke="white" strokeWidth={1.5} />}
+        </g>
+      ))}
+    </svg>
+  );
+}
+
 function App() {
   const [page, setPage] = React.useState<"workbench" | "history" | "settings" | "help">("workbench");
   const [theme, setTheme] = React.useState<"dark" | "light">(() => {
     return localStorage.getItem("pcapai-theme") === "dark" ? "dark" : "light";
   });
   const [detailView, setDetailView] = React.useState<DetailView | null>(null);
+  const [tcpStreams, setTcpStreams] = React.useState<Array<{ streamIndex: number; srcIp?: string; srcPort?: number; dstIp?: string; dstPort?: number; packetCount: number; byteCount: number; displayFilter: string }>>([]);
+  const [tcpStreamContent, setTcpStreamContent] = React.useState<{ clientData: string; serverData: string; streamIndex: number; format: string; totalBytes: number; truncated: boolean } | null>(null);
+  const [tcpStreamLoading, setTcpStreamLoading] = React.useState(false);
   const [graph, setGraph] = React.useState<CaseGraph | null>(null);
   const [answer, setAnswer] = React.useState("");
   const [chatMessages, setChatMessages] = React.useState<ChatMessage[]>([]);
@@ -570,11 +665,13 @@ function App() {
   const [dragActive, setDragActive] = React.useState(false);
   const [settingsMenuOpen, setSettingsMenuOpen] = React.useState(false);
   const [toolTraceOpen, setToolTraceOpen] = React.useState(false);
+  const [insightsOpen, setInsightsOpen] = React.useState(false);
   const [caseMenuId, setCaseMenuId] = React.useState("");
   const [renamingCaseId, setRenamingCaseId] = React.useState("");
   const [renameDraft, setRenameDraft] = React.useState("");
   const [pinnedCaseIds, setPinnedCaseIds] = React.useState<string[]>(() => loadPinnedCaseIds());
   const chatMessagesRef = React.useRef<HTMLDivElement | null>(null);
+  const chatSaveTimerRef = React.useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const composerFileInputRef = React.useRef<HTMLInputElement | null>(null);
   const uploadDisabledReason = !graph ? "请先新建案例。" : !captureDrafts.length ? "请选择一个或多个 pcap/pcapng 文件。" : "";
 
@@ -635,7 +732,6 @@ function App() {
     });
     const data = await response.json();
     if (response.ok) {
-      localStorage.removeItem(chatHistoryKey(caseId));
       savePinnedCaseIds(pinnedCaseIds.filter((id) => id !== caseId));
       if (graph?.spec.caseId === caseId) {
         setGraph(null);
@@ -659,7 +755,6 @@ function App() {
     });
     const data = await response.json();
     if (response.ok) {
-      selectedCaseIds.forEach((caseId) => localStorage.removeItem(chatHistoryKey(caseId)));
       if (graph && selectedCaseIds.includes(graph.spec.caseId)) {
         setGraph(null);
         setChatMessages([]);
@@ -689,7 +784,7 @@ function App() {
       localStorage.setItem(LAST_CASE_ID_KEY, data.spec.caseId);
       if (data.activeRunId) localStorage.setItem(LAST_RUN_ID_KEY, data.activeRunId);
       else localStorage.removeItem(LAST_RUN_ID_KEY);
-      setChatMessages(loadStoredChatMessages(data.spec.caseId));
+      setChatMessages(await loadChatMessages(data.spec.caseId));
       setPage("workbench");
       if (restoreRunId && restoreRunId !== data.activeRunId) {
         window.setTimeout(() => void openAnalysisRunByCaseId(data.spec.caseId, restoreRunId), 0);
@@ -1389,9 +1484,20 @@ function App() {
       } else if (event === "step_start") {
         setChatMessages((messages) => messages.map((message) => message.id === assistantId ? { ...message, thoughts: [...(message.thoughts || []), `▸ 步骤 ${data.index + 1}/${data.total}：${data.purpose}`] } : message));
       } else if (event === "step_done") {
-        if (data.status === "error") {
-          setChatMessages((messages) => messages.map((message) => message.id === assistantId ? { ...message, thoughts: [...(message.thoughts || []), `  ✗ 步骤 ${data.index + 1} 失败：${data.summary}`] } : message));
-        }
+        const stepCards = Array.isArray(data.evidenceCards) ? data.evidenceCards : [];
+        setChatMessages((messages) => messages.map((message) => {
+          if (message.id !== assistantId) return message;
+          const updated = { ...message };
+          if (data.status === "error") {
+            updated.thoughts = [...(updated.thoughts || []), `  ✗ 步骤 ${data.index + 1} 失败：${data.summary}`];
+          }
+          if (stepCards.length) {
+            const se = { ...(updated.stepEvidence || {}) };
+            se[data.index] = { purpose: data.purpose || `步骤 ${data.index + 1}`, evidenceCards: stepCards };
+            updated.stepEvidence = se;
+          }
+          return updated;
+        }));
       } else if (event === "chain_done") {
         const summaries = (data.summaries || []).map((s: { stepId: string; status: string }, i: number) => `${i + 1}. ${s.status}`).join("；");
         setChatMessages((messages) => messages.map((message) => message.id === assistantId ? { ...message, thoughts: [...(message.thoughts || []), `分析链完成：${summaries}`] } : message));
@@ -1399,7 +1505,7 @@ function App() {
         setChatMessages((messages) => messages.map((message) => message.id === assistantId ? { ...message, content: message.content + data.text } : message));
       } else if (event === "done") {
         setAnswer(data.answer || "");
-        setChatMessages((messages) => messages.map((message) => message.id === assistantId ? { ...message, content: data.answer || message.content, evidenceCards: data.evidenceCards || [], suggestedQueries: data.suggestedQueries || [], evidenceIds: data.evidenceIds || [], packetIds: data.packetIds || [], findingIds: data.findingIds || [], sessionLinkIds: data.sessionLinkIds || [], handoffAgent: data.handoffAgent || undefined, confidence: data.confidence || undefined, missingContext: data.missingContext || [], suggestedActions: data.suggestedActions || [], protocolCorrelations: data.protocolCorrelations || [], streaming: false } : message));
+        setChatMessages((messages) => messages.map((message) => message.id === assistantId ? { ...message, content: data.answer || message.content, evidenceCards: data.evidenceCards || [], suggestedQueries: data.suggestedQueries || [], evidenceIds: data.evidenceIds || [], packetIds: data.packetIds || [], findingIds: data.findingIds || [], sessionLinkIds: data.sessionLinkIds || [], handoffAgent: data.handoffAgent || undefined, confidence: data.confidence || undefined, missingContext: data.missingContext || [], suggestedActions: data.suggestedActions || [], protocolCorrelations: data.protocolCorrelations || [], followUpQuestions: data.followUpQuestions || [], diagnosticPhase: data.diagnosticPhase || undefined, hypotheses: data.hypotheses || [], streaming: false } : message));
         void refreshGraph(currentCaseId);
       } else if (event === "error") {
         setChatMessages((messages) => messages.map((message) => message.id === assistantId ? { ...message, content: data.error, streaming: false } : message));
@@ -1415,13 +1521,19 @@ function App() {
       events.forEach(applyEvent);
     }
     if (buffer.trim()) applyEvent(buffer);
-    setChatMessages((messages) => messages.map((message) => message.id === assistantId ? { ...message, streaming: false } : message));
+    setChatMessages((messages) => {
+      const updated = messages.map((message) => message.id === assistantId ? { ...message, streaming: false } : message);
+      saveChatMessages(currentCaseId, updated);
+      return updated;
+    });
     await loadLlmRuntime();
   }
 
-  function openEvidenceDetail(message: ChatMessage, caseId: string) {
-    const cards = message.evidenceCards || [];
+  function openEvidenceDetail(message: ChatMessage, caseId: string, stepIndex?: number) {
+    const allCards = message.evidenceCards || [];
     const correlations = message.protocolCorrelations || [];
+    const stepEvidence = message.stepEvidence;
+    const cards = stepIndex !== undefined && stepEvidence?.[stepIndex] ? stepEvidence[stepIndex].evidenceCards : allCards;
     const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
     const cardSections = cards.map((card) => `
       <div class="ev-card">
@@ -1472,8 +1584,8 @@ h2{font-size:1.15em;margin:24px 0 12px;padding-bottom:6px;border-bottom:1px soli
 .empty{color:#999;font-size:.9em;font-style:italic}
 .section-label{font-size:.8em;color:#888;margin-bottom:8px}
 </style></head><body>
-<h1>证据详情</h1>
-<p class="section-label">${cards.length} 张证据卡片${correlations.length ? `，${correlations.length} 条协议关联` : ""}</p>
+<h1>证据详情${stepIndex !== undefined && stepEvidence?.[stepIndex] ? ` — ${esc(stepEvidence[stepIndex].purpose)}` : ""}</h1>
+<p class="section-label">${cards.length} 张证据卡片${correlations.length ? `，${correlations.length} 条协议关联` : ""}${stepIndex !== undefined ? `（步骤 ${stepIndex + 1}）` : allCards.length !== cards.length ? `（全部 ${allCards.length} 张）` : ""}</p>
 <h2>证据卡片</h2>
 ${cards.length ? cardSections : '<p class="empty">无证据卡片</p>'}
 ${correlations.length ? `<h2>协议关联</h2>${corrSections}` : ""}
@@ -1555,7 +1667,11 @@ function openWireshark(pcap,filter){fetch("${window.location.origin}/api/cases/$
 
   React.useEffect(() => {
     if (!graph) return;
-    storeChatMessages(graph.spec.caseId, chatMessages);
+    if (chatSaveTimerRef.current) clearTimeout(chatSaveTimerRef.current);
+    chatSaveTimerRef.current = setTimeout(() => {
+      saveChatMessages(graph.spec.caseId, chatMessages);
+    }, 1000);
+    return () => { if (chatSaveTimerRef.current) clearTimeout(chatSaveTimerRef.current); };
   }, [graph?.spec.caseId, chatMessages]);
 
   React.useEffect(() => {
@@ -2165,6 +2281,18 @@ function openWireshark(pcap,filter){fetch("${window.location.origin}/api/cases/$
                       <ol>{message.thoughts.map((thought, index) => <li key={`${message.id}-thought-${index}`}>{thought}</li>)}</ol>
                     </details>
                   ) : null}
+                  {message.role === "assistant" && message.stepEvidence && Object.keys(message.stepEvidence).length ? (
+                    <div className="stepEvidenceLinks">
+                      {Object.entries(message.stepEvidence).map(([idx, step]) => step.evidenceCards.length ? (
+                        <div key={`${message.id}-se-${idx}`} className="stepEvidenceLink">
+                          <span className="stepEvidenceLabel">步骤 {Number(idx) + 1}：{step.purpose}</span>
+                          <button type="button" onClick={() => openEvidenceDetail(message, graph?.spec.caseId || "", Number(idx))}>
+                            {step.evidenceCards.length} 张卡片
+                          </button>
+                        </div>
+                      ) : null)}
+                    </div>
+                  ) : null}
                   {message.role === "assistant" && !message.streaming && message.content ? (
                     <div className="markdownBody" dangerouslySetInnerHTML={{ __html: renderMarkdown(message.content) }} />
                   ) : (
@@ -2175,6 +2303,25 @@ function openWireshark(pcap,filter){fetch("${window.location.origin}/api/cases/$
 	                      <button type="button" onClick={() => openEvidenceDetail(message, graph?.spec.caseId || "")}>
 	                        查看证据详情（{message.evidenceCards.length} 张卡片）
 	                      </button>
+	                    </div>
+	                  ) : null}
+	                  {message.role === "assistant" && !message.streaming && message.hypotheses?.length ? (
+	                    <div className="hypothesesPanel">
+	                      <div className="hypothesesTitle">假设验证进度</div>
+	                      {message.hypotheses.map((h, index) => (
+	                        <div key={`${message.id}-h-${index}`} className={`hypothesisItem hypothesis-${h.status}`}>
+	                          <span className="hypothesisStatus">{h.status === "confirmed" ? "✓" : h.status === "ruled_out" ? "✗" : h.status === "testing" ? "◎" : "○"}</span>
+	                          <span className="hypothesisDesc">{h.description}</span>
+	                        </div>
+	                      ))}
+	                    </div>
+	                  ) : null}
+	                  {message.role === "assistant" && !message.streaming && message.followUpQuestions?.length ? (
+	                    <div className="followUpQuestions">
+	                      <div className="followUpTitle">你可以回答：</div>
+	                      {message.followUpQuestions.map((q, index) => (
+	                        <button type="button" className="followUpButton" key={`${message.id}-fq-${index}`} onClick={() => { setQuestion(q); }}>{q}</button>
+	                      ))}
 	                    </div>
 	                  ) : null}
                   {message.suggestedQueries?.length ? (
@@ -2334,6 +2481,50 @@ function openWireshark(pcap,filter){fetch("${window.location.origin}/api/cases/$
                 ))}
               </div>
             ) : toolTraceOpen ? <div className="empty">尚无持久化执行轨迹。</div> : null}
+          </section>
+
+          <section className="insightsPanel">
+            <button
+              type="button"
+              className="toolTraceToggle"
+              onClick={() => setInsightsOpen((value) => !value)}
+              aria-expanded={insightsOpen}
+            >
+              <span>
+                <strong>数据包洞察</strong>
+                <small>自动检测的连接异常和时序问题</small>
+              </span>
+              <span className="toolTraceToggleMeta">
+                {(() => {
+                  const critical = (graph?.insights || []).filter((i) => i.severity === "critical").length;
+                  const warning = (graph?.insights || []).filter((i) => i.severity === "warning").length;
+                  return <>
+                    {critical ? <span className="statusBadge error">{critical}</span> : null}
+                    {warning ? <span className="statusBadge warn">{warning}</span> : null}
+                    {!critical && !warning ? <span className="statusBadge neutral">{graph?.insights?.length || 0}</span> : null}
+                  </>;
+                })()}
+                <ChevronDown className={insightsOpen ? "open" : ""} size={18} />
+              </span>
+            </button>
+            {insightsOpen && graph?.insights?.length ? (
+              <div className="insightList">
+                {graph.insights.map((insight) => (
+                  <div key={insight.insightId} className={`insightRow ${insight.severity}`}>
+                    <span className={`insightSev ${insight.severity}`}>
+                      {insight.severity === "critical" ? "严重" : insight.severity === "warning" ? "警告" : "信息"}
+                    </span>
+                    <div className="insightContent">
+                      <p>{insight.description}</p>
+                      {insight.type === "cross_protocol_chain" && (insight.detail as Record<string, unknown>)?.stages ? (
+                        <WaterfallChart stages={(insight.detail as Record<string, unknown>).stages as Array<{ stage: string; timestamp: number; deltaMs: number; summary: string }>} />
+                      ) : null}
+                      {insight.scenario ? <small className="insightScenario">可能场景：{insight.scenario}</small> : null}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : insightsOpen ? <div className="empty">暂无洞察结果，请先向 Agent 提问以触发分析。</div> : null}
           </section>
 
           {selectedEvidenceCard ? (
@@ -2648,6 +2839,14 @@ function openWireshark(pcap,filter){fetch("${window.location.origin}/api/cases/$
                 <strong>关键事件</strong>
                 <span>{graph?.evidence.length || 0} 条证据</span>
               </button>
+              <button onClick={() => setDetailView("tcp_stream")}>
+                <strong>TCP 流</strong>
+                <span>查看完整 TCP 会话</span>
+              </button>
+              <button onClick={() => setDetailView("topology")}>
+                <strong>网络拓扑</strong>
+                <span>{graph?.networkTopology?.devices?.length || 0} 个设备</span>
+              </button>
             </div>
           </section>
 
@@ -2894,6 +3093,71 @@ function openWireshark(pcap,filter){fetch("${window.location.origin}/api/cases/$
                     </article>
                   ))}
                   {!graph?.evidence.length && <div className="empty">尚未生成证据事件。</div>}
+                </>
+              )}
+
+              {detailView === "tcp_stream" && (
+                <>
+                  <div className="tcpStreamPanel">
+                    {!tcpStreams.length && !tcpStreamLoading && (
+                      <button className="primary" onClick={async () => {
+                        if (!graph) return;
+                        setTcpStreamLoading(true);
+                        setTcpStreams(await loadTcpStreams(graph.spec.caseId));
+                        setTcpStreamLoading(false);
+                      }}>加载 TCP 流列表</button>
+                    )}
+                    {tcpStreamLoading && <div className="empty">加载中...</div>}
+                    {tcpStreams.length > 0 && !tcpStreamContent && (
+                      <div className="tcpStreamList">
+                        {tcpStreams.map((s) => (
+                          <button key={s.streamIndex} onClick={async () => {
+                            if (!graph) return;
+                            setTcpStreamLoading(true);
+                            const content = await loadTcpStreamContent(graph.spec.caseId, s.streamIndex);
+                            setTcpStreamContent(content);
+                            setTcpStreamLoading(false);
+                          }}>
+                            <span>Stream {s.streamIndex}: {s.srcIp}:{s.srcPort} ↔ {s.dstIp}:{s.dstPort}</span>
+                            <small>{s.packetCount} pkts / {s.byteCount} bytes</small>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    {tcpStreamContent && (
+                      <div className="tcpStreamViewer">
+                        <div className="tcpStreamHeader">
+                          <strong>Stream {tcpStreamContent.streamIndex}</strong>
+                          <span>{tcpStreamContent.totalBytes} bytes{tcpStreamContent.truncated ? " (已截断)" : ""}</span>
+                          <button onClick={() => setTcpStreamContent(null)}>← 返回列表</button>
+                        </div>
+                        <div className="tcpStreamData">
+                          <div className="tcpStreamCol">
+                            <h4>客户端 → 服务端</h4>
+                            <pre className="clientData">{tcpStreamContent.clientData || "(空)"}</pre>
+                          </div>
+                          <div className="tcpStreamCol">
+                            <h4>服务端 → 客户端</h4>
+                            <pre className="serverData">{tcpStreamContent.serverData || "(空)"}</pre>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </>
+              )}
+
+              {detailView === "topology" && (
+                <>
+                  {graph?.networkTopology?.devices?.length ? (
+                    <TopologyDiagram
+                      devices={graph.networkTopology.devices}
+                      dataPath={graph.networkTopology.dataPath || []}
+                      captures={graph.captures}
+                    />
+                  ) : (
+                    <div className="empty">尚未收集网络拓扑信息。在 Agent 对话中描述网络路径和设备，或手动输入 Mapping Hints。</div>
+                  )}
                 </>
               )}
             </div>

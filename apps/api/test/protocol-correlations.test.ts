@@ -93,3 +93,50 @@ test("buildProtocolCorrelations links HTTP Host to carrying TCP flow", () => {
   assert.equal(correlations[0].targetDisplayFilter, "tcp && ip.addr == 10.0.0.1 && ip.addr == 10.0.0.2 && tcp.port == 51000 && tcp.port == 80");
   assert.deepEqual(correlations[0].reasons, ["Host=www.example.com", "URI=/health", "frame=1"]);
 });
+
+test("buildProtocolCorrelations links ICMP Unreachable to TCP filter", () => {
+  const icmp = packet({
+    packetId: "packet-4",
+    protocol: "icmp",
+    srcIp: "192.168.1.1",
+    dstIp: "10.0.0.5",
+    icmpType: 3,
+    icmpCode: 3
+  });
+
+  const correlations = buildProtocolCorrelations("query-1", "icmp", [icmp], [card(icmp)]);
+
+  assert.equal(correlations.length, 1);
+  assert.equal(correlations[0].kind, "icmp_to_tcp");
+  assert.match(correlations[0].targetDisplayFilter, /10\.0\.0\.5/);
+});
+
+test("buildProtocolCorrelations ICMP Fragmentation Needed mentions PMTU", () => {
+  const icmp = packet({
+    packetId: "packet-5",
+    protocol: "icmp",
+    srcIp: "192.168.1.1",
+    dstIp: "10.0.0.5",
+    icmpType: 3,
+    icmpCode: 4
+  });
+
+  const correlations = buildProtocolCorrelations("query-1", "icmp", [icmp], [card(icmp)]);
+
+  assert.equal(correlations.length, 1);
+  assert.ok(correlations[0].nextSteps.some((s: string) => s.includes("PMTU") || s.includes("Path MTU")));
+});
+
+test("buildProtocolCorrelations ICMP Echo does not produce icmp_to_tcp", () => {
+  const icmp = packet({
+    packetId: "packet-6",
+    protocol: "icmp",
+    srcIp: "10.0.0.1",
+    dstIp: "10.0.0.2",
+    icmpType: 8
+  });
+
+  const correlations = buildProtocolCorrelations("query-1", "icmp", [icmp], [card(icmp)]);
+
+  assert.equal(correlations.length, 0);
+});

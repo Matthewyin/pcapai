@@ -824,6 +824,84 @@ main.app > header {
   padding: 5px 6px;
 }
 
+.insightsPanel {
+  border-top: 1px solid var(--line);
+  padding-top: 6px;
+}
+
+.insightList {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 4px 0;
+}
+
+.insightRow {
+  align-items: flex-start;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: flex;
+  gap: 8px;
+  padding: 8px 10px;
+}
+
+.insightRow.critical {
+  border-left: 3px solid var(--error);
+}
+
+.insightRow.warning {
+  border-left: 3px solid var(--warn);
+}
+
+.insightRow.info {
+  border-left: 3px solid var(--accent);
+}
+
+.insightSev {
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  flex-shrink: 0;
+  padding: 2px 6px;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.insightSev.critical {
+  background: rgba(248, 81, 73, 0.15);
+  color: var(--error);
+}
+
+.insightSev.warning {
+  background: rgba(210, 153, 34, 0.15);
+  color: var(--warn);
+}
+
+.insightSev.info {
+  background: rgba(255, 138, 31, 0.15);
+  color: var(--accent);
+}
+
+.insightContent {
+  flex: 1;
+  min-width: 0;
+}
+
+.insightContent p {
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.5;
+  margin: 0;
+}
+
+.insightScenario {
+  color: var(--text-2);
+  display: block;
+  font-size: 11px;
+  margin-top: 4px;
+}
+
 .evidenceContextCard {
   background: var(--card);
   border: 1px solid var(--line);
@@ -2782,6 +2860,98 @@ pre {
   background: var(--surface-2);
   border-color: var(--accent-1);
 }
+.stepEvidenceLinks {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.stepEvidenceLink {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--border-2);
+  border-radius: 6px;
+}
+.stepEvidenceLabel {
+  font-size: 12px;
+  color: var(--text-2);
+}
+.stepEvidenceLink button {
+  background: var(--accent-1);
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  padding: 3px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.stepEvidenceLink button:hover {
+  opacity: 0.9;
+}
+.followUpQuestions {
+  margin-top: 10px;
+  padding: 10px 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--border-2);
+  border-radius: 8px;
+}
+.followUpTitle {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-2);
+  margin-bottom: 8px;
+}
+.followUpButton {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: var(--surface-1);
+  border: 1px solid var(--border-1);
+  border-radius: 6px;
+  padding: 6px 10px;
+  margin-bottom: 4px;
+  font-size: 13px;
+  cursor: pointer;
+  color: var(--text-1);
+}
+.followUpButton:hover {
+  background: var(--surface-2);
+  border-color: var(--accent-1);
+}
+.hypothesesPanel {
+  margin-top: 10px;
+  padding: 10px 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--border-2);
+  border-radius: 8px;
+}
+.hypothesesTitle {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-2);
+  margin-bottom: 8px;
+}
+.hypothesisItem {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 4px 0;
+  font-size: 13px;
+}
+.hypothesisStatus {
+  font-size: 14px;
+  flex-shrink: 0;
+}
+.hypothesis-confirmed .hypothesisStatus { color: #22c55e; }
+.hypothesis-ruled_out .hypothesisStatus { color: #ef4444; }
+.hypothesis-testing .hypothesisStatus { color: #eab308; }
+.hypothesis-pending .hypothesisStatus { color: var(--text-3); }
+.hypothesisDesc {
+  color: var(--text-1);
+}
 
 .workbenchShell > .caseRail,
 .conversationPanel,
@@ -2889,4 +3059,120 @@ pre {
   .helpHero h2 {
     font-size: 30px;
   }
+}
+
+/* TCP Stream Viewer */
+.tcpStreamPanel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.tcpStreamList {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.tcpStreamList button {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 12px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.tcpStreamList button:hover {
+  background: var(--bg-grid);
+}
+
+.tcpStreamList button small {
+  color: var(--text-secondary);
+}
+
+.tcpStreamViewer {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.tcpStreamHeader {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 0;
+}
+
+.tcpStreamHeader button {
+  padding: 4px 12px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.tcpStreamData {
+  display: flex;
+  gap: 12px;
+  min-height: 400px;
+}
+
+.tcpStreamCol {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.tcpStreamCol h4 {
+  margin: 0 0 4px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.tcpStreamCol pre {
+  flex: 1;
+  margin: 0;
+  padding: 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+  overflow-y: auto;
+  max-height: 500px;
+  font-family: "SF Mono", "Menlo", "Monaco", monospace;
+}
+
+.clientData {
+  background: rgba(220, 53, 69, 0.08);
+  border: 1px solid rgba(220, 53, 69, 0.2);
+}
+
+.serverData {
+  background: rgba(13, 110, 253, 0.08);
+  border: 1px solid rgba(13, 110, 253, 0.2);
+}
+
+/* Waterfall Chart */
+.waterfallChart {
+  width: 100%;
+  max-width: 600px;
+  margin: 6px 0;
+}
+
+/* Topology Diagram */
+.topologySvg {
+  width: 100%;
+  min-height: 120px;
+  margin: 8px 0;
 }

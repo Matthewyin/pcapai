@@ -110,6 +110,47 @@ export const PacketSummarySchema = z.object({
   httpRequestIn: z.number().int().optional(),
   httpResponseIn: z.number().int().optional(),
   httpTime: z.number().optional(),
+  httpCookie: z.string().optional(),
+  httpSetCookie: z.string().optional(),
+  httpXForwardedFor: z.string().optional(),
+  httpContentType: z.string().optional(),
+  httpContentLength: z.number().int().optional(),
+  httpConnection: z.string().optional(),
+  httpTransferEncoding: z.string().optional(),
+  httpAuthorization: z.boolean().optional(),
+  httpWwwAuthenticate: z.boolean().optional(),
+  httpVia: z.string().optional(),
+  httpUpgrade: z.string().optional(),
+  httpAcceptEncoding: z.string().optional(),
+  httpContentEncoding: z.string().optional(),
+  httpCacheControl: z.string().optional(),
+  tlsCipherSuite: z.string().optional(),
+  tlsCertDnsName: z.string().optional(),
+  tlsSessionId: z.string().optional(),
+  tlsAlpnProtocol: z.string().optional(),
+  tlsSessionTicket: z.string().optional(),
+  dnsQueryType: z.number().int().optional(),
+  dnsTtl: z.number().int().optional(),
+  dnsCname: z.string().optional(),
+  dnsTruncated: z.boolean().optional(),
+  dnsAnswerCount: z.number().int().optional(),
+  icmpIdent: z.number().int().optional(),
+  icmpSeq: z.number().int().optional(),
+  icmpMtuNextHop: z.number().int().optional(),
+  ipDf: z.boolean().optional(),
+  udpLength: z.number().int().optional(),
+  quicVersion: z.string().optional(),
+  quicConnectionId: z.string().optional(),
+  quicPacketType: z.string().optional(),
+  quicFrameType: z.string().optional(),
+  ntpRefid: z.string().optional(),
+  ntpStratum: z.number().int().optional(),
+  ntpRootdelay: z.number().optional(),
+  ntpXmt: z.number().optional(),
+  ntpOrg: z.number().optional(),
+  sshMessage: z.string().optional(),
+  sshDirection: z.string().optional(),
+  sshProtocol: z.string().optional(),
   length: z.number().int().optional(),
   summary: z.string(),
   raw: z.record(z.string(), z.unknown()).default({})
@@ -320,7 +361,7 @@ export type QueryPath = z.infer<typeof QueryPathSchema>;
 
 export const ProtocolCorrelationSchema = z.object({
   correlationId: z.string(),
-  kind: z.enum(["dns_to_tcp", "tls_sni_to_tcp", "http_host_to_tcp"]),
+  kind: z.enum(["dns_to_tcp", "tls_sni_to_tcp", "http_host_to_tcp", "icmp_to_tcp"]),
   sourcePacketId: z.string(),
   sourceEvidenceCardId: z.string().optional(),
   targetConversationId: z.string().optional(),
@@ -434,6 +475,93 @@ export const ToolRunSchema = z.object({
 });
 export type ToolRun = z.infer<typeof ToolRunSchema>;
 
+export const NetworkDeviceSchema = z.object({
+  deviceId: z.string(),
+  name: z.string(),
+  type: z.enum(["firewall", "switch", "load_balancer", "ssl_terminator", "waf", "router", "proxy", "cdn", "nat_gateway", "other"]),
+  description: z.string().optional(),
+  configurations: z.array(z.string()).optional()
+});
+export type NetworkDevice = z.infer<typeof NetworkDeviceSchema>;
+
+export const DataPathHopSchema = z.object({
+  hopIndex: z.number(),
+  deviceName: z.string().optional(),
+  clientSideCapture: z.string().optional(),
+  serverSideCapture: z.string().optional(),
+  description: z.string().optional()
+});
+export type DataPathHop = z.infer<typeof DataPathHopSchema>;
+
+export const NetworkTopologySchema = z.object({
+  devices: z.array(NetworkDeviceSchema).default([]),
+  dataPath: z.array(DataPathHopSchema).optional(),
+  notes: z.string().optional()
+});
+export type NetworkTopology = z.infer<typeof NetworkTopologySchema>;
+
+export const PacketInsightSchema = z.object({
+  insightId: z.string(),
+  type: z.enum([
+    "connection_lifecycle",
+    "ack_gap",
+    "tcp_timing",
+    "tcp_window_trend",
+    "tcp_rst_direction",
+    "tcp_handshake_retry",
+    "tcp_delayed_ack",
+    "tcp_connection_flood",
+    "tcp_segment_anomaly",
+    "tcp_keepalive",
+    "tcp_throughput",
+    "tcp_options",
+    "http_status_chain",
+    "http_header_anomaly",
+    "http_timing",
+    "icmp_echo_pair",
+    "cross_protocol_chain",
+    "tls_handshake",
+    "dns_anomaly",
+    "udp_anomaly",
+    "udp_flow",
+    "icmp_unreachable",
+    "icmp_mtu",
+    "icmp_redirect",
+    "quic_anomaly",
+    "ntp_anomaly",
+    "ssh_anomaly"
+  ]),
+  severity: z.enum(["info", "warning", "critical"]),
+  packetIds: z.array(z.string()),
+  description: z.string(),
+  detail: z.record(z.string(), z.unknown()).default({}),
+  scenario: z.string().optional()
+});
+export type PacketInsight = z.infer<typeof PacketInsightSchema>;
+
+export const TcpStreamSummarySchema = z.object({
+  streamIndex: z.number().int(),
+  srcIp: z.string().optional(),
+  srcPort: z.number().int().optional(),
+  dstIp: z.string().optional(),
+  dstPort: z.number().int().optional(),
+  packetCount: z.number().int(),
+  byteCount: z.number().int(),
+  displayFilter: z.string()
+});
+export type TcpStreamSummary = z.infer<typeof TcpStreamSummarySchema>;
+
+export const TcpStreamContentSchema = z.object({
+  streamIndex: z.number().int(),
+  format: z.enum(["ascii", "raw"]),
+  clientData: z.string(),
+  serverData: z.string(),
+  totalBytes: z.number().int(),
+  truncated: z.boolean(),
+  displayFilter: z.string()
+});
+export type TcpStreamContent = z.infer<typeof TcpStreamContentSchema>;
+
 export const CaseGraphSchema = z.object({
   spec: CaseSpecSchema,
   captures: z.array(CaptureNodeSchema),
@@ -452,7 +580,9 @@ export const CaseGraphSchema = z.object({
   activeQueryRunId: z.string().optional(),
   analysisRuns: z.array(AnalysisRunSchema).default([]),
   activeRunId: z.string().optional(),
-  toolRuns: z.array(ToolRunSchema).default([])
+  toolRuns: z.array(ToolRunSchema).default([]),
+  networkTopology: NetworkTopologySchema.optional(),
+  insights: z.array(PacketInsightSchema).default([])
 });
 export type CaseGraph = z.infer<typeof CaseGraphSchema>;
 
@@ -462,6 +592,15 @@ export const SuggestedQuerySchema = z.object({
   intent: z.string()
 });
 export type SuggestedQuery = z.infer<typeof SuggestedQuerySchema>;
+
+export const DiagnosticHypothesisSchema = z.object({
+  id: z.string(),
+  description: z.string(),
+  status: z.enum(["pending", "testing", "confirmed", "ruled_out"]),
+  evidenceFor: z.array(z.string()).default([]),
+  evidenceAgainst: z.array(z.string()).default([])
+});
+export type DiagnosticHypothesis = z.infer<typeof DiagnosticHypothesisSchema>;
 
 export const AgentAnswerSchema = z.object({
   answer: z.string(),
@@ -477,7 +616,10 @@ export const AgentAnswerSchema = z.object({
   suggestedActions: z.array(z.string()).default([]),
   suggestedQueries: z.array(SuggestedQuerySchema).optional(),
   handoffAgent: z.string().optional(),
-  protocolCorrelations: z.array(ProtocolCorrelationSchema).optional()
+  protocolCorrelations: z.array(ProtocolCorrelationSchema).optional(),
+  followUpQuestions: z.array(z.string()).optional(),
+  diagnosticPhase: z.enum(["interview", "hypothesis", "testing", "conclusion"]).optional(),
+  hypotheses: z.array(DiagnosticHypothesisSchema).optional()
 });
 export type AgentAnswer = z.infer<typeof AgentAnswerSchema>;
 

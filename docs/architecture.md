@@ -62,6 +62,7 @@ Chain Planner (LLM 或本地兜底)
   1. `planChain()` 规划分析链
   2. `executeChain()` 逐步执行，每步后 `reloadGraph()` 刷新 case graph
   3. 无 `llm_explain` 步骤时自动追加 LLM 综合解读
+  4. 新增路由：`GET /api/cases/:caseId/tcp-streams`（TCP 流列表）、`GET /api/cases/:caseId/tcp-streams/:streamIndex/content`（TCP 流内容）
 - **caseStore.ts** — case 持久化：`data/cases/:caseId/case.json`
 - **capturePreprocess.ts** — 通过 `editcap -s` 裁剪 payload
 - **reportBuilder.ts** — 从 case graph 生成结构化 Markdown 报告
@@ -100,8 +101,19 @@ Chain Planner (LLM 或本地兜底)
 - **http.ts** — HTTP 事务（4xx/5xx），请求/响应匹配，多 check 输出
 - **icmp.ts** — ICMP Unreachable/TTL Exceeded/Fragmentation
 - **udp.ts** — UDP 流聚合
-- 共享逻辑在 `builders.ts`：packet pair 分组、evidence card 创建、L7→TCP protocol correlations（DNS→TCP、TLS SNI→TCP、HTTP Host→TCP）
+- 共享逻辑在 `builders.ts`：packet pair 分组、evidence card 创建、L7→TCP protocol correlations（DNS→TCP、TLS SNI→TCP、HTTP Host→TCP、ICMP→TCP）
 - `types.ts` 中 `runProtocolAdapter()` 实现三层路由：hardcoded regex → learned patterns → null（由调用方 fallback 到 agent）
+
+#### Insight Engine (`src/services/insightEngine.ts`)
+27 个确定性分析器，在每次 agent 查询时对 case graph 的 packets 运行，产出 `PacketInsight[]`。无阈值过滤，所有检测到的模式均报告：
+- **TCP（12 个）**：连接生命周期、ACK Gap、TCP 时序（RTT/空闲/突发）、窗口趋势、RST 方向、握手重试、延迟 ACK、连接洪泛、段异常、Keepalive、吞吐量、TCP 选项
+- **ICMP（2 个）**：Echo 配对（丢包/RTT）、ICMP 高级（Unreachable/PMTU/Traceroute/Redirect）
+- **HTTP（4 个）**：状态链（重定向/5xx/4xx）、Header 异常（未匹配/混合端口）、Timing、高级（Host/SNI/错误突发/认证/压缩/Cache-Control/WebSocket/Content-Length/XFF）
+- **TLS（2 个）**：握手 Alert、高级（版本/密码套件/证书/会话恢复/ALPN/重协商）
+- **DNS（2 个）**：异常（无响应/NXDOMAIN/SERVFAIL/耗时）、高级（突发/成功率/AXFR/截断/TTL/CNAME/Zone Transfer）
+- **跨协议**：cross_protocol_chain（DNS→TCP→TLS→HTTP 瀑布图）
+- **UDP（1 个）**：多端口/突发/单向流/QUIC 检测
+- **新协议**：QUIC（连接概览/握手/版本）、NTP（Stratum/延迟）、SSH（消息分布/断开/认证/版本）
 
 ### `apps/web` — React 工作台
 
@@ -112,6 +124,10 @@ Chain Planner (LLM 或本地兜底)
 - 证据卡片在浏览器新标签页展示（Blob URL，"查看证据详情" 按钮）——聊天气泡保留文字分析，链接页用于 Wireshark 操作
 - SSE 流式 agent 回答
 - 链式步骤进度（chain_start → step_start → step_done → chain_done）
+- TCP stream 查看器（列表→内容下钻，客户端/服务端双列展示）
+- 跨协议瀑布图（纯 SVG，DNS/TCP/TLS/HTTP 时序可视化）
+- 网络拓扑图（纯 SVG，节点与边）
+- Insight 诊断模式渲染
 - Mapping hint / time offset hint 编辑
 - LLM 设置管理（profile CRUD + 连通性测试）
 - 深色/浅色主题切换
@@ -121,9 +137,9 @@ Chain Planner (LLM 或本地兜底)
 
 Zod schema + TypeScript 类型，定义完整领域模型：
 - `CaseSpec`, `CaptureNode`, `MappingHint`, `TimeOffsetHint`
-- `PacketSummary`, `Conversation`
+- `PacketSummary`（含 QUIC/NTP/SSH 字段）, `Conversation`
 - `QueryRun`, `QueryPath`, `EvidenceCard`
-- `ProtocolCorrelation`, `AccessCandidateGroup`
+- `ProtocolCorrelation`, `AccessCandidateGroup`, `PacketInsight`
 - `AnalysisChainPlan`, `AnalysisChainStep`, `ChainStepResult`
 - `AgentAnswer`（含 `protocolCorrelations` 字段）, `QueryDiagnosis`
 - `CaseGraph` — 聚合所有上述数据
@@ -137,7 +153,7 @@ Zod schema + TypeScript 类型，定义完整领域模型：
 三个基于 stdio 的 MCP 服务器（`@modelcontextprotocol/sdk`）：
 
 #### `mcp/tshark-query` — tshark 查询引擎
-15 个工具：`build_display_filter`、`get_capture_time_range`、`list_protocols`、`get_network_statistics`、`list_tcp_conversations`、`query_packets`、`list_tcp_resets`、`list_tcp_retransmissions`、`list_tcp_zero_window`、`list_icmp_events`、`list_dns_packets`、`list_udp_packets`、`list_tls_packets`、`list_http_packets`、`get_conversation_packets`
+18 个工具：`build_display_filter`、`get_capture_time_range`、`list_protocols`、`get_network_statistics`、`list_tcp_conversations`、`query_packets`、`list_tcp_resets`、`list_tcp_retransmissions`、`list_tcp_zero_window`、`list_icmp_events`、`list_dns_packets`、`list_udp_packets`、`list_tls_packets`、`list_http_packets`、`get_conversation_packets`、`list_tcp_streams`、`follow_tcp_stream`、`get_expert_info`
 
 #### `mcp/evidence-opener` — Wireshark 打开器
 用 pcap 路径 + display filter 打开本地 Wireshark。不分析数据包。
@@ -274,3 +290,4 @@ Leader Agent 通过 case-graph MCP 只读 case graph，通过 tshark-query MCP �
 - Wireshark 采用本地桌面打开方式，不嵌入浏览器
 - LLM 综合解读质量取决于模型遵循指令的能力，可能需要迭代调整 agent 指令
 - Learned patterns 由 LLM 生成，质量取决于模型 regex 生成能力
+- Insight engine 不做阈值过滤，报告量可能较大，需要 UI 侧筛选

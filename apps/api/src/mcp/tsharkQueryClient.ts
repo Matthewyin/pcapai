@@ -247,3 +247,33 @@ export async function listHttpPacketsWithMcp(input: { captures: CaptureQueryInpu
     limit: input.limit
   }, QueryPacketsResultSchema);
 }
+
+export async function listTcpStreamsWithMcp(input: { captures: CaptureQueryInput[]; displayFilter?: string }) {
+  return callTsharkQueryTool("list_tcp_streams", {
+    capturesJson: JSON.stringify(input.captures),
+    displayFilter: input.displayFilter || "tcp"
+  }, z.object({ streams: z.array(z.object({
+    streamIndex: z.number().int(),
+    srcIp: z.string().optional(), srcPort: z.number().int().optional(),
+    dstIp: z.string().optional(), dstPort: z.number().int().optional(),
+    packetCount: z.number().int(), byteCount: z.number().int(),
+    displayFilter: z.string()
+  })) }));
+}
+
+export async function followTcpStreamWithMcp(input: { pcapPath: string; streamIndex: number; format?: "ascii" | "raw"; maxBytes?: number }) {
+  return callTsharkQueryTool("follow_tcp_stream", {
+    pcapPath: input.pcapPath,
+    streamIndex: input.streamIndex,
+    format: input.format || "ascii",
+    maxBytes: input.maxBytes || 65536
+  }, z.object({
+    streamIndex: z.number().int(),
+    format: z.string(),
+    clientData: z.string(),
+    serverData: z.string(),
+    totalBytes: z.number().int(),
+    truncated: z.boolean(),
+    displayFilter: z.string()
+  }));
+}

@@ -66,6 +66,47 @@ const PacketSchema = z.object({
   httpRequestIn: z.number().int().optional(),
   httpResponseIn: z.number().int().optional(),
   httpTime: z.number().optional(),
+  httpCookie: z.string().optional(),
+  httpSetCookie: z.string().optional(),
+  httpXForwardedFor: z.string().optional(),
+  httpContentType: z.string().optional(),
+  httpContentLength: z.number().int().optional(),
+  httpConnection: z.string().optional(),
+  httpTransferEncoding: z.string().optional(),
+  httpAuthorization: z.boolean().optional(),
+  httpWwwAuthenticate: z.boolean().optional(),
+  httpVia: z.string().optional(),
+  httpUpgrade: z.string().optional(),
+  httpAcceptEncoding: z.string().optional(),
+  httpContentEncoding: z.string().optional(),
+  httpCacheControl: z.string().optional(),
+  tlsCipherSuite: z.string().optional(),
+  tlsCertDnsName: z.string().optional(),
+  tlsSessionId: z.string().optional(),
+  tlsAlpnProtocol: z.string().optional(),
+  tlsSessionTicket: z.string().optional(),
+  dnsQueryType: z.number().int().optional(),
+  dnsTtl: z.number().int().optional(),
+  dnsCname: z.string().optional(),
+  dnsTruncated: z.boolean().optional(),
+  dnsAnswerCount: z.number().int().optional(),
+  icmpIdent: z.number().int().optional(),
+  icmpSeq: z.number().int().optional(),
+  icmpMtuNextHop: z.number().int().optional(),
+  ipDf: z.boolean().optional(),
+  udpLength: z.number().int().optional(),
+  quicVersion: z.string().optional(),
+  quicConnectionId: z.string().optional(),
+  quicPacketType: z.string().optional(),
+  quicFrameType: z.string().optional(),
+  ntpRefid: z.string().optional(),
+  ntpStratum: z.number().int().optional(),
+  ntpRootdelay: z.number().optional(),
+  ntpXmt: z.number().optional(),
+  ntpOrg: z.number().optional(),
+  sshMessage: z.string().optional(),
+  sshDirection: z.string().optional(),
+  sshProtocol: z.string().optional(),
   length: z.number().int().optional(),
   summary: z.string(),
   raw: z.record(z.string(), z.unknown()).default({})
@@ -139,7 +180,51 @@ const tsharkFields = [
   "http.response.code.desc",
   "http.request_in",
   "http.response_in",
-  "http.time"
+  "http.time",
+  "http.cookie",
+  "http.set_cookie",
+  "http.x_forwarded_for",
+  "http.content_type",
+  "http.content_length",
+  "http.connection",
+  "http.transfer_encoding",
+  "http.authorization",
+  "http.www_authenticate",
+  "http.via",
+  "http.upgrade",
+  "http.accept_encoding",
+  "http.content_encoding",
+  "http.cache_control",
+  "tls.cipher",
+  "tls.cipher_suite",
+  "x509sat.printableString",
+  "x509ce.dNSName",
+  "tls.session_id",
+  "tls.ext.alpn",
+  "tls.ext.session_ticket",
+  "dns.qry.type",
+  "dns.ttl",
+  "dns.cname",
+  "dns.flags.truncated",
+  "dns.a",
+  "dns.count.answers",
+  "icmp.ident",
+  "icmp.seq",
+  "icmp.mtu_next_hop",
+  "ip.flags.df",
+  "udp.length",
+  "quic.version",
+  "quic.connection_id",
+  "quic.packet_type",
+  "quic.frame_type",
+  "ntp.refid",
+  "ntp.stratum",
+  "ntp.rootdelay",
+  "ntp.xmt",
+  "ntp.org",
+  "ssh.message",
+  "ssh.direction",
+  "ssh.protocol"
 ];
 
 const networkStatFields = [
@@ -269,7 +354,49 @@ export function parseTsharkRows(output: string, capture: CaptureInput) {
       httpResponseCodeDescription,
       httpRequestIn,
       httpResponseIn,
-      httpTime
+      httpTime,
+      httpCookie,
+      httpSetCookie,
+      httpXForwardedFor,
+      httpContentType,
+      httpContentLength,
+      httpConnection,
+      httpTransferEncoding,
+      httpAuthorization,
+      httpWwwAuthenticate,
+      httpVia,
+      httpUpgrade,
+      httpAcceptEncoding,
+      httpContentEncoding,
+      httpCacheControl,
+      tlsCipher,
+      tlsCipherSuite,
+      x509DnsName,
+      tlsSessionId,
+      tlsAlpn,
+      tlsSessionTicket,
+      dnsQueryType,
+      dnsTtl,
+      dnsCname,
+      dnsTruncated,
+      dnsAnswerCount,
+      icmpIdent,
+      icmpSeq,
+      icmpMtuNextHop,
+      ipDf,
+      udpLength,
+      quicVersion,
+      quicConnectionId,
+      quicPacketType,
+      quicFrameType,
+      ntpRefid,
+      ntpStratum,
+      ntpRootdelay,
+      ntpXmt,
+      ntpOrg,
+      sshMessage,
+      sshDirection,
+      sshProtocol
     ] = columns;
     const parsedFrameNumber = Number(frameNumber);
     return PacketSchema.parse({
@@ -322,6 +449,47 @@ export function parseTsharkRows(output: string, capture: CaptureInput) {
       httpRequestIn: numberOrUndefined(httpRequestIn),
       httpResponseIn: numberOrUndefined(httpResponseIn),
       httpTime: numberOrUndefined(httpTime),
+      httpCookie: httpCookie || undefined,
+      httpSetCookie: httpSetCookie || undefined,
+      httpXForwardedFor: httpXForwardedFor || undefined,
+      httpContentType: httpContentType || undefined,
+      httpContentLength: numberOrUndefined(httpContentLength),
+      httpConnection: httpConnection || undefined,
+      httpTransferEncoding: httpTransferEncoding || undefined,
+      httpAuthorization: httpAuthorization ? true : undefined,
+      httpWwwAuthenticate: httpWwwAuthenticate ? true : undefined,
+      httpVia: httpVia || undefined,
+      httpUpgrade: httpUpgrade || undefined,
+      httpAcceptEncoding: httpAcceptEncoding || undefined,
+      httpContentEncoding: httpContentEncoding || undefined,
+      httpCacheControl: httpCacheControl || undefined,
+      tlsCipherSuite: tlsCipher || tlsCipherSuite || undefined,
+      tlsCertDnsName: x509DnsName || undefined,
+      tlsSessionId: tlsSessionId || undefined,
+      tlsAlpnProtocol: tlsAlpn || undefined,
+      tlsSessionTicket: tlsSessionTicket || undefined,
+      dnsQueryType: numberOrUndefined(dnsQueryType),
+      dnsTtl: numberOrUndefined(dnsTtl),
+      dnsCname: dnsCname || undefined,
+      dnsTruncated: dnsTruncated === "1" || dnsTruncated?.toLowerCase() === "true",
+      dnsAnswerCount: numberOrUndefined(dnsAnswerCount),
+      icmpIdent: numberOrUndefined(icmpIdent),
+      icmpSeq: numberOrUndefined(icmpSeq),
+      icmpMtuNextHop: numberOrUndefined(icmpMtuNextHop),
+      ipDf: ipDf === "1" || ipDf?.toLowerCase() === "true",
+      udpLength: numberOrUndefined(udpLength),
+      quicVersion: quicVersion || undefined,
+      quicConnectionId: quicConnectionId || undefined,
+      quicPacketType: quicPacketType || undefined,
+      quicFrameType: quicFrameType || undefined,
+      ntpRefid: ntpRefid || undefined,
+      ntpStratum: numberOrUndefined(ntpStratum),
+      ntpRootdelay: numberOrUndefined(ntpRootdelay),
+      ntpXmt: numberOrUndefined(ntpXmt),
+      ntpOrg: numberOrUndefined(ntpOrg),
+      sshMessage: sshMessage || undefined,
+      sshDirection: sshDirection || undefined,
+      sshProtocol: sshProtocol || undefined,
       length: numberOrUndefined(frameLength),
       summary: info || "",
       raw: Object.fromEntries(tsharkFields.map((field, index) => [field, columns[index] || ""]))
@@ -854,6 +1022,129 @@ server.registerTool(
   async ({ capturesJson, displayFilter, limit }) => {
     const packets = await queryCaptures(capturesJson, `${displayFilter} && http`, limit);
     return { content: [{ type: "text", text: JSON.stringify({ packets }) }] };
+  }
+);
+
+server.registerTool(
+  "list_tcp_streams",
+  {
+    title: "List TCP streams",
+    description: "Return TCP stream summary (stream index, endpoint tuple, packet count, byte count) by aggregating tcp.stream field.",
+    inputSchema: { capturesJson: z.string(), displayFilter: z.string().default("tcp") }
+  },
+  async ({ capturesJson, displayFilter }) => {
+    const inputs = JSON.parse(capturesJson) as CaptureInput[];
+    const validInput = inputs.find(i => i.pcapPath);
+    if (!validInput?.pcapPath) return { content: [{ type: "text", text: JSON.stringify({ streams: [] }) }] };
+    const args = ["-r", validInput.pcapPath, "-Y", displayFilter ?? "tcp", "-T", "fields", "-e", "tcp.stream", "-e", "ip.src", "-e", "ip.dst", "-e", "tcp.srcport", "-e", "tcp.dstport", "-e", "frame.len", "-E", "header=n", "-E", "separator=\\t"];
+    const { stdout } = await execFileAsync(tsharkCommand, args, { maxBuffer: 20 * 1024 * 1024 });
+    const streamMap = new Map<number, { srcIp: string; srcPort: number; dstIp: string; dstPort: number; packetCount: number; byteCount: number }>();
+    for (const line of stdout.trim().split("\n")) {
+      if (!line.trim()) continue;
+      const parts = line.split("\t");
+      if (parts.length < 6) continue;
+      const si = parseInt(parts[0], 10);
+      if (isNaN(si)) continue;
+      const existing = streamMap.get(si);
+      if (existing) {
+        existing.packetCount++;
+        existing.byteCount += parseInt(parts[5], 10) || 0;
+      } else {
+        streamMap.set(si, { srcIp: parts[1], srcPort: parseInt(parts[3], 10) || 0, dstIp: parts[2], dstPort: parseInt(parts[4], 10) || 0, packetCount: 1, byteCount: parseInt(parts[5], 10) || 0 });
+      }
+    }
+    const streams = [...streamMap.entries()].map(([streamIndex, s]) => ({ streamIndex, ...s, displayFilter: `tcp.stream eq ${streamIndex}` }));
+    return { content: [{ type: "text", text: JSON.stringify({ streams }) }] };
+  }
+);
+
+server.registerTool(
+  "follow_tcp_stream",
+  {
+    title: "Follow TCP stream",
+    description: "Reassemble TCP stream content (like Wireshark Follow TCP Stream). Returns client and server data separately.",
+    inputSchema: { pcapPath: z.string(), streamIndex: z.number().int(), format: z.enum(["ascii", "raw"]).default("ascii"), maxBytes: z.number().int().default(65536) }
+  },
+  async ({ pcapPath, streamIndex, format, maxBytes }) => {
+    const args = ["-r", pcapPath, "-q", "-z", `follow,tcp,${format},${streamIndex}`];
+    const { stdout } = await execFileAsync(tsharkCommand, args, { maxBuffer: 10 * 1024 * 1024 });
+    let content = stdout;
+    const truncated = content.length > maxBytes;
+    if (truncated) content = content.slice(0, maxBytes);
+
+    // 解析 follow 输出：tshark follow ascii 输出中，客户端数据和非客户端数据交替出现
+    // 格式：=== Stream N === 后面跟着方向标记
+    let clientData = "";
+    let serverData = "";
+    const lines = content.split("\n");
+    let inClient = false;
+    let inServer = false;
+    for (const line of lines) {
+      if (line.startsWith("===") || line.trim() === "") {
+        // 检查方向标记
+        if (line.includes("->") || line.match(/^===\s+\d+/)) {
+          // 新的 chunk 开始，交替方向
+          if (inClient) { inClient = false; inServer = true; }
+          else if (inServer) { inServer = false; inClient = true; }
+          else { inClient = true; }
+        }
+        continue;
+      }
+      if (line.startsWith("\t") || line.startsWith("   ")) {
+        // 缩进行通常是服务端数据
+        serverData += line.replace(/^[\t ]+/, "") + "\n";
+      } else {
+        // 非缩进行通常是客户端数据
+        clientData += line + "\n";
+      }
+    }
+
+    const totalBytes = Buffer.byteLength(clientData, "utf8") + Buffer.byteLength(serverData, "utf8");
+    return {
+      content: [{
+        type: "text",
+        text: JSON.stringify({ streamIndex, format, clientData, serverData, totalBytes, truncated, displayFilter: `tcp.stream eq ${streamIndex}` })
+      }]
+    };
+  }
+);
+
+server.registerTool(
+  "get_expert_info",
+  {
+    title: "Get tshark Expert Info",
+    description: "Run tshark expert info analysis on a capture file. Returns warnings, errors, and notes from tshark's built-in protocol analysis.",
+    inputSchema: { capturesJson: z.string() }
+  },
+  async ({ capturesJson }) => {
+    const inputs = JSON.parse(capturesJson) as CaptureInput[];
+    const validInput = inputs.find(i => i.pcapPath);
+    if (!validInput?.pcapPath) return { content: [{ type: "text", text: JSON.stringify({ expertInfo: [] }) }] };
+    const args = ["-r", validInput.pcapPath, "-Y", "tcp.analysis.flags || tcp.analysis.retransmission || tcp.analysis.out_of_order || tcp.analysis.duplicate_ack || tcp.analysis.zero_window || tcp.analysis.keep_alive || tcp.analysis.window_full", "-T", "fields", "-e", "frame.number", "-e", "ip.src", "-e", "ip.dst", "-e", "tcp.srcport", "-e", "tcp.dstport", "-e", "tcp.analysis.retransmission", "-e", "tcp.analysis.fast_retransmission", "-e", "tcp.analysis.out_of_order", "-e", "tcp.analysis.duplicate_ack", "-e", "tcp.analysis.zero_window", "-e", "tcp.analysis.keep_alive", "-e", "tcp.analysis.window_full", "-e", "tcp.analysis.lost_segment", "-E", "header=n", "-E", "separator=\\t"];
+    const { stdout } = await execFileAsync(tsharkCommand, args, { maxBuffer: 20 * 1024 * 1024 });
+    const entries: Array<{ frameNumber: number; srcIp: string; dstIp: string; srcPort: number; dstPort: number; flags: string[] }> = [];
+    for (const line of stdout.trim().split("\n")) {
+      if (!line.trim()) continue;
+      const parts = line.split("\t");
+      if (parts.length < 12) continue;
+      const flags: string[] = [];
+      if (parts[5] === "1" || parts[5]?.toLowerCase() === "true") flags.push("retransmission");
+      if (parts[6] === "1" || parts[6]?.toLowerCase() === "true") flags.push("fast_retransmission");
+      if (parts[7] === "1" || parts[7]?.toLowerCase() === "true") flags.push("out_of_order");
+      if (parts[8] === "1" || parts[8]?.toLowerCase() === "true") flags.push("duplicate_ack");
+      if (parts[9] === "1" || parts[9]?.toLowerCase() === "true") flags.push("zero_window");
+      if (parts[10] === "1" || parts[10]?.toLowerCase() === "true") flags.push("keep_alive");
+      if (parts[11] === "1" || parts[11]?.toLowerCase() === "true") flags.push("window_full");
+      if (parts[12] === "1" || parts[12]?.toLowerCase() === "true") flags.push("lost_segment");
+      if (!flags.length) continue;
+      entries.push({
+        frameNumber: parseInt(parts[0], 10) || 0,
+        srcIp: parts[1], dstIp: parts[2],
+        srcPort: parseInt(parts[3], 10) || 0, dstPort: parseInt(parts[4], 10) || 0,
+        flags
+      });
+    }
+    return { content: [{ type: "text", text: JSON.stringify({ expertInfo: entries, totalEntries: entries.length }) }] };
   }
 );
 

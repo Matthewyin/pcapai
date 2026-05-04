@@ -32,6 +32,10 @@
       "transportEvidencePacketSampleLimit": 8,
       "finEvidencePacketSampleLimit": 6
     },
+    "tcpStream": {
+      "defaultMaxBytes": 65536,
+      "maxBytesLimit": 524288
+    },
     "pathCorrelation": {
       "timeOverlapToleranceSeconds": 3
     },

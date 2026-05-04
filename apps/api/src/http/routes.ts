@@ -1,4 +1,4 @@
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { Router } from "express";
 import multer from "multer";
@@ -17,7 +17,7 @@ import {
 import { runAgentCompatibilityCheck, runPcapTroubleshootingAgent } from "../agents/runtime.js";
 import { learnFromAgentRun, loadLearnedPatterns } from "../services/patternLearner.js";
 import { apiConfig } from "../config.js";
-import { getCaptureTimeRangeWithMcp, getConversationPacketsWithMcp, listDnsPacketsWithMcp, listHttpPacketsWithMcp, listIcmpEventsWithMcp, listTcpResetsWithMcp, listTcpRetransmissionsWithMcp, listTcpZeroWindowWithMcp, listTlsPacketsWithMcp, listUdpPacketsWithMcp, queryPacketsWithMcp } from "../mcp/tsharkQueryClient.js";
+import { getCaptureTimeRangeWithMcp, getConversationPacketsWithMcp, listDnsPacketsWithMcp, listHttpPacketsWithMcp, listIcmpEventsWithMcp, listTcpResetsWithMcp, listTcpRetransmissionsWithMcp, listTcpStreamsWithMcp, followTcpStreamWithMcp, listTcpZeroWindowWithMcp, listTlsPacketsWithMcp, listUdpPacketsWithMcp, queryPacketsWithMcp } from "../mcp/tsharkQueryClient.js";
 import { createPacketPairAnswer, createProtocolQueryAnswer, groupPacketPairs, noCaptureAnswer, pairGroupFromPackets, pairKey, protocolPacketCard } from "../protocolAdapters/builders.js";
 import { createDnsAdapter } from "../protocolAdapters/dns.js";
 import { createHttpAdapter } from "../protocolAdapters/http.js";
@@ -27,11 +27,12 @@ import { createTlsAdapter } from "../protocolAdapters/tls.js";
 import { protocolAdapterErrorMessage, protocolAdapterErrorStatus, runProtocolAdapter, type ProtocolAdapter, type ProtocolAdapterContext } from "../protocolAdapters/types.js";
 import { createUdpAdapter } from "../protocolAdapters/udp.js";
 import { stripPayload } from "./capturePreprocess.js";
-import { addCapture, capturesDirectory, createEmptyCase, deleteCases, listCaseSummaries, readAnalysisRunSnapshot, readCaseGraph, safePathPart, writeCaseGraph } from "./caseStore.js";
+import { addCapture, capturesDirectory, caseDirectory, createEmptyCase, deleteCases, listCaseSummaries, readAnalysisRunSnapshot, readCaseGraph, safePathPart, writeCaseGraph } from "./caseStore.js";
 import { activateLlmProfile, deleteLlmProfiles, getLlmSettings, listLlmProfiles, parseProviderData, saveLlmProfile, saveLlmSettings } from "./llmSettings.js";
 import { buildCaseReportMarkdown } from "./reportBuilder.js";
 import { createAgentAnswerService } from "../services/agentAnswerService.js";
 import { createEvidenceOpenService } from "../services/evidenceOpenService.js";
+import { runLevel1Insights } from "../services/insightEngine.js";
 import { createPlannerService, executeChain } from "../services/plannerService.js";
 import { createQueryRunService } from "../services/queryRunService.js";
 import { createStatisticsQueryService } from "../services/statisticsQueryService.js";
@@ -272,6 +273,20 @@ function resetAnalysis(graph: CaseGraph) {
   };
 }
 
+function loadGraphWithInsights(caseId: string): CaseGraph {
+  const graph = loadGraph(caseId);
+  if (graph.packets.length && !graph.insights?.length) {
+    const insights = runLevel1Insights(graph);
+    if (insights.length) {
+      const nextGraph = { ...graph, insights };
+      writeCaseGraph(nextGraph);
+      cases.set(caseId, nextGraph);
+      return nextGraph;
+    }
+  }
+  return graph;
+}
+
 const setCaseGraph = (caseId: string, graph: CaseGraph) => cases.set(caseId, graph);
 const packetPairAnswer = createPacketPairAnswer({
   conversationPacketLimit: apiConfig.query.conversationPacketLimit,
@@ -385,7 +400,7 @@ const plannerService = createPlannerService({
   reportAnswer,
   troubleshootingScopeAnswer,
   runLlmExplain: async (graph, question) => {
-    const answer = await runPcapTroubleshootingAgent({ graph, question });
+    const answer = await runPcapTroubleshootingAgent({ graph, question, chatHistory: undefined });
     return answer;
   }
 });
@@ -850,6 +865,76 @@ export function createAgentRouter() {
     }
   });
 
+  router.get("/cases/:caseId/chat", (req, res) => {
+    const caseId = safePathPart(String(req.params.caseId));
+    const chatPath = path.join(caseDirectory(caseId), "chat.json");
+    if (!existsSync(chatPath)) return res.json({ messages: [] });
+    try {
+      return res.json({ messages: JSON.parse(readFileSync(chatPath, "utf8")) });
+    } catch {
+      return res.json({ messages: [] });
+    }
+  });
+
+  router.put("/cases/:caseId/chat", (req, res) => {
+    const caseId = safePathPart(String(req.params.caseId));
+    const { messages } = req.body;
+    if (!Array.isArray(messages)) return res.status(400).json({ error: "messages must be an array" });
+    const clean = messages
+      .map((m: Record<string, unknown>) => ({ ...m, streaming: false }))
+      .filter((m: Record<string, unknown>) => (typeof m.content === "string" && m.content.trim()) || (Array.isArray(m.thoughts) && m.thoughts.length))
+      .slice(-200);
+    try {
+      writeFileSync(path.join(caseDirectory(caseId), "chat.json"), JSON.stringify(clean, null, 2));
+      return res.json({ ok: true });
+    } catch {
+      return res.status(500).json({ error: "failed to save chat" });
+    }
+  });
+
+  // TCP Stream 端点
+  router.get("/cases/:caseId/tcp-streams", async (req, res) => {
+    const caseId = safePathPart(String(req.params.caseId));
+    const graph = await loadGraph(caseId);
+    if (!graph) return res.status(404).json({ error: "case not found" });
+    const nodeId = req.query.nodeId as string | undefined;
+    const captures = nodeId
+      ? graph.captures.filter(c => c.nodeId === nodeId && c.pcapFilename)
+      : graph.captures.filter(c => c.pcapFilename);
+    if (!captures.length) return res.json({ streams: [] });
+    try {
+      const result = await listTcpStreamsWithMcp({
+        captures: captures.map(c => ({ nodeId: c.nodeId, name: c.pcapFilename!, pcapPath: path.join(caseDirectory(caseId), "captures", c.pcapFilename!) }))
+      });
+      res.json(result);
+    } catch (e) {
+      res.status(500).json({ error: String(e) });
+    }
+  });
+
+  router.get("/cases/:caseId/tcp-streams/:streamIndex/content", async (req, res) => {
+    const caseId = safePathPart(String(req.params.caseId));
+    const streamIndex = parseInt(req.params.streamIndex, 10);
+    if (isNaN(streamIndex)) return res.status(400).json({ error: "invalid streamIndex" });
+    const graph = await loadGraph(caseId);
+    if (!graph) return res.status(404).json({ error: "case not found" });
+    const nodeId = req.query.nodeId as string | undefined;
+    const capture = nodeId
+      ? graph.captures.find(c => c.nodeId === nodeId && c.pcapFilename)
+      : graph.captures.find(c => c.pcapFilename);
+    if (!capture?.pcapFilename) return res.status(404).json({ error: "no capture found" });
+    try {
+      const result = await followTcpStreamWithMcp({
+        pcapPath: path.join(caseDirectory(caseId), "captures", capture.pcapFilename),
+        streamIndex,
+        format: (req.query.format as "ascii" | "raw") || "ascii"
+      });
+      res.json(result);
+    } catch (e) {
+      res.status(500).json({ error: String(e) });
+    }
+  });
+
   router.get("/cases/:caseId/analysis-runs/:runId", (req, res) => {
     try {
       return res.json(readAnalysisRunSnapshot(String(req.params.caseId), String(req.params.runId)));
@@ -870,7 +955,7 @@ export function createAgentRouter() {
   router.post("/cases/:caseId/agent", async (req, res) => {
     let graph: CaseGraph;
     try {
-      graph = loadGraph(String(req.params.caseId));
+      graph = loadGraphWithInsights(String(req.params.caseId));
     } catch {
       return res.status(404).json({ error: "case not found" });
     }
@@ -1102,7 +1187,7 @@ export function createAgentRouter() {
     }
 
     try {
-      const answer = await runPcapTroubleshootingAgent({ graph, question });
+      const answer = await runPcapTroubleshootingAgent({ graph, question, chatHistory: parsedRequest.data.chatHistory });
       Object.assign(agentRuntimeStatus, {
         lastRunAt: new Date().toISOString(),
         lastStatus: "success",
@@ -1128,7 +1213,7 @@ export function createAgentRouter() {
   router.post("/cases/:caseId/agent/stream", async (req, res) => {
     let graph: CaseGraph;
     try {
-      graph = loadGraph(String(req.params.caseId));
+      graph = loadGraphWithInsights(String(req.params.caseId));
     } catch {
       return res.status(404).json({ error: "case not found" });
     }
@@ -1163,7 +1248,7 @@ export function createAgentRouter() {
             writeStreamEvent(res, "thought", { text: `步骤 ${index + 1}/${total}：${step.purpose}` });
           },
           onStepDone: (step, result, index, total) => {
-            writeStreamEvent(res, "step_done", { stepId: step.stepId, status: result.status, summary: result.answer.answer.slice(0, 200), index, total });
+            writeStreamEvent(res, "step_done", { stepId: step.stepId, status: result.status, summary: result.answer.answer.slice(0, 200), index, total, evidenceCards: result.answer.evidenceCards || [], purpose: step.purpose });
           },
           onError: (step, error, index, total) => {
             writeStreamEvent(res, "step_done", { stepId: step.stepId, status: "error", summary: `步骤失败：${error instanceof Error ? error.message : String(error)}`, index, total });
@@ -1176,7 +1261,7 @@ export function createAgentRouter() {
           try {
             const synthesisQuestion = `基于以下分析链结果，综合解读异常并给出诊断结论：\n${finalAnswer.answer}`;
             const freshGraph = loadGraph(graph.spec.caseId);
-            const llmAnswer = await runPcapTroubleshootingAgent({ graph: freshGraph, question: synthesisQuestion });
+            const llmAnswer = await runPcapTroubleshootingAgent({ graph: freshGraph, question: synthesisQuestion, chatHistory: parsedRequest.data.chatHistory });
             enrichedAnswer = {
               ...finalAnswer,
               answer: `${finalAnswer.answer}\n\n---\n### 综合解读\n${llmAnswer.answer}`,
@@ -1259,6 +1344,7 @@ export function createAgentRouter() {
         const answer = await runPcapTroubleshootingAgent({
           graph,
           question: buildAgentQuestion(parsedRequest.data),
+          chatHistory: parsedRequest.data.chatHistory,
           onTrace: (text) => writeStreamEvent(res, "thought", { text })
         });
         const plannedAnswer = answerWithPlannerThought(answer, plan);
