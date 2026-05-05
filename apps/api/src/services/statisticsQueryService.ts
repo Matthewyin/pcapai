@@ -77,7 +77,7 @@ export function createStatisticsQueryService(input: {
       missingContext: ["缺少 pcap 文件"],
       confidence: "needs_context",
       suggestedActions: ["先在聊天输入框上传 pcap/pcapng/cap 文件。"],
-      handoffAgent: "EvidenceAgent"
+      handoffAgent: "HypothesisAgent"
     };
   }
 
@@ -255,7 +255,7 @@ export function createStatisticsQueryService(input: {
         missingContext: [],
         confidence: "certain",
         suggestedActions: ["可继续按某个 IP 追问通信对、端口分布或异常包。"],
-        handoffAgent: "EvidenceAgent"
+        handoffAgent: "HypothesisAgent"
       };
     }
 
@@ -318,7 +318,7 @@ export function createStatisticsQueryService(input: {
         missingContext: [],
         confidence: "certain",
         suggestedActions: ["可继续指定端口生成 QueryRun，例如“分析到 443 端口的 TCP 通信”。"],
-        handoffAgent: "EvidenceAgent"
+        handoffAgent: "HypothesisAgent"
       };
     }
 
@@ -359,7 +359,7 @@ export function createStatisticsQueryService(input: {
         missingContext: [],
         confidence: "certain",
         suggestedActions: ["如需定位具体会话，可以继续问“给出前 10 个有 reset 的 TCP session pair”。"],
-        handoffAgent: "EvidenceAgent"
+        handoffAgent: "HypothesisAgent"
       };
     }
 
@@ -401,7 +401,7 @@ export function createStatisticsQueryService(input: {
         missingContext: [],
         confidence: "certain",
         suggestedActions: ["如需定位重传会话，可以继续问“列出重传连接”。"],
-        handoffAgent: "EvidenceAgent"
+        handoffAgent: "HypothesisAgent"
       };
     }
 
@@ -456,7 +456,7 @@ export function createStatisticsQueryService(input: {
         missingContext: [],
         confidence: "certain",
         suggestedActions: ["如需看失败请求，可以继续问“列出 HTTP 4xx/5xx”。"],
-        handoffAgent: "EvidenceAgent"
+        handoffAgent: "HypothesisAgent"
       };
     }
 
@@ -511,7 +511,7 @@ export function createStatisticsQueryService(input: {
         missingContext: [],
         confidence: "certain",
         suggestedActions: ["如需看解析失败，可以继续问“列出 DNS 失败”。"],
-        handoffAgent: "EvidenceAgent"
+        handoffAgent: "HypothesisAgent"
       };
     }
 
@@ -550,7 +550,7 @@ export function createStatisticsQueryService(input: {
         missingContext: [],
         confidence: "certain",
         suggestedActions: ["如需查看异常通信对，可以继续问“给出前 10 个有 reset 的 TCP session pair”或“列出重传连接”。"],
-        handoffAgent: "EvidenceAgent"
+        handoffAgent: "HypothesisAgent"
       };
     }
 
@@ -609,7 +609,7 @@ export function createStatisticsQueryService(input: {
         missingContext: [],
         confidence: "certain",
         suggestedActions: ["如需某个协议的包列表，可以继续问“列出 DNS/HTTP/TLS/ICMP 包”。"],
-        handoffAgent: "EvidenceAgent"
+        handoffAgent: "HypothesisAgent"
       };
     }
 
@@ -628,7 +628,7 @@ export function createStatisticsQueryService(input: {
         missingContext: ["缺少 packet timestamp"],
         confidence: "needs_context",
         suggestedActions: ["重新上传或重新查询 pcap，确认 tshark/capinfos 能读取抓包时间。"],
-        handoffAgent: "EvidenceAgent"
+        handoffAgent: "HypothesisAgent"
       };
     }
 
@@ -654,7 +654,7 @@ export function createStatisticsQueryService(input: {
       missingContext: [],
       confidence: "certain",
       suggestedActions: [],
-      handoffAgent: "EvidenceAgent"
+      handoffAgent: "HypothesisAgent"
     };
   }
 

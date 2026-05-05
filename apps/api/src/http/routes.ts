@@ -33,6 +33,7 @@ import { buildCaseReportMarkdown } from "./reportBuilder.js";
 import { createAgentAnswerService } from "../services/agentAnswerService.js";
 import { createEvidenceOpenService } from "../services/evidenceOpenService.js";
 import { runLevel1Insights } from "../services/insightEngine.js";
+import { extractTcpAnomalies } from "../services/tcpPreprocessor.js";
 import { createPlannerService, executeChain } from "../services/plannerService.js";
 import { createQueryRunService } from "../services/queryRunService.js";
 import { createStatisticsQueryService } from "../services/statisticsQueryService.js";
@@ -277,12 +278,12 @@ async function loadGraphWithInsights(caseId: string): Promise<CaseGraph> {
   const graph = loadGraph(caseId);
   if (graph.insights?.length) return graph;
 
-  // 如果 graph 没有 packets 但有 captures，先用 tshark 查一次基础包数据
+  // 如果 graph 没有 packets 但有 captures，先跑 TCP 预处理抽取异常包
   if (!graph.packets.length && graph.captures.length) {
     try {
       const inputs = captureQueryInputs(graph);
       if (inputs.length) {
-        const { packets } = await queryPacketsWithMcp({ captures: inputs, displayFilter: "" });
+        const packets = await extractTcpAnomalies(inputs, graph.mappingHints);
         if (packets.length) {
           const enriched = { ...graph, packets };
           writeCaseGraph(enriched);
@@ -895,7 +896,7 @@ export function createAgentRouter() {
         cardId: cardId || undefined
       });
       if (!result) return res.status(404).json({ error: "capture file not found" });
-      return res.json({ ...result.wireshark, graph: result.graph });
+      return res.json(result.wireshark);
     } catch (error) {
       return res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
     }

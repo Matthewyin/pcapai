@@ -67,6 +67,7 @@ All runtime defaults live here: API host/port (default `30022`), CORS origins, M
   - `icmp.ts` — ICMP unreachable/TTL exceeded/fragmentation events
   - `udp.ts` — UDP flow aggregation by endpoint pair
 - **`src/services/insightEngine.ts`** — 29 deterministic analyzers run on every agent query to produce `PacketInsight[]`: TCP lifecycle/ACK gap/timing/window trend/RST direction/handshake retry/delayed ACK/connection flood/segment anomaly/keepalive/throughput/TCP options, ICMP echo pair, HTTP status chain/header anomaly/timing/advanced, TLS handshake/advanced, DNS anomaly/advanced, cross-protocol chain, UDP, ICMP advanced, QUIC, NTP, SSH, L7 proxy detection (Via/XFF/SSL offload/TCP connection split), NAT heuristic (multi-target/ISN jump/orphan SYN). No threshold filtering — all detected patterns are reported.
+- **`src/services/tcpPreprocessor.ts`** — TCP anomaly preprocessor that replaces full-packet fetching. Extracts only anomalous TCP packets (RST, retransmission, zero window, duplicate ACK, lost segment, failed handshakes) via targeted tshark queries. Uses mapping hints to focus on relevant flows when available. This keeps the analysis dataset small (hundreds vs tens of thousands of packets) so the insight engine and LLM agent don't exceed context limits.
 - **`src/services/patternLearner.ts`** — self-improvement module for protocol adapter routing:
   - `loadLearnedPatterns()` — loads learned regex→adapterId pairs from `data/learned_patterns.json`
   - `learnFromAgentRun()` — after agent handles a fallback query, uses LLM to generate a regex pattern and target adapterId; validates and persists to JSON
@@ -141,6 +142,7 @@ The learning module (`src/services/patternLearner.ts`) has no hardcoded tool→a
 - LLM profiles are stored as `PCAPAI_LLM_PROFILE_*` entries in `.env`. The active profile is tracked via `PCAPAI_LLM_ACTIVE_PROFILE`.
 - `QueryDiagnosis` runs deterministic checks (handshake completeness, RST, retransmission burst, zero window, bidirectional traffic, FIN close) with thresholds from `config/defaults.json` `api.diagnosis`.
 - **Insight engine reports all patterns without threshold filtering** — every detected pattern is reported; severity is a visual marker only. 29 analyzers including L7 proxy and NAT heuristic detection.
+- **TCP preprocessor extracts only anomalous packets** (RST, retransmission, zero window, duplicate ACK, lost segment, failed handshakes) via targeted tshark queries before running the insight engine. Uses mapping hints to focus on relevant flows. This keeps the analysis dataset small (hundreds vs tens of thousands) and prevents LLM context overflow. Protocol adapters query tshark independently during user queries.
 - HTTP adapter produces `http_to_http` cross-connection correlations alongside standard L7→TCP correlations, identifying L7 proxy/SSL offload scenarios where the same request appears on two independent TCP connections.
 - Graph reload between chain steps ensures subsequent steps can read QueryRuns written by previous steps.
 - Auto-synthesis: when a chain has no `llm_explain` step but LLM is configured, routes.ts automatically appends LLM interpretation after chain completes.

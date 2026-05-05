@@ -29,7 +29,7 @@ export function createToolRunService(input: {
     return recordToolRun(caseId, {
       kind: "planner",
       status: "success",
-      target: "Leader Intent Planner",
+      target: "规划",
       question,
       intent: plan.intent,
       summary: `${plan.intent}（${plan.confidence}）：${plan.reason || "无补充说明"}`,

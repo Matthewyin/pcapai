@@ -128,7 +128,7 @@ export function noCaptureAnswer(): AgentAnswer {
     missingContext: ["缺少 pcap capture"],
     confidence: "needs_context",
     suggestedActions: ["先在聊天输入框上传 pcap/pcapng/cap 文件。"],
-    handoffAgent: "TriageAgent"
+    handoffAgent: "DiagnosticInterviewAgent"
   };
 }
 
@@ -271,7 +271,7 @@ export function createPacketPairAnswer(deps: BuilderDependencies) {
       missingContext: [],
       confidence: selectedDiagnosis?.confidence || (pairs.length ? "high" : "low"),
       suggestedActions: pairs.length ? [input.suggestedAction] : ["确认时间范围、抓包方向和是否包含故障时段。"],
-      handoffAgent: "EvidenceAgent"
+      handoffAgent: "HypothesisAgent"
     };
   };
 }

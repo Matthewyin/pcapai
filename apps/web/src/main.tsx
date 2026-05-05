@@ -419,6 +419,58 @@ function formatApiError(data: unknown) {
   return JSON.stringify(data);
 }
 
+function friendlyAgentName(name?: string) {
+  if (!name) return "";
+  if (name === "EvidenceAgent") return "假设验证 Agent";
+  if (name === "HypothesisAgent") return "假设验证 Agent";
+  if (name === "TriageAgent") return "诊断访谈 Agent";
+  if (name === "DiagnosticInterviewAgent") return "诊断访谈 Agent";
+  if (name === "PathAgent") return "路径还原 Agent";
+  if (name === "ProtocolAgent") return "协议诊断 Agent";
+  if (name === "ReportAgent") return "报告 Agent";
+  return name;
+}
+
+function normalizeThoughtForDisplay(text: string) {
+  if (!text.trim()) return null;
+  const displayText = text
+    .replace(/Leader Intent Planner/g, "规划")
+    .replace(/Chain Planner/g, "规划");
+  const cleanedText = displayText.replace(/^▸\s*/, "").trim();
+  if (displayText.includes("使用模型：")) return null;
+  if (displayText === "规划 正在规划分析步骤。") return "规划：正在识别问题并选择分析路径。";
+  if (displayText.startsWith("规划 输出：")) return null;
+  if (displayText.startsWith("规划 识别：")) {
+    const planKind = displayText.match(/^规划 识别：(chain|single)（([^）]+)）/);
+    return planKind ? `规划：已生成${planKind[1] === "chain" ? "多步" : "单步"}分析计划，置信度 ${planKind[2]}。` : "规划：已生成分析计划。";
+  }
+  if (displayText.startsWith("规划 正在判断用户意图。")) return "规划：正在识别问题意图。";
+  if (cleanedText.startsWith("开始分析链")) return `规划：${cleanedText}`;
+  if (/^步骤 \d+\/\d+/.test(cleanedText)) return `工具查询：${cleanedText}`;
+  if (/^✗ 步骤/.test(cleanedText)) return `执行失败：${cleanedText.replace(/^✗\s*/, "")}`;
+  if (cleanedText.startsWith("分析链完成")) return "综合解读：分析链完成。";
+  if (cleanedText.startsWith("调用 tshark-query MCP")) return `工具查询：${cleanedText.replace(/^调用 tshark-query MCP 的?/, "").trim()}`;
+  if (cleanedText.startsWith("已保存") || cleanedText.includes("EvidenceCard") || cleanedText.includes("证据卡")) return `证据生成：${cleanedText}`;
+  if (cleanedText.startsWith("综合解读")) return "综合解读：正在基于证据生成结论。";
+  return cleanedText;
+}
+
+function appendThought(message: ChatMessage, text: string) {
+  const thought = normalizeThoughtForDisplay(text);
+  if (!thought) return message;
+  const thoughts = message.thoughts || [];
+  if (thoughts[thoughts.length - 1] === thought || thoughts.includes(thought)) return message;
+  return { ...message, thoughts: [...thoughts, thought] };
+}
+
+function displayThoughts(message: ChatMessage) {
+  return (message.thoughts || []).reduce<string[]>((items, text) => {
+    const thought = normalizeThoughtForDisplay(text);
+    if (thought && !items.includes(thought)) items.push(thought);
+    return items;
+  }, []);
+}
+
 function runKindLabel(kind: AnalysisRun["kind"]) {
   if (kind === "capture_update") return "数据更新";
   if (kind === "parse") return "原始解析";
@@ -683,13 +735,23 @@ function App() {
   }
 
   async function loadCaseHistory() {
-    const response = await fetch("/api/cases");
-    const data = await response.json();
-    if (response.ok) {
-      const cases = data.cases || [];
-      setCaseHistory(cases);
-      setSelectedCaseIds((ids) => ids.filter((id) => cases.some((item: CaseSummary) => item.caseId === id)));
+    try {
+      const response = await fetch("/api/cases");
+      const data = await response.json();
+      if (response.ok) {
+        const cases = data.cases || [];
+        setCaseHistory(cases);
+        setSelectedCaseIds((ids) => ids.filter((id) => cases.some((item: CaseSummary) => item.caseId === id)));
+        return cases as CaseSummary[];
+      }
+    } catch {
+      setStatus("加载历史会话失败。");
     }
+    return [] as CaseSummary[];
+  }
+
+  function findMostRecentCase(cases: CaseSummary[]) {
+    return [...cases].sort((left, right) => right.updatedAt - left.updatedAt)[0];
   }
 
   function toggleCaseSelection(caseId: string) {
@@ -789,11 +851,14 @@ function App() {
       if (restoreRunId && restoreRunId !== data.activeRunId) {
         window.setTimeout(() => void openAnalysisRunByCaseId(data.spec.caseId, restoreRunId), 0);
       }
+      setStatus("历史案例已加载。");
+      return true;
     } else {
       localStorage.removeItem(LAST_CASE_ID_KEY);
       localStorage.removeItem(LAST_RUN_ID_KEY);
     }
-    setStatus(response.ok ? "历史案例已加载。" : formatApiError(data));
+    setStatus(formatApiError(data));
+    return false;
   }
 
   function openSettingsMenuPage(nextPage: "history" | "settings" | "help") {
@@ -887,7 +952,7 @@ function App() {
       body: JSON.stringify({ pcapFilename: card.pcapFilename, displayFilter, frameNumber: card.frameNumber, queryRunId: card.queryRunId, cardId: card.cardId })
     });
     const data = await response.json();
-    if (response.ok && data.graph) setGraph(data.graph);
+    if (response.ok) void refreshGraph(graph.spec.caseId);
     setStatus(response.ok ? "已请求本地 Wireshark 打开证据过滤器并定位对应 frame。" : formatApiError(data));
   }
 
@@ -928,7 +993,7 @@ function App() {
         })
       });
       const data = await response.json();
-      if (response.ok && data.graph) setGraph(data.graph);
+      if (response.ok) void refreshGraph(graph.spec.caseId);
       setStatus(response.ok ? "已按执行轨迹打开 Wireshark 证据。" : formatApiError(data));
       return;
     }
@@ -954,6 +1019,10 @@ function App() {
   }
 
   function toolRunTitle(run: ToolRun) {
+    if (run.status === "error") return "执行失败";
+    if (run.kind === "planner") return "规划";
+    if (run.kind === "mcp") return run.target === "open_in_wireshark" ? "Wireshark" : "工具查询";
+    if (run.kind === "agent") return "综合解读";
     return run.intent || run.target;
   }
 
@@ -987,7 +1056,7 @@ function App() {
       body: JSON.stringify({ pcapFilename, displayFilter: correlation.targetDisplayFilter, queryRunId: activeQueryRun.queryRunId, cardId: sourceCard?.cardId })
     });
     const data = await response.json();
-    if (response.ok && data.graph) setGraph(data.graph);
+    if (response.ok) void refreshGraph(graph.spec.caseId);
     setStatus(response.ok ? "已请求 Wireshark 打开 L7 关联的 TCP 过滤器。" : formatApiError(data));
   }
 
@@ -1439,7 +1508,7 @@ function App() {
           setChatMessages((messages) => messages.map((message) => message.id === assistantId ? {
             ...message,
             content: uploadResult.agentAnswer?.answer || "",
-            thoughts: uploadResult.agentAnswer?.thoughts || [],
+            thoughts: (uploadResult.agentAnswer?.thoughts || []).map(normalizeThoughtForDisplay).filter((item): item is string => Boolean(item)),
             evidenceCards: uploadResult.agentAnswer?.evidenceCards || [],
             protocolCorrelations: uploadResult.agentAnswer?.protocolCorrelations || [],
             streaming: false
@@ -1478,18 +1547,19 @@ function App() {
       if (!event || !dataLine) return;
       const data = JSON.parse(dataLine);
       if (event === "thought") {
-        setChatMessages((messages) => messages.map((message) => message.id === assistantId ? { ...message, thoughts: [...(message.thoughts || []), data.text] } : message));
+        setChatMessages((messages) => messages.map((message) => message.id === assistantId ? appendThought(message, data.text || "") : message));
       } else if (event === "chain_start") {
-        setChatMessages((messages) => messages.map((message) => message.id === assistantId ? { ...message, thoughts: [...(message.thoughts || []), `开始分析链（共 ${data.stepCount} 步）`] } : message));
+        setChatMessages((messages) => messages.map((message) => message.id === assistantId ? appendThought(message, `规划：开始分析链（共 ${data.stepCount} 步）。`) : message));
       } else if (event === "step_start") {
-        setChatMessages((messages) => messages.map((message) => message.id === assistantId ? { ...message, thoughts: [...(message.thoughts || []), `▸ 步骤 ${data.index + 1}/${data.total}：${data.purpose}`] } : message));
+        const phase = data.intent === "llm_explain" ? "综合解读" : "工具查询";
+        setChatMessages((messages) => messages.map((message) => message.id === assistantId ? appendThought(message, `${phase}：步骤 ${data.index + 1}/${data.total}，${data.purpose}`) : message));
       } else if (event === "step_done") {
         const stepCards = Array.isArray(data.evidenceCards) ? data.evidenceCards : [];
         setChatMessages((messages) => messages.map((message) => {
           if (message.id !== assistantId) return message;
-          const updated = { ...message };
+          let updated = { ...message };
           if (data.status === "error") {
-            updated.thoughts = [...(updated.thoughts || []), `  ✗ 步骤 ${data.index + 1} 失败：${data.summary}`];
+            updated = appendThought(updated, `执行失败：步骤 ${data.index + 1}，${data.summary}`);
           }
           if (stepCards.length) {
             const se = { ...(updated.stepEvidence || {}) };
@@ -1499,13 +1569,12 @@ function App() {
           return updated;
         }));
       } else if (event === "chain_done") {
-        const summaries = (data.summaries || []).map((s: { stepId: string; status: string }, i: number) => `${i + 1}. ${s.status}`).join("；");
-        setChatMessages((messages) => messages.map((message) => message.id === assistantId ? { ...message, thoughts: [...(message.thoughts || []), `分析链完成：${summaries}`] } : message));
+        setChatMessages((messages) => messages.map((message) => message.id === assistantId ? appendThought(message, "综合解读：分析链完成。") : message));
       } else if (event === "delta") {
         setChatMessages((messages) => messages.map((message) => message.id === assistantId ? { ...message, content: message.content + data.text } : message));
       } else if (event === "done") {
         setAnswer(data.answer || "");
-        setChatMessages((messages) => messages.map((message) => message.id === assistantId ? { ...message, content: data.answer || message.content, evidenceCards: data.evidenceCards || [], suggestedQueries: data.suggestedQueries || [], evidenceIds: data.evidenceIds || [], packetIds: data.packetIds || [], findingIds: data.findingIds || [], sessionLinkIds: data.sessionLinkIds || [], handoffAgent: data.handoffAgent || undefined, confidence: data.confidence || undefined, missingContext: data.missingContext || [], suggestedActions: data.suggestedActions || [], protocolCorrelations: data.protocolCorrelations || [], followUpQuestions: data.followUpQuestions || [], diagnosticPhase: data.diagnosticPhase || undefined, hypotheses: data.hypotheses || [], streaming: false } : message));
+        setChatMessages((messages) => messages.map((message) => message.id === assistantId ? { ...message, content: data.answer || message.content, evidenceCards: data.evidenceCards || [], suggestedQueries: data.suggestedQueries || [], evidenceIds: data.evidenceIds || [], packetIds: data.packetIds || [], findingIds: data.findingIds || [], sessionLinkIds: data.sessionLinkIds || [], handoffAgent: friendlyAgentName(data.handoffAgent) || undefined, confidence: data.confidence || undefined, missingContext: data.missingContext || [], suggestedActions: data.suggestedActions || [], protocolCorrelations: data.protocolCorrelations || [], followUpQuestions: data.followUpQuestions || [], diagnosticPhase: data.diagnosticPhase || undefined, hypotheses: data.hypotheses || [], streaming: false } : message));
         void refreshGraph(currentCaseId);
       } else if (event === "error") {
         setChatMessages((messages) => messages.map((message) => message.id === assistantId ? { ...message, content: data.error, streaming: false } : message));
@@ -1553,7 +1622,8 @@ function App() {
       </div>`).join("");
     const diagSections: string[] = [];
     if (message.confidence) diagSections.push(`<div class="diag-item"><strong>置信度</strong><span>${esc(message.confidence)}</span></div>`);
-    if (message.handoffAgent) diagSections.push(`<div class="diag-item"><strong>Agent</strong><span>${esc(message.handoffAgent)}</span></div>`);
+    const agentLabel = friendlyAgentName(message.handoffAgent);
+    if (agentLabel) diagSections.push(`<div class="diag-item"><strong>Agent</strong><span>${esc(agentLabel)}</span></div>`);
     if (message.missingContext?.length) diagSections.push(`<div class="diag-item"><strong>缺失上下文</strong><ul>${message.missingContext.map((c) => `<li>${esc(c)}</li>`).join("")}</ul></div>`);
     if (message.suggestedActions?.length) diagSections.push(`<div class="diag-item"><strong>建议动作</strong><ul>${message.suggestedActions.map((a) => `<li>${esc(a)}</li>`).join("")}</ul></div>`);
     if (message.findingIds?.length) diagSections.push(`<div class="diag-item"><strong>Findings</strong><div class="id-list">${message.findingIds.map((id) => `<code>${esc(id)}</code>`).join(" ")}</div></div>`);
@@ -1599,9 +1669,10 @@ function openWireshark(pcap,filter){fetch("${window.location.origin}/api/cases/$
   }
 
   async function copyMessage(message: ChatMessage) {
+    const traceItems = displayThoughts(message);
     const text = [
       `${message.role === "user" ? "你" : "Agent"}：`,
-      message.thoughts?.length ? `执行轨迹：\n${message.thoughts.map((thought, index) => `${index + 1}. ${thought}`).join("\n")}` : "",
+      traceItems.length ? `执行轨迹：\n${traceItems.map((thought, index) => `${index + 1}. ${thought}`).join("\n")}` : "",
       message.content || (message.streaming ? "等待模型返回..." : ""),
       message.evidenceCards?.length ? `证据卡片：\n${message.evidenceCards.map((card) => `- ${card.title}: ${card.summary}`).join("\n")}` : ""
     ].filter(Boolean).join("\n\n");
@@ -1654,9 +1725,19 @@ function openWireshark(pcap,filter){fetch("${window.location.origin}/api/cases/$
     void loadLlmSettings();
     void loadLlmProfiles();
     void loadLlmRuntime();
-    void loadCaseHistory();
-    const lastCaseId = localStorage.getItem(LAST_CASE_ID_KEY);
-    if (lastCaseId) void openCase(lastCaseId, localStorage.getItem(LAST_RUN_ID_KEY));
+    const restoreCase = async () => {
+      const cases = await loadCaseHistory();
+      const lastCaseId = localStorage.getItem(LAST_CASE_ID_KEY);
+      const lastRunId = localStorage.getItem(LAST_RUN_ID_KEY);
+      if (lastCaseId && cases.some((item) => item.caseId === lastCaseId)) {
+        if (await openCase(lastCaseId, lastRunId)) return;
+      }
+      localStorage.removeItem(LAST_CASE_ID_KEY);
+      localStorage.removeItem(LAST_RUN_ID_KEY);
+      const fallbackCase = findMostRecentCase(cases);
+      if (fallbackCase) await openCase(fallbackCase.caseId, null);
+    };
+    void restoreCase();
   }, []);
 
   React.useEffect(() => {
@@ -2275,10 +2356,10 @@ function openWireshark(pcap,filter){fetch("${window.location.origin}/api/cases/$
                       {copiedMessageId === message.id ? "已复制" : "复制"}
                     </button>
                   </div>
-                  {message.thoughts?.length ? (
+                  {displayThoughts(message).length ? (
                     <details className="thoughtBox" open>
                       <summary>执行轨迹</summary>
-                      <ol>{message.thoughts.map((thought, index) => <li key={`${message.id}-thought-${index}`}>{thought}</li>)}</ol>
+                      <ol>{displayThoughts(message).map((thought, index) => <li key={`${message.id}-thought-${index}`}>{thought}</li>)}</ol>
                     </details>
                   ) : null}
                   {message.role === "assistant" && message.stepEvidence && Object.keys(message.stepEvidence).length ? (

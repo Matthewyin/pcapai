@@ -62,7 +62,7 @@ export function createAgentAnswerService(input: {
       missingContext: hasResult ? [] : ["当前查询没有命中通讯对或协议证据"],
       confidence: diagnosis?.confidence || (hasResult ? "high" : "needs_context"),
       suggestedActions: diagnosis?.nextSteps.length ? diagnosis.nextSteps : queryRun.conversations.length ? ["在右侧通讯对列表选择目标通讯对，查看路径和 Wireshark 过滤器。"] : hasResult ? ["点击证据卡片的 Wireshark 按钮查看协议证据。"] : ["放宽时间、地址或端口条件后重新查询。"],
-      handoffAgent: queryRun.protocolCorrelations.length ? "ProtocolAgent" : queryRun.path ? "PathAgent" : "EvidenceAgent"
+      handoffAgent: queryRun.protocolCorrelations.length ? "ProtocolAgent" : queryRun.path ? "PathAgent" : "HypothesisAgent"
     };
   }
 
@@ -101,7 +101,7 @@ export function createAgentAnswerService(input: {
         missingContext: ["缺少 QueryRun"],
         confidence: "needs_context",
         suggestedActions: ["先输入时间段、源地址、目的地址和端口，生成通讯对候选。"],
-        handoffAgent: "TriageAgent"
+        handoffAgent: "DiagnosticInterviewAgent"
       };
     }
     if (/路径|链路|断点|哪一跳|上游|下游|边/.test(question) && !queryRun.path) {
@@ -244,7 +244,7 @@ export function createAgentAnswerService(input: {
       missingContext: [],
       confidence: "certain",
       suggestedActions: ["先上传 pcap，然后用故障时间、源/目的 IP、端口提出一次访问查询。"],
-      handoffAgent: "TriageAgent"
+      handoffAgent: "DiagnosticInterviewAgent"
     };
   }
 
@@ -266,7 +266,7 @@ export function createAgentAnswerService(input: {
         "示例：查询 HH:MM:SS 到 HH:MM:SS，源 IP 到目的 IP 的端口号重传连接。",
         "也可以先问：给出前10个有 reset 的 TCP session pair。"
       ],
-      handoffAgent: "TriageAgent"
+      handoffAgent: "DiagnosticInterviewAgent"
     };
   }
 
@@ -305,8 +305,8 @@ export function createAgentAnswerService(input: {
       ...answer,
       answer: compactAnswer,
       thoughts: [
-        `Leader Intent Planner：${plan.intent}（${plan.confidence}）${plan.reason ? `，${plan.reason}` : ""}`,
-        ...(plan.missingContext.length ? [`Planner 缺失上下文：${plan.missingContext.join("、")}`] : []),
+        `规划：${plan.intent}（${plan.confidence}）${plan.reason ? `，${plan.reason}` : ""}`,
+        ...(plan.missingContext.length ? [`规划缺失上下文：${plan.missingContext.join("、")}`] : []),
         ...(answer.thoughts || [])
       ]
     };

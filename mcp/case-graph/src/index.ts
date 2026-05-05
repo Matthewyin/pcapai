@@ -772,11 +772,16 @@ server.registerTool(
     if (!filtered.length) {
       return { content: [{ type: "text", text: "暂无洞察分析结果。" }] };
     }
-    const lines = filtered.map((insight) => {
+    const maxLines = 50;
+    const capped = filtered.slice(0, maxLines);
+    const lines = capped.map((insight) => {
       const sev = insight.severity === "critical" ? "严重" : insight.severity === "warning" ? "警告" : "信息";
       return `[${sev}] [${insight.type}] ${insight.description}${insight.scenario ? `\n  可能场景：${insight.scenario}` : ""}`;
     });
-    return { content: [{ type: "text", text: `共 ${filtered.length} 条洞察：\n\n${lines.join("\n\n")}` }] };
+    const summary = filtered.length > maxLines
+      ? `共 ${filtered.length} 条洞察（展示前 ${maxLines} 条）：\n\n${lines.join("\n\n")}\n\n...还有 ${filtered.length - maxLines} 条未展示。`
+      : `共 ${filtered.length} 条洞察：\n\n${lines.join("\n\n")}`;
+    return { content: [{ type: "text", text: summary }] };
   }
 );
 

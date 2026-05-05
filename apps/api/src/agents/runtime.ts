@@ -436,7 +436,8 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
 
   const tempDirectory = mkdtempSync(path.join(tmpdir(), "pcapai-case-graph-"));
   const caseGraphPath = path.join(tempDirectory, "case.json");
-  writeFileSync(caseGraphPath, JSON.stringify(input.graph));
+  const agentGraph = { ...input.graph, insights: [] };
+  writeFileSync(caseGraphPath, JSON.stringify(agentGraph));
   input.onTrace?.(`已生成只读 case graph 快照：${input.graph.spec.caseId}，captures=${input.graph.captures.length}，queryRuns=${input.graph.queryRuns.length}。`);
   const caseGraphMcp = new MCPServerStdio({
     name: "case-graph-mcp",

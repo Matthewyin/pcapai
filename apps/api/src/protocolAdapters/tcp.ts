@@ -215,7 +215,7 @@ async function tcpIssuesOverviewAnswer(ctx: ProtocolAdapterContext, graph: Param
         { key: "zero_window" as const, label: "TCP Zero Window", status: "ok" as const, summary: "未发现 Zero Window 包。", packetIds: [], nextSteps: [] }
       ],
       suggestedActions: ["尝试调整时间范围或 IP/端口过滤条件。"],
-      handoffAgent: "EvidenceAgent"
+      handoffAgent: "HypothesisAgent"
     });
   }
   const rstPairs = ctx.groupPacketPairs(rstResult.packets, query.displayFilter);
@@ -264,7 +264,7 @@ async function tcpIssuesOverviewAnswer(ctx: ProtocolAdapterContext, graph: Param
       retransPairs.length ? "用 \"查看重传通信对\" 查看详细重传统计。" : "",
       zeroWinPairs.length ? "用 \"查看 Zero Window 通信对\" 查看详细 Zero Window 统计。" : ""
     ].filter(Boolean),
-    handoffAgent: "EvidenceAgent"
+    handoffAgent: "HypothesisAgent"
   });
 }
 
