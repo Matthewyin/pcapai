@@ -1017,7 +1017,7 @@ export function createAgentRouter() {
     }
     const requestStartedAt = Date.now();
     const plannerStartedAt = Date.now();
-    const plan = await planUserIntent(graph, parsedRequest.data.question);
+    const plan = await planUserIntent(graph, parsedRequest.data.question, undefined, parsedRequest.data.chatHistory);
     const plannerDurationMs = Date.now() - plannerStartedAt;
     try {
       const plannedResult = await executeAgentIntentPlan(graph, parsedRequest.data.question, plan);
@@ -1287,7 +1287,7 @@ export function createAgentRouter() {
 
     const requestStartedAt = Date.now();
     const plannerStartedAt = Date.now();
-    const chainPlan = await planChain(graph, parsedRequest.data.question, (text) => writeStreamEvent(res, "thought", { text }));
+    const chainPlan = await planChain(graph, parsedRequest.data.question, (text) => writeStreamEvent(res, "thought", { text }), parsedRequest.data.chatHistory);
     const plannerDurationMs = Date.now() - plannerStartedAt;
     const stepSummary = chainPlan.steps.map((step) => `${step.intent}(${step.purpose})`).join(" → ");
     writeStreamEvent(res, "thought", {

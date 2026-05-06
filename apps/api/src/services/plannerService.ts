@@ -71,7 +71,7 @@ export function createPlannerService(input: {
     return { intent: "llm_explain", confidence: "low", reason: "本地兜底未识别到确定性工具意图。", missingContext: [] };
   }
 
-  async function planUserIntent(graph: CaseGraph, question: string, onTrace?: (message: string) => void) {
+  async function planUserIntent(graph: CaseGraph, question: string, onTrace?: (message: string) => void, chatHistory?: Array<{ role: string; content: string }>) {
     if (!input.hasLlmApiKey()) {
       const plan = fallbackIntentPlan(graph, question);
       const fallbackPlan = { ...plan, reason: `未配置 LLM API Key，使用本地兜底意图计划。${plan.reason}` };
@@ -79,7 +79,7 @@ export function createPlannerService(input: {
       return fallbackPlan;
     }
     try {
-      return await runIntentPlanner({ graph, question, onTrace });
+      return await runIntentPlanner({ graph, question, chatHistory, onTrace });
     } catch (error) {
       const plan = fallbackIntentPlan(graph, question);
       const fallbackPlan = { ...plan, reason: `Leader Intent Planner 调用失败，切换到本地兜底计划：${error instanceof Error ? error.message : String(error)}。${plan.reason}` };
@@ -101,14 +101,14 @@ export function createPlannerService(input: {
     });
   }
 
-  async function planChain(graph: CaseGraph, question: string, onTrace?: (message: string) => void): Promise<AnalysisChainPlan> {
+  async function planChain(graph: CaseGraph, question: string, onTrace?: (message: string) => void, chatHistory?: Array<{ role: string; content: string }>): Promise<AnalysisChainPlan> {
     if (!input.hasLlmApiKey()) {
       const plan = fallbackChainPlan(graph, question);
       onTrace?.(`未配置 LLM API Key，使用本地兜底单步计划。planKind=${plan.planKind}。`);
       return plan;
     }
     try {
-      return await runChainPlanner({ graph, question, onTrace });
+      return await runChainPlanner({ graph, question, chatHistory, onTrace });
     } catch (error) {
       const plan = fallbackChainPlan(graph, question);
       const fallbackChain = AnalysisChainPlanSchema.parse({

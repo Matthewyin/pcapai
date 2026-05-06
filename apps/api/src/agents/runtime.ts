@@ -37,6 +37,7 @@ export type AgentIntentPlan = z.infer<typeof AgentIntentSchema>;
 type IntentPlannerInput = {
   graph: CaseGraph;
   question: string;
+  chatHistory?: ChatMessage[];
   onTrace?: (message: string) => void;
 };
 
@@ -231,7 +232,9 @@ function parseChainPlanOutput(output: unknown, question: string): AnalysisChainP
   return AnalysisChainPlanSchema.parse(value);
 }
 
-function intentPlannerContext(graph: CaseGraph, question: string) {
+type ChatMessage = { role: string; content: string };
+
+function intentPlannerContext(graph: CaseGraph, question: string, chatHistory?: ChatMessage[]) {
   const activeQueryRun = graph.queryRuns.find((run) => run.queryRunId === graph.activeQueryRunId) || graph.queryRuns[0];
   return {
     question,
@@ -255,6 +258,16 @@ function intentPlannerContext(graph: CaseGraph, question: string) {
       hasPath: Boolean(activeQueryRun.path),
       hasDiagnosis: Boolean(activeQueryRun.selectedDiagnosis)
     } : null,
+    queryRunSummaries: graph.queryRuns.slice(-5).map((qr) => ({
+      queryRunId: qr.queryRunId,
+      question: qr.question,
+      protocol: qr.protocol,
+      evidenceCardCount: qr.evidenceCards?.length || 0
+    })),
+    chatHistory: chatHistory?.slice(-6).map((m) => ({
+      role: m.role,
+      content: m.content.slice(0, 200)
+    })) || [],
     mappingHintCount: graph.mappingHints.length,
     timeOffsetHintCount: graph.timeOffsetHints.length
   };
@@ -306,7 +319,7 @@ export async function runIntentPlanner(input: IntentPlannerInput): Promise<Agent
     modelSettings: modelSettings()
   });
   input.onTrace?.("Leader Intent Planner 正在判断用户意图。");
-  const result = await run(plannerAgent, JSON.stringify(intentPlannerContext(input.graph, input.question)), { maxTurns: 2 });
+  const result = await run(plannerAgent, JSON.stringify(intentPlannerContext(input.graph, input.question, input.chatHistory)), { maxTurns: 2 });
   const plan = parseIntentOutput(result.finalOutput);
   input.onTrace?.(`Leader Intent Planner 输出：${plan.intent}（${plan.confidence}）- ${plan.reason}`);
   return plan;
@@ -315,6 +328,7 @@ export async function runIntentPlanner(input: IntentPlannerInput): Promise<Agent
 type ChainPlannerInput = {
   graph: CaseGraph;
   question: string;
+  chatHistory?: ChatMessage[];
   onTrace?: (message: string) => void;
 };
 
@@ -366,7 +380,7 @@ export async function runChainPlanner(input: ChainPlannerInput): Promise<Analysi
     modelSettings: modelSettings()
   });
   input.onTrace?.("Chain Planner 正在规划分析步骤。");
-  const result = await run(chainPlannerAgent, JSON.stringify(intentPlannerContext(input.graph, input.question)), { maxTurns: 2 });
+  const result = await run(chainPlannerAgent, JSON.stringify(intentPlannerContext(input.graph, input.question, input.chatHistory)), { maxTurns: 2 });
   const plan = parseChainPlanOutput(result.finalOutput, input.question);
   const stepSummary = plan.steps.map((step: AnalysisChainStep) => `${step.intent}(${step.purpose})`).join(" → ");
   input.onTrace?.(`Chain Planner 输出：${plan.planKind}（${plan.confidence}）${stepSummary}`);
