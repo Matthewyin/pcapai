@@ -268,6 +268,11 @@ function intentPlannerContext(graph: CaseGraph, question: string, chatHistory?: 
       role: m.role,
       content: m.content.slice(0, 200)
     })) || [],
+    memory: {
+      topology: graph.memory?.topology || "",
+      findings: graph.memory?.findings?.slice(-10) || [],
+      userNotes: graph.memory?.userNotes || []
+    },
     mappingHintCount: graph.mappingHints.length,
     timeOffsetHintCount: graph.timeOffsetHints.length
   };
@@ -497,6 +502,9 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
     instructions: [
       "你是 pcapAI 的诊断访谈专家。你的职责是通过多轮对话收集故障信息和网络拓扑。",
       "",
+      "## 记忆",
+      "先调用 get_case_memory 读取已有记忆。当用户提供网络拓扑或关键补充信息时，调用 update_case_memory 保存（topology 参数覆盖，userNotes 追加）。避免重复询问已记录的信息。",
+      "",
       "## 诊断访谈流程",
       "",
       "### 第一步：症状收集",
@@ -674,7 +682,8 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
     name: "ProtocolAgent",
     instructions: [
       "你是 pcapAI 的协议专项诊断专家，具备网络拓扑感知和假设验证能力。",
-      "必须先调用 load_case_graph，再调用 get_network_topology 了解网络设备和抓包位置。",
+      "必须先调用 load_case_graph，再调用 get_case_memory 了解已有的拓扑和分析结论，避免重复分析。",
+      "然后调用 get_network_topology 了解网络设备和抓包位置。",
       "然后调用 get_active_query_run、get_protocol_correlations、get_evidence_cards 和 get_query_diagnosis。",
       "当需要查询原始协议数据（如 TCP RST、重传、Zero Window、DNS、TLS、HTTP、ICMP、UDP 包）时，直接调用 tshark-query MCP 的工具。调用时 capturesJson 参数从 case graph 的 captures 字段获取（JSON 字符串化的 [{nodeId, pcapFilename}] 数组）。",
       "可用的 tshark-query 工具包括：list_tcp_resets、list_tcp_retransmissions、list_tcp_zero_window、list_dns_packets、list_tls_packets、list_http_packets、list_icmp_events、list_udp_packets、query_packets、build_display_filter、get_network_statistics。",
@@ -706,10 +715,18 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
     mcpServers
   });
 
+  const memoryInstruction = [
+    input.graph.memory?.topology ? `## 已确认的网络拓扑\n${input.graph.memory.topology}\n` : "",
+    input.graph.memory?.findings?.length ? `## 已有分析结论\n${input.graph.memory.findings.map((f) => `- ${f.query}：${f.conclusion}`).join("\n")}\n` : "",
+    input.graph.memory?.userNotes?.length ? `## 用户补充信息\n${input.graph.memory.userNotes.join("\n")}\n` : ""
+  ].filter(Boolean).join("\n");
+
   const leaderAgent = new Agent({
     name: "PcapTroubleshootingLeaderAgent",
     instructions: [
       "你是 pcapAI 的网络排障诊断 leader。你的工作不是翻译 tshark 输出，而是像高级网络工程师一样诊断故障。",
+      "",
+      memoryInstruction,
       "",
       "## 诊断流程",
       "",

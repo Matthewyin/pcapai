@@ -314,6 +314,36 @@ async function loadGraphWithInsights(caseId: string): Promise<CaseGraph> {
 }
 
 const setCaseGraph = (caseId: string, graph: CaseGraph) => cases.set(caseId, graph);
+
+// 从 QueryRuns 自动提取 findings 到 memory
+function syncMemoryFromQueryRuns(graph: CaseGraph): CaseGraph {
+  const existingIds = new Set((graph.memory?.findings || []).map((f) => f.queryRunId).filter(Boolean));
+  const newFindings = graph.queryRuns
+    .filter((qr) => !existingIds.has(qr.queryRunId))
+    .map((qr) => {
+      const problems = qr.selectedDiagnosis?.checks?.filter((c) => c.status === "problem").map((c) => c.summary || c.label) || [];
+      const conclusion = problems.length ? problems.join("；") : qr.selectedDiagnosis?.summary || "完成分析";
+      return { query: qr.question, conclusion, queryRunId: qr.queryRunId };
+    });
+  if (!newFindings.length) return graph;
+  const memory = { ...graph.memory, findings: [...(graph.memory?.findings || []), ...newFindings].slice(-20) };
+  const nextGraph = { ...graph, memory };
+  writeCaseGraph(nextGraph);
+  cases.set(graph.spec.caseId, nextGraph);
+  return nextGraph;
+}
+
+function updateMemory(graph: CaseGraph, patch: Partial<{ topology: string; userNotes: string[] }>): CaseGraph {
+  const memory = {
+    ...graph.memory,
+    ...patch,
+    userNotes: patch.userNotes ? [...(graph.memory?.userNotes || []), ...patch.userNotes] : graph.memory?.userNotes
+  };
+  const nextGraph = { ...graph, memory };
+  writeCaseGraph(nextGraph);
+  cases.set(graph.spec.caseId, nextGraph);
+  return nextGraph;
+}
 const packetPairAnswer = createPacketPairAnswer({
   conversationPacketLimit: apiConfig.query.conversationPacketLimit,
   retainedQueryRunLimit: apiConfig.query.retainedQueryRunLimit,
@@ -1339,6 +1369,7 @@ export function createAgentRouter() {
           lastModel: apiConfig.llm.model,
           lastBaseURL: apiConfig.llm.baseURL
         });
+        syncMemoryFromQueryRuns(loadGraph(graph.spec.caseId));
         writeStreamEvent(res, "chain_done", { chainId: chainPlan.chainId, summaries: results.map((r) => ({ stepId: r.stepId, status: r.status })) });
         writeStreamEvent(res, "delta", { text: enrichedAnswer.answer });
         writeStreamEvent(res, "done", enrichedAnswer);
@@ -1417,6 +1448,7 @@ export function createAgentRouter() {
         for (let index = 0; index < plannedAnswer.answer.length; index += 24) {
           writeStreamEvent(res, "delta", { text: plannedAnswer.answer.slice(index, index + 24) });
         }
+        syncMemoryFromQueryRuns(loadGraph(graph.spec.caseId));
         writeStreamEvent(res, "done", plannedAnswer);
       } catch (error) {
         const message = `LLM 调用失败：${error instanceof Error ? error.message : String(error)}`;

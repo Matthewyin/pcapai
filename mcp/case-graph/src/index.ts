@@ -62,6 +62,11 @@ type CaseGraph = {
     detail: Record<string, unknown>;
     scenario?: string;
   }>;
+  memory?: {
+    topology: string;
+    findings: Array<{ query: string; conclusion: string; queryRunId?: string }>;
+    userNotes: string[];
+  };
 };
 
 const server = new McpServer({ name: "case-graph-mcp", version: "0.1.0" });
@@ -804,6 +809,44 @@ server.registerTool(
   async () => ({
     content: [{ type: "text", text: reportMarkdown(loadGraph()) }]
   })
+);
+
+server.registerTool(
+  "get_case_memory",
+  {
+    title: "Get case memory",
+    description: "读取当前案例的记忆：已确认的网络拓扑、已有分析结论、用户补充信息。",
+    inputSchema: {}
+  },
+  async () => {
+    const graph = loadGraph();
+    return { content: [{ type: "text", text: JSON.stringify(graph.memory || { topology: "", findings: [], userNotes: [] }) }] };
+  }
+);
+
+server.registerTool(
+  "update_case_memory",
+  {
+    title: "Update case memory",
+    description: "更新案例记忆。用于保存用户确认的网络拓扑、补充信息等。topology 会覆盖，userNotes 会追加。",
+    inputSchema: {
+      topology: z.string().optional(),
+      userNotes: z.string().optional()
+    }
+  },
+  async ({ topology, userNotes }) => {
+    const graphPath = process.env.PCAPAI_CASE_GRAPH_PATH;
+    if (!graphPath) throw new Error("PCAPAI_CASE_GRAPH_PATH is required");
+    const graph = loadGraph();
+    const memory = { ...graph.memory } || { topology: "", findings: [], userNotes: [] };
+    if (!memory.findings) memory.findings = [];
+    if (!memory.userNotes) memory.userNotes = [];
+    if (topology) memory.topology = topology;
+    if (userNotes) memory.userNotes = [...memory.userNotes, userNotes];
+    graph.memory = memory;
+    writeFileSync(graphPath, JSON.stringify(graph));
+    return { content: [{ type: "text", text: JSON.stringify({ updated: true, memory }) }] };
+  }
 );
 
 await server.connect(new StdioServerTransport());

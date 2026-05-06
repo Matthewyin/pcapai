@@ -581,6 +581,17 @@ export const TcpStreamContentSchema = z.object({
 });
 export type TcpStreamContent = z.infer<typeof TcpStreamContentSchema>;
 
+export const CaseMemorySchema = z.object({
+  topology: z.string().default(""),
+  findings: z.array(z.object({
+    query: z.string(),
+    conclusion: z.string(),
+    queryRunId: z.string().optional()
+  })).default([]),
+  userNotes: z.array(z.string()).default([])
+});
+export type CaseMemory = z.infer<typeof CaseMemorySchema>;
+
 export const CaseGraphSchema = z.object({
   spec: CaseSpecSchema,
   captures: z.array(CaptureNodeSchema),
@@ -602,7 +613,8 @@ export const CaseGraphSchema = z.object({
   toolRuns: z.array(ToolRunSchema).default([]),
   networkTopology: NetworkTopologySchema.optional(),
   insights: z.array(PacketInsightSchema).default([]),
-  connectionLinks: z.array(ConnectionLinkSchema).default([])
+  connectionLinks: z.array(ConnectionLinkSchema).default([]),
+  memory: CaseMemorySchema.default(() => ({ topology: "", findings: [], userNotes: [] }))
 });
 export type CaseGraph = z.infer<typeof CaseGraphSchema>;
 
