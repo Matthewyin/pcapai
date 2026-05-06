@@ -774,9 +774,12 @@ function summarizeConversations(packets: Array<z.infer<typeof PacketSchema>>, ba
   }).sort((left, right) => left.startTime - right.startTime);
 }
 
+const DEFAULT_PACKET_LIMIT = 100;
+
 async function queryCaptures(capturesJson: string, displayFilter: string, limit?: number) {
   const captures = JSON.parse(capturesJson) as CaptureInput[];
-  return (await Promise.all(captures.map((capture) => queryCapturePackets(capture, displayFilter, limit)))).flat();
+  const effectiveLimit = limit || DEFAULT_PACKET_LIMIT;
+  return (await Promise.all(captures.map((capture) => queryCapturePackets(capture, displayFilter, effectiveLimit)))).flat().slice(0, effectiveLimit);
 }
 
 function packetEvidence(packets: Array<z.infer<typeof PacketSchema>>) {
@@ -885,7 +888,7 @@ server.registerTool(
   "query_packets",
   {
     title: "Query packets",
-    description: "Run tshark over one or more captures and return matching packet summaries.",
+    description: "Run tshark over one or more captures and return matching packet summaries. Default limit 100; set limit explicitly for more.",
     inputSchema: {
       capturesJson: z.string(),
       displayFilter: z.string(),
@@ -894,7 +897,7 @@ server.registerTool(
   },
   async ({ capturesJson, displayFilter, limit }) => {
     const packets = await queryCaptures(capturesJson, displayFilter, limit);
-    return { content: [{ type: "text", text: JSON.stringify({ packets: limit ? packets.slice(0, limit) : packets }) }] };
+    return { content: [{ type: "text", text: JSON.stringify({ packets }) }] };
   }
 );
 
@@ -935,7 +938,7 @@ server.registerTool(
   "list_tcp_resets",
   {
     title: "List TCP resets",
-    description: "Return TCP RST packets matching the filter.",
+    description: "Return TCP RST packets matching the filter. Default limit 100.",
     inputSchema: { capturesJson: z.string(), displayFilter: z.string(), limit: z.number().int().optional() }
   },
   async ({ capturesJson, displayFilter, limit }) => {
@@ -948,7 +951,7 @@ server.registerTool(
   "list_tcp_retransmissions",
   {
     title: "List TCP retransmissions",
-    description: "Return TCP retransmission packets matching the filter.",
+    description: "Return TCP retransmission packets matching the filter. Default limit 100.",
     inputSchema: { capturesJson: z.string(), displayFilter: z.string(), limit: z.number().int().optional() }
   },
   async ({ capturesJson, displayFilter, limit }) => {
@@ -961,7 +964,7 @@ server.registerTool(
   "list_tcp_zero_window",
   {
     title: "List TCP zero window",
-    description: "Return TCP zero window packets matching the filter.",
+    description: "Return TCP zero window packets matching the filter. Default limit 100.",
     inputSchema: { capturesJson: z.string(), displayFilter: z.string(), limit: z.number().int().optional() }
   },
   async ({ capturesJson, displayFilter, limit }) => {
@@ -974,7 +977,7 @@ server.registerTool(
   "list_icmp_events",
   {
     title: "List ICMP events",
-    description: "Return ICMP/ICMPv6 packets matching the filter.",
+    description: "Return ICMP/ICMPv6 packets matching the filter. Default limit 100.",
     inputSchema: { capturesJson: z.string(), displayFilter: z.string(), limit: z.number().int().optional() }
   },
   async ({ capturesJson, displayFilter, limit }) => {
@@ -987,7 +990,7 @@ server.registerTool(
   "list_dns_packets",
   {
     title: "List DNS packets",
-    description: "Return DNS packets matching the filter.",
+    description: "Return DNS packets matching the filter. Default limit 100.",
     inputSchema: { capturesJson: z.string(), displayFilter: z.string(), limit: z.number().int().optional() }
   },
   async ({ capturesJson, displayFilter, limit }) => {
@@ -1000,7 +1003,7 @@ server.registerTool(
   "list_udp_packets",
   {
     title: "List UDP packets",
-    description: "Return UDP packets matching the filter.",
+    description: "Return UDP packets matching the filter. Default limit 100.",
     inputSchema: { capturesJson: z.string(), displayFilter: z.string(), limit: z.number().int().optional() }
   },
   async ({ capturesJson, displayFilter, limit }) => {
@@ -1013,7 +1016,7 @@ server.registerTool(
   "list_tls_packets",
   {
     title: "List TLS packets",
-    description: "Return TLS handshake and alert packets matching the filter.",
+    description: "Return TLS handshake and alert packets matching the filter. Default limit 100.",
     inputSchema: { capturesJson: z.string(), displayFilter: z.string(), limit: z.number().int().optional() }
   },
   async ({ capturesJson, displayFilter, limit }) => {
@@ -1026,7 +1029,7 @@ server.registerTool(
   "list_http_packets",
   {
     title: "List HTTP packets",
-    description: "Return HTTP request and response packets matching the filter.",
+    description: "Return HTTP request and response packets matching the filter. Default limit 100.",
     inputSchema: { capturesJson: z.string(), displayFilter: z.string(), limit: z.number().int().optional() }
   },
   async ({ capturesJson, displayFilter, limit }) => {
