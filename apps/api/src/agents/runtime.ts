@@ -436,7 +436,22 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
 
   const tempDirectory = mkdtempSync(path.join(tmpdir(), "pcapai-case-graph-"));
   const caseGraphPath = path.join(tempDirectory, "case.json");
-  const agentGraph = { ...input.graph, insights: [] };
+  // 精简 agent 图谱：移除 insights 和 queryRuns 中的大数据字段，防止 LLM context 超限
+  const slimQueryRuns = input.graph.queryRuns.map((qr) => ({
+    ...qr,
+    conversations: qr.conversations?.map((c) => ({
+      conversationId: c.conversationId,
+      srcIp: c.srcIp, srcPort: c.srcPort, dstIp: c.dstIp, dstPort: c.dstPort,
+      protocol: c.protocol, packetCount: c.packetCount, byteCount: c.byteCount
+    })) || [],
+    candidateGroups: qr.candidateGroups?.map((g) => ({
+      groupId: g.groupId, conversationIds: g.conversationIds
+    })) || [],
+    evidenceCards: qr.evidenceCards?.map((ec) => ({
+      cardId: ec.cardId, kind: ec.kind, title: ec.title, displayFilter: ec.displayFilter
+    })) || []
+  }));
+  const agentGraph = { ...input.graph, insights: [], queryRuns: slimQueryRuns };
   writeFileSync(caseGraphPath, JSON.stringify(agentGraph));
   input.onTrace?.(`已生成只读 case graph 快照：${input.graph.spec.caseId}，captures=${input.graph.captures.length}，queryRuns=${input.graph.queryRuns.length}。`);
   const caseGraphMcp = new MCPServerStdio({

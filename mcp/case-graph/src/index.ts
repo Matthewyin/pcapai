@@ -428,12 +428,21 @@ server.registerTool(
   "get_query_runs",
   {
     title: "Get query runs",
-    description: "读取当前案例的 QueryRun 列表。",
+    description: "读取当前案例的 QueryRun 摘要列表（不含完整 conversations 和 packets）。",
     inputSchema: {}
   },
-  async () => ({
-    content: [{ type: "text", text: JSON.stringify(loadGraph().queryRuns || []) }]
-  })
+  async () => {
+    const runs = loadGraph().queryRuns || [];
+    const summaries = runs.map((run) => ({
+      queryRunId: run.queryRunId,
+      question: run.question,
+      conversationCount: run.conversations?.length || 0,
+      evidenceCardCount: run.evidenceCards?.length || 0,
+      protocolCorrelationCount: run.protocolCorrelations?.length || 0,
+      diagnosisChecks: run.selectedDiagnosis?.checks?.map((c: { key: string; label: string; status: string; summary: string }) => ({ key: c.key, label: c.label, status: c.status, summary: c.summary }))
+    }));
+    return { content: [{ type: "text", text: JSON.stringify(summaries) }] };
+  }
 );
 
 server.registerTool(
