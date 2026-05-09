@@ -107,6 +107,7 @@ export const PacketSummarySchema = z.object({
   httpRequestUri: z.string().optional(),
   httpResponseCode: z.number().int().optional(),
   httpResponseCodeDescription: z.string().optional(),
+  httpServer: z.string().optional(),
   httpRequestIn: z.number().int().optional(),
   httpResponseIn: z.number().int().optional(),
   httpTime: z.number().optional(),
@@ -535,7 +536,8 @@ export const PacketInsightSchema = z.object({
     "ssh_anomaly",
     "l7_proxy_detected",
     "nat_heuristic",
-    "tcp_connection_split"
+    "tcp_connection_split",
+    "http_uri_anomaly"
   ]),
   severity: z.enum(["info", "warning", "critical"]),
   packetIds: z.array(z.string()),

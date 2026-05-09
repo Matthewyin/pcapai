@@ -22,9 +22,10 @@ function httpLabel(packet: PacketSummary) {
 function httpCardSummary(packet: PacketSummary) {
   const host = packet.httpHost ? `Host=${packet.httpHost}，` : "";
   const uri = packet.httpRequestUri ? `URI=${packet.httpRequestUri}，` : "";
+  const server = packet.httpServer ? `Server=${packet.httpServer}，` : "";
   const code = packet.httpResponseCode !== undefined ? `Status=${packet.httpResponseCode} ${packet.httpResponseCodeDescription || ""}，` : "";
   const latency = packet.httpTime !== undefined ? `耗时=${packet.httpTime}s，` : "";
-  return `${packet.srcIp || "*"} -> ${packet.dstIp || "*"}，${host}${uri}${code}${latency}${packet.summary || "HTTP 事件"}`;
+  return `${packet.srcIp || "*"} -> ${packet.dstIp || "*"}，${host}${uri}${server}${code}${latency}${packet.summary || "HTTP 事件"}`;
 }
 
 function httpCheck(packets: PacketSummary[]) {
@@ -94,9 +95,58 @@ function httpHostDistribution(requests: PacketSummary[]) {
   return [...hosts.entries()].sort((a, b) => b[1] - a[1]).map(([host, count]) => ({ host, count }));
 }
 
+function compareSameEndpointRequests(
+  requests: PacketSummary[],
+  responses: PacketSummary[],
+  allPackets: PacketSummary[]
+) {
+  // 按 (method, uri_path) 聚合请求，匹配对应响应
+  type ReqResp = { request: PacketSummary; response?: PacketSummary };
+  const byEndpoint = new Map<string, ReqResp[]>();
+  for (const req of requests) {
+    const method = req.httpRequestMethod || "";
+    const uri = req.httpRequestUri || "/";
+    const key = `${method} ${uri}`;
+    const list = byEndpoint.get(key) || [];
+    const resp = responses.find((r) => r.httpResponseIn === req.frameNumber);
+    list.push({ request: req, response: resp });
+    byEndpoint.set(key, list);
+  }
+
+  for (const [, reqResps] of byEndpoint) {
+    if (reqResps.length < 2) continue;
+    const codes = new Set(reqResps.map((rr) => rr.response?.httpResponseCode).filter((c): c is number => c !== undefined));
+    if (codes.size < 2) continue;
+
+    const hasError = [...codes].some((c) => c >= 400);
+    const hasOk = [...codes].some((c) => c < 400);
+    if (!hasError || !hasOk) continue;
+
+    const grouped = [...codes].sort((a, b) => a - b).map((code) => {
+      const matching = reqResps.filter((rr) => rr.response?.httpResponseCode === code);
+      const servers = [...new Set(matching.map((rr) => rr.response?.httpServer).filter(Boolean))];
+      const dstIps = [...new Set(matching.map((rr) => rr.request.dstIp).filter(Boolean))];
+      return `${code}(${matching.length}次)${servers.length ? ` Server=${servers.join("/")}` : ""}${dstIps.length > 1 ? ` 目标=${dstIps.join(",")}` : ""}`;
+    });
+
+    const sampleIds = reqResps.flatMap((rr) => [rr.request.packetId, rr.response?.packetId]).filter(Boolean) as string[];
+
+    return {
+      key: "http" as const,
+      label: "同接口不同响应对比",
+      status: "problem" as const,
+      summary: `相同接口 ${reqResps[0].request.httpRequestMethod} ${reqResps[0].request.httpRequestUri} 出现不同响应码：${grouped.join("；")}。`,
+      packetIds: sampleIds.slice(0, 10),
+      nextSteps: ["对比正常和异常请求的 URI 编码、Header、目标 IP 差异，定位错误来源。"]
+    };
+  }
+  return null;
+}
+
 function buildHttpChecks(packets: PacketSummary[], correlations: unknown[]) {
   const requests = packets.filter((packet) => packet.httpRequestMethod);
   const responses = packets.filter((packet) => packet.httpResponseCode !== undefined);
+  const errorResponses = responses.filter((packet) => packet.httpResponseCode !== undefined && packet.httpResponseCode >= 400);
   const checks: Array<{ key: "http"; label: string; status: "ok" | "warn" | "problem" | "unknown"; summary: string; packetIds: string[]; nextSteps: string[] }> = [];
 
   const mainCheck = httpCheck(packets);
@@ -114,11 +164,14 @@ function buildHttpChecks(packets: PacketSummary[], correlations: unknown[]) {
     const errorCodes = distribution.filter((d) => d.code >= 400);
     if (errorCodes.length) {
       const detail = errorCodes.map((d) => `${d.code}×${d.count}`).join("、");
+      const errorPackets = errorCodes.flatMap((d) => d.packetIds.map((pid) => packets.find((p) => p.packetId === pid)).filter(Boolean)) as PacketSummary[];
+      const servers = [...new Set(errorPackets.map((p) => p.httpServer).filter(Boolean))] as string[];
+      const serverInfo = servers.length ? `返回者：${servers.join("、")}。` : "";
       checks.push({
         key: "http",
         label: "HTTP 状态码分布",
         status: "problem",
-        summary: `响应码分布：${distribution.map((d) => `${d.code}(${d.count})`).join("、")}。异常码：${detail}。`,
+        summary: `响应码分布：${distribution.map((d) => `${d.code}(${d.count})`).join("、")}。异常码：${detail}。${serverInfo}`,
         packetIds: errorCodes.flatMap((d) => d.packetIds.slice(0, 3)),
         nextSteps: ["对比不同节点（如 nginx 前后）的 HTTP 状态码差异，定位错误来源。"]
       });
@@ -158,6 +211,12 @@ function buildHttpChecks(packets: PacketSummary[], correlations: unknown[]) {
         nextSteps: []
       });
     }
+  }
+
+  // 同接口正常/异常请求对比
+  if (errorResponses.length && requests.length && responses.length) {
+    const sameEndpointDiff = compareSameEndpointRequests(requests, responses, packets);
+    if (sameEndpointDiff) checks.push(sameEndpointDiff);
   }
 
   return checks;

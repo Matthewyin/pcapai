@@ -3197,6 +3197,76 @@ function analyzeNatHeuristic(packets: PacketSummary[], acc: InsightAccumulator) 
   }
 }
 
+// ── Analyzer: HTTP Request URI Anomaly ────────────────────────────────
+
+function analyzeHttpRequestUriAnomaly(packets: PacketSummary[], acc: InsightAccumulator) {
+  const httpRequests = packets.filter((p) => p.httpRequestMethod && p.httpRequestUri);
+  if (httpRequests.length < 2) return;
+
+  // 按 Host 分组
+  const byHost = new Map<string, PacketSummary[]>();
+  for (const p of httpRequests) {
+    const host = p.httpHost || "";
+    const list = byHost.get(host) || [];
+    list.push(p);
+    byHost.set(host, list);
+  }
+
+  let idx = acc.length;
+  for (const [, hostRequests] of byHost) {
+    // 规范化 URI 后检测差异
+    const uriGroups = new Map<string, { original: string; packets: PacketSummary[] }>();
+    for (const p of hostRequests) {
+      const uri = p.httpRequestUri!;
+      const normalized = uri.toLowerCase().replace(/\/+$/, "").replace(/%([0-9a-f]{2})/gi, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
+      const existing = uriGroups.get(normalized);
+      if (existing) {
+        existing.packets.push(p);
+      } else {
+        uriGroups.set(normalized, { original: uri, packets: [p] });
+      }
+    }
+
+    // 找到规范化后相同但原始值不同的 URI
+    const normalizedGroups = new Map<string, Array<{ original: string; packets: PacketSummary[] }>>();
+    for (const [, group] of uriGroups) {
+      const list = normalizedGroups.get(group.packets[0].httpRequestUri!.toLowerCase().replace(/\/+$/, "")) || [];
+      list.push(group);
+      normalizedGroups.set(group.packets[0].httpRequestUri!.toLowerCase().replace(/\/+$/, ""), list);
+    }
+
+    for (const [, groups] of normalizedGroups) {
+      if (groups.length < 2) continue;
+      const variants = groups.map((g) => g.original);
+      const allPackets = groups.flatMap((g) => g.packets);
+      const diff = groups.map((g) => {
+        const p = g.packets[0];
+        const trailingSlash = g.original.endsWith("/") ? "有尾部斜杠" : "";
+        const upperCase = g.original !== g.original.toLowerCase() ? "含大写字母" : "";
+        const encoded = /%[0-9a-f]{2}/i.test(g.original) ? "含 URL 编码" : "";
+        const tags = [trailingSlash, upperCase, encoded].filter(Boolean);
+        return `${g.original}${tags.length ? `（${tags.join("、")}）` : ""}`;
+      });
+
+      acc.push({
+        insightId: insightId("http-uri-anomaly", idx++),
+        type: "http_uri_anomaly",
+        severity: "warning",
+        packetIds: allPackets.map((p) => p.packetId),
+        description: `检测到 ${allPackets[0].httpRequestMethod} 请求中 ${variants.length} 种 URI 变体：${diff.join(" vs ")}`,
+        detail: {
+          method: allPackets[0].httpRequestMethod,
+          host: allPackets[0].httpHost,
+          variants: diff,
+          variantCount: variants.length
+        },
+        scenario: "URI 大小写差异、URL 编码差异、尾部斜杠差异可能导致路由匹配失败（如 Nginx location、Spring @RequestMapping 大小写敏感）"
+      });
+      break;
+    }
+  }
+}
+
 // ── Main Engine ───────────────────────────────────────────────────────
 
 export function runLevel1Insights(graph: CaseGraph): PacketInsight[] {
@@ -3244,6 +3314,9 @@ export function runLevel1Insights(graph: CaseGraph): PacketInsight[] {
   // NAT / L7 代理检测
   analyzeL7ProxyDetection(packets, acc);
   analyzeNatHeuristic(packets, acc);
+
+  // HTTP URI 差异检测
+  analyzeHttpRequestUriAnomaly(packets, acc);
 
   return acc;
 }
