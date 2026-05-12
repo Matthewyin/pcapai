@@ -1,0 +1,13 @@
+{
+  "patterns": [
+    {
+      "regex": "^.*(http|HTTP).*404.*$",
+      "adapterId": "http_transactions",
+      "createdAt": "2026-05-04T15:18:40.645Z",
+      "exampleQuestions": [
+        "当前提供的数据包是否有http404？"
+      ],
+      "hitCount": 0
+    }
+  ]
+}

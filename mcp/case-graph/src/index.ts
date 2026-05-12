@@ -71,6 +71,10 @@ type CaseGraph = {
 
 const server = new McpServer({ name: "case-graph-mcp", version: "0.1.0" });
 
+function defaultCaseMemory(): NonNullable<CaseGraph["memory"]> {
+  return { topology: "", findings: [], userNotes: [] };
+}
+
 function loadGraph(): CaseGraph {
   const graphPath = process.env.PCAPAI_CASE_GRAPH_PATH;
   if (!graphPath) throw new Error("PCAPAI_CASE_GRAPH_PATH is required");
@@ -820,7 +824,7 @@ server.registerTool(
   },
   async () => {
     const graph = loadGraph();
-    return { content: [{ type: "text", text: JSON.stringify(graph.memory || { topology: "", findings: [], userNotes: [] }) }] };
+    return { content: [{ type: "text", text: JSON.stringify(graph.memory || defaultCaseMemory()) }] };
   }
 );
 
@@ -838,9 +842,7 @@ server.registerTool(
     const graphPath = process.env.PCAPAI_CASE_GRAPH_PATH;
     if (!graphPath) throw new Error("PCAPAI_CASE_GRAPH_PATH is required");
     const graph = loadGraph();
-    const memory = { ...graph.memory } || { topology: "", findings: [], userNotes: [] };
-    if (!memory.findings) memory.findings = [];
-    if (!memory.userNotes) memory.userNotes = [];
+    const memory: NonNullable<CaseGraph["memory"]> = { ...defaultCaseMemory(), ...graph.memory };
     if (topology) memory.topology = topology;
     if (userNotes) memory.userNotes = [...memory.userNotes, userNotes];
     graph.memory = memory;
