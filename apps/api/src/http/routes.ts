@@ -24,7 +24,7 @@ import { createHttpAdapter } from "../protocolAdapters/http.js";
 import { createIcmpAdapter } from "../protocolAdapters/icmp.js";
 import { createTcpAdapters } from "../protocolAdapters/tcp.js";
 import { createTlsAdapter } from "../protocolAdapters/tls.js";
-import { protocolAdapterErrorMessage, protocolAdapterErrorStatus, runProtocolAdapter, type ProtocolAdapter, type ProtocolAdapterContext } from "../protocolAdapters/types.js";
+import { runProtocolAdapter, type ProtocolAdapter, type ProtocolAdapterContext } from "../protocolAdapters/types.js";
 import { createUdpAdapter } from "../protocolAdapters/udp.js";
 import { stripPayload } from "./capturePreprocess.js";
 import { addCapture, capturesDirectory, caseDirectory, createEmptyCase, deleteCases, listCaseSummaries, readAnalysisRunSnapshot, readCaseGraph, safePathPart, writeCaseGraph } from "./caseStore.js";
@@ -34,7 +34,8 @@ import { createAgentAnswerService } from "../services/agentAnswerService.js";
 import { createEvidenceOpenService } from "../services/evidenceOpenService.js";
 import { runLevel1Insights } from "../services/insightEngine.js";
 import { extractTcpAnomalies } from "../services/tcpPreprocessor.js";
-import { createPlannerService, executeChain } from "../services/plannerService.js";
+import { createPlannerService } from "../services/plannerService.js";
+import { createAgentRuntimeService } from "../services/agentRuntimeService.js";
 import { createQueryRunService } from "../services/queryRunService.js";
 import { createStatisticsQueryService } from "../services/statisticsQueryService.js";
 import { createToolRunService } from "../services/toolRunService.js";
@@ -480,15 +481,29 @@ const plannerService = createPlannerService({
   }
 });
 const {
-  shouldAnswerUsageHelp,
-  shouldAnswerActiveQueryRun,
-  shouldExplainSelectedSessionProblem,
-  shouldAskForTroubleshootingScope,
-  planUserIntent,
   planChain,
   executeAgentIntentPlan,
   executeChainStep
 } = plannerService;
+
+const agentRuntimeService = createAgentRuntimeService({
+  planChain,
+  executeAgentIntentPlan,
+  executeChainStep,
+  loadGraph,
+  buildAgentQuestion,
+  answerWithPlannerThought,
+  fallbackAgentAnswer,
+  syncMemoryFromQueryRuns,
+  recordPlannerRun,
+  recordAnswerRun,
+  recordErrorRun,
+  updateRuntimeStatus: (patch) => Object.assign(agentRuntimeStatus, patch),
+  adapterIds: () => protocolAdapters.map((adapter) => adapter.id),
+  learnFromAgentRun: (question, toolCalls, adapterIds) => {
+    learnFromAgentRun(question, toolCalls, adapterIds).catch(() => {});
+  }
+});
 
 export const pathCorrelationTestHooks = {
   buildQueryPath
@@ -1041,251 +1056,12 @@ export function createAgentRouter() {
     if (requestedProfileId && !activateLlmProfile(requestedProfileId)) {
       return res.status(404).json({ error: "llm profile not found" });
     }
-    const volcengineHint = apiConfig.llm.baseURL.includes("volces.com") && !apiConfig.llm.model.toLowerCase().includes("doubao");
-    if (volcengineHint) {
-      return res.status(400).json({ error: `配置不匹配：端点 ${apiConfig.llm.baseURL} 不支持模型 ${apiConfig.llm.model}。请检查 LLM 设置中的 baseURL 是否与模型对应。` });
-    }
-    const requestStartedAt = Date.now();
-    const plannerStartedAt = Date.now();
-    const plan = await planUserIntent(graph, parsedRequest.data.question, undefined, parsedRequest.data.chatHistory);
-    const plannerDurationMs = Date.now() - plannerStartedAt;
-    try {
-      const plannedResult = await executeAgentIntentPlan(graph, parsedRequest.data.question, plan);
-      if (plannedResult) {
-        const answer = answerWithPlannerThought(plannedResult.answer, plan);
-        recordPlannerRun(graph.spec.caseId, parsedRequest.data.question, plan, plannerDurationMs);
-        recordAnswerRun(graph.spec.caseId, parsedRequest.data.question, plan, plannedResult.status, answer, Date.now() - requestStartedAt);
-        Object.assign(agentRuntimeStatus, {
-          lastRunAt: new Date().toISOString(),
-          lastStatus: plannedResult.status,
-          lastError: "",
-          lastCaseId: graph.spec.caseId,
-          lastModel: apiConfig.llm.model,
-          lastBaseURL: apiConfig.llm.baseURL
-        });
-        return res.json(answer);
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      recordPlannerRun(graph.spec.caseId, parsedRequest.data.question, plan, plannerDurationMs);
-      recordErrorRun(graph.spec.caseId, parsedRequest.data.question, plan, `${plan.intent}_error`, error, Date.now() - requestStartedAt);
-      Object.assign(agentRuntimeStatus, {
-        lastRunAt: new Date().toISOString(),
-        lastStatus: `${plan.intent}_error`,
-        lastError: message,
-        lastCaseId: graph.spec.caseId,
-        lastModel: apiConfig.llm.model,
-        lastBaseURL: apiConfig.llm.baseURL
-      });
-      return res.status(502).json({ error: message });
-    }
-    if (apiConfig.llm.apiKey && plan.intent === "llm_explain") {
-      try {
-        const answer = await runPcapTroubleshootingAgent({ graph, question: buildAgentQuestion(parsedRequest.data) });
-        const plannedAnswer = answerWithPlannerThought(answer, plan);
-        recordPlannerRun(graph.spec.caseId, parsedRequest.data.question, plan, plannerDurationMs);
-        recordAnswerRun(graph.spec.caseId, parsedRequest.data.question, plan, "success", plannedAnswer, Date.now() - requestStartedAt);
-        Object.assign(agentRuntimeStatus, {
-          lastRunAt: new Date().toISOString(),
-          lastStatus: "success",
-          lastError: "",
-          lastCaseId: graph.spec.caseId,
-          lastModel: apiConfig.llm.model,
-          lastBaseURL: apiConfig.llm.baseURL
-        });
-        return res.json(plannedAnswer);
-      } catch (error) {
-        recordPlannerRun(graph.spec.caseId, parsedRequest.data.question, plan, plannerDurationMs);
-        recordErrorRun(graph.spec.caseId, parsedRequest.data.question, plan, "error", error, Date.now() - requestStartedAt);
-        Object.assign(agentRuntimeStatus, {
-          lastRunAt: new Date().toISOString(),
-          lastStatus: "error",
-          lastError: error instanceof Error ? error.message : String(error),
-          lastCaseId: graph.spec.caseId,
-          lastModel: apiConfig.llm.model,
-          lastBaseURL: apiConfig.llm.baseURL
-        });
-        return res.status(502).json({ error: `LLM 调用失败：${error instanceof Error ? error.message : String(error)}` });
-      }
-    }
-    if (shouldAnswerUsageHelp(parsedRequest.data.question)) {
-      const answer = usageHelpAnswer();
-      Object.assign(agentRuntimeStatus, {
-        lastRunAt: new Date().toISOString(),
-        lastStatus: "usage_help",
-        lastError: "",
-        lastCaseId: graph.spec.caseId,
-        lastModel: apiConfig.llm.model,
-        lastBaseURL: apiConfig.llm.baseURL
-      });
-      return res.json(answer);
-    }
-    const deterministicAnswer = await deterministicStatisticsAnswer(graph, parsedRequest.data.question);
-    if (deterministicAnswer) {
-      Object.assign(agentRuntimeStatus, {
-        lastRunAt: new Date().toISOString(),
-        lastStatus: "deterministic_statistics",
-        lastError: "",
-        lastCaseId: graph.spec.caseId,
-        lastModel: apiConfig.llm.model,
-        lastBaseURL: apiConfig.llm.baseURL
-      });
-      return res.json(deterministicAnswer);
-    }
-    if (shouldApplyCorrelationContext(parsedRequest.data.question, graph)) {
-      try {
-        const answer = await applyCorrelationContextAndRerun(graph, parsedRequest.data.question);
-        Object.assign(agentRuntimeStatus, {
-          lastRunAt: new Date().toISOString(),
-          lastStatus: "correlation_context_applied",
-          lastError: "",
-          lastCaseId: graph.spec.caseId,
-          lastModel: apiConfig.llm.model,
-          lastBaseURL: apiConfig.llm.baseURL
-        });
-        return res.json(answer);
-      } catch (error) {
-        return res.status(502).json({ error: `关联上下文应用失败：${error instanceof Error ? error.message : String(error)}` });
-      }
-    }
-    if (shouldCorrelateCaptures(parsedRequest.data.question)) {
-      try {
-        const answer = await createCaptureCorrelationQueryRun(graph, parsedRequest.data.question);
-        Object.assign(agentRuntimeStatus, {
-          lastRunAt: new Date().toISOString(),
-          lastStatus: "capture_correlation",
-          lastError: "",
-          lastCaseId: graph.spec.caseId,
-          lastModel: apiConfig.llm.model,
-          lastBaseURL: apiConfig.llm.baseURL
-        });
-        return res.json(answer);
-      } catch (error) {
-        return res.status(502).json({ error: `多文件关联失败：${error instanceof Error ? error.message : String(error)}` });
-      }
-    }
-    try {
-      const adapterResult = await runProtocolAdapter(protocolAdapters, graph, parsedRequest.data.question);
-      if (adapterResult) {
-        Object.assign(agentRuntimeStatus, {
-          lastRunAt: new Date().toISOString(),
-          lastStatus: adapterResult.adapter.status,
-          lastError: "",
-          lastCaseId: graph.spec.caseId,
-          lastModel: apiConfig.llm.model,
-          lastBaseURL: apiConfig.llm.baseURL
-        });
-        return res.json(adapterResult.answer);
-      }
-    } catch (error) {
-      return res.status(502).json({ error: protocolAdapterErrorMessage(error) });
-    }
-    if (shouldCreateQueryRun(parsedRequest.data.question)) {
-      try {
-        const queryInput = QueryRunInputSchema.parse({ ...inferQueryRunInput(parsedRequest.data.question, graph), question: parsedRequest.data.question });
-        const nextGraph = await createQueryRun(graph, queryInput);
-        const answer = queryRunAnswer(nextGraph, nextGraph.activeQueryRunId || "");
-        Object.assign(agentRuntimeStatus, {
-          lastRunAt: new Date().toISOString(),
-          lastStatus: "query_run",
-          lastError: "",
-          lastCaseId: nextGraph.spec.caseId,
-          lastModel: apiConfig.llm.model,
-          lastBaseURL: apiConfig.llm.baseURL
-        });
-        return res.json(answer);
-      } catch (error) {
-        return res.status(502).json({ error: `QueryRun 创建失败：${error instanceof Error ? error.message : String(error)}` });
-      }
-    }
-    if (graph.queryRuns.length && shouldExplainSelectedSessionProblem(parsedRequest.data.question)) {
-      const answer = selectedSessionProblemAnswer(graph);
-      Object.assign(agentRuntimeStatus, {
-        lastRunAt: new Date().toISOString(),
-        lastStatus: "selected_session_diagnosis",
-        lastError: "",
-        lastCaseId: graph.spec.caseId,
-        lastModel: apiConfig.llm.model,
-        lastBaseURL: apiConfig.llm.baseURL
-      });
-      return res.json(answer);
-    }
-    if (graph.queryRuns.length && shouldExplainSelectedSessionProblem(parsedRequest.data.question)) {
-      const answer = selectedSessionProblemAnswer(graph);
-      Object.assign(agentRuntimeStatus, {
-        lastRunAt: new Date().toISOString(),
-        lastStatus: "selected_session_diagnosis",
-        lastError: "",
-        lastCaseId: graph.spec.caseId,
-        lastModel: apiConfig.llm.model,
-        lastBaseURL: apiConfig.llm.baseURL
-      });
-      answer.thoughts?.forEach((thought) => writeStreamEvent(res, "thought", { text: thought }));
-      writeStreamEvent(res, "delta", { text: answer.answer });
-      writeStreamEvent(res, "done", answer);
-      return res.end();
-    }
-
-    if (graph.queryRuns.length && shouldAnswerActiveQueryRun(parsedRequest.data.question)) {
-      const answer = activeQueryRunAnswer(graph, parsedRequest.data.question);
-      Object.assign(agentRuntimeStatus, {
-        lastRunAt: new Date().toISOString(),
-        lastStatus: "query_run_diagnosis",
-        lastError: "",
-        lastCaseId: graph.spec.caseId,
-        lastModel: apiConfig.llm.model,
-        lastBaseURL: apiConfig.llm.baseURL
-      });
-      return res.json(answer);
-    }
-    if (shouldAskForTroubleshootingScope(parsedRequest.data.question, graph)) {
-      const answer = troubleshootingScopeAnswer();
-      Object.assign(agentRuntimeStatus, {
-        lastRunAt: new Date().toISOString(),
-        lastStatus: "needs_query_scope",
-        lastError: "",
-        lastCaseId: graph.spec.caseId,
-        lastModel: apiConfig.llm.model,
-        lastBaseURL: apiConfig.llm.baseURL
-      });
-      return res.json(answer);
-    }
-    const question = buildAgentQuestion(parsedRequest.data);
-    const fallback = fallbackAgentAnswer(graph);
-
-    if (!apiConfig.llm.apiKey) {
-      Object.assign(agentRuntimeStatus, {
-        lastRunAt: new Date().toISOString(),
-        lastStatus: "fallback_no_key",
-        lastError: "",
-        lastCaseId: graph.spec.caseId,
-        lastModel: apiConfig.llm.model,
-        lastBaseURL: apiConfig.llm.baseURL
-      });
-      return res.json(fallback);
-    }
 
     try {
-      const answer = await runPcapTroubleshootingAgent({ graph, question, chatHistory: parsedRequest.data.chatHistory });
-      Object.assign(agentRuntimeStatus, {
-        lastRunAt: new Date().toISOString(),
-        lastStatus: "success",
-        lastError: "",
-        lastCaseId: graph.spec.caseId,
-        lastModel: apiConfig.llm.model,
-        lastBaseURL: apiConfig.llm.baseURL
-      });
-      return res.json(answer);
+      const result = await agentRuntimeService.run(graph, parsedRequest.data);
+      return res.json(result.answer);
     } catch (error) {
-      Object.assign(agentRuntimeStatus, {
-        lastRunAt: new Date().toISOString(),
-        lastStatus: "error",
-        lastError: error instanceof Error ? error.message : String(error),
-        lastCaseId: graph.spec.caseId,
-        lastModel: apiConfig.llm.model,
-        lastBaseURL: apiConfig.llm.baseURL
-      });
-      return res.status(502).json({ error: `LLM 调用失败：${error instanceof Error ? error.message : String(error)}` });
+      return res.status(502).json({ error: error instanceof Error ? error.message : String(error) });
     }
   });
 
@@ -1304,409 +1080,23 @@ export function createAgentRouter() {
       return res.status(404).json({ error: "llm profile not found" });
     }
 
-    // 检测 baseURL/model 不匹配——Volcengine 端点不支持非 Doubao 模型
-    const volcengineHint = apiConfig.llm.baseURL.includes("volces.com") && !apiConfig.llm.model.toLowerCase().includes("doubao");
-    if (volcengineHint) {
-      return res.status(400).json({ error: `配置不匹配：端点 ${apiConfig.llm.baseURL} 不支持模型 ${apiConfig.llm.model}。请检查 LLM 设置中的 baseURL 是否与模型对应。` });
-    }
-
     res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
     res.setHeader("Cache-Control", "no-cache, no-transform");
     res.setHeader("Connection", "keep-alive");
     res.flushHeaders?.();
 
-    const requestStartedAt = Date.now();
-    const plannerStartedAt = Date.now();
-    const chainPlan = await planChain(graph, parsedRequest.data.question, (text) => writeStreamEvent(res, "thought", { text }), parsedRequest.data.chatHistory);
-    const plannerDurationMs = Date.now() - plannerStartedAt;
-    const stepSummary = chainPlan.steps.map((step) => `${step.intent}(${step.purpose})`).join(" → ");
-    writeStreamEvent(res, "thought", {
-      text: `Chain Planner 识别：${chainPlan.planKind}（${chainPlan.confidence}）${stepSummary}${chainPlan.reason ? `，${chainPlan.reason}` : ""}`
-    });
-
-    if (chainPlan.planKind === "chain") {
-      writeStreamEvent(res, "chain_start", { chainId: chainPlan.chainId, stepCount: chainPlan.steps.length });
-      try {
-        const { results, finalAnswer } = await executeChain(graph, chainPlan, (currentGraph, intent, params) => executeChainStep(currentGraph, parsedRequest.data.question, intent, params), {
-          onStepStart: (step, index, total) => {
-            writeStreamEvent(res, "step_start", { stepId: step.stepId, intent: step.intent, purpose: step.purpose, index, total });
-            writeStreamEvent(res, "thought", { text: `步骤 ${index + 1}/${total}：${step.purpose}` });
-          },
-          onStepDone: (step, result, index, total) => {
-            writeStreamEvent(res, "step_done", { stepId: step.stepId, status: result.status, summary: result.answer.answer.slice(0, 200), index, total, evidenceCards: result.answer.evidenceCards || [], purpose: step.purpose });
-          },
-          onError: (step, error, index, total) => {
-            writeStreamEvent(res, "step_done", { stepId: step.stepId, status: "error", summary: `步骤失败：${error instanceof Error ? error.message : String(error)}`, index, total });
-          }
-        }, () => loadGraph(graph.spec.caseId));
-        const hasLlmStep = chainPlan.steps.some((s) => s.intent === "llm_explain");
-        let enrichedAnswer = finalAnswer;
-        if (!hasLlmStep && apiConfig.llm.apiKey) {
-          writeStreamEvent(res, "thought", { text: "综合解读证据，生成诊断结论..." });
-          try {
-            const synthesisQuestion = `基于以下分析链结果，综合解读异常并给出诊断结论：\n${finalAnswer.answer}`;
-            const freshGraph = loadGraph(graph.spec.caseId);
-            const llmAnswer = await runPcapTroubleshootingAgent({ graph: freshGraph, question: synthesisQuestion, chatHistory: parsedRequest.data.chatHistory });
-            enrichedAnswer = {
-              ...finalAnswer,
-              answer: `${finalAnswer.answer}\n\n---\n### 综合解读\n${llmAnswer.answer}`,
-              thoughts: [...(finalAnswer.thoughts || []), ...(llmAnswer.thoughts || [])],
-              evidenceCards: [...(finalAnswer.evidenceCards || []), ...(llmAnswer.evidenceCards || [])],
-              suggestedQueries: llmAnswer.suggestedQueries,
-              handoffAgent: llmAnswer.handoffAgent
-            };
-          } catch {
-            // LLM 解读失败不影响已有结果
-          }
-        }
-        recordPlannerRun(graph.spec.caseId, parsedRequest.data.question, { intent: chainPlan.steps[0].intent, confidence: chainPlan.confidence, reason: chainPlan.reason, missingContext: chainPlan.missingContext }, plannerDurationMs);
-        recordAnswerRun(graph.spec.caseId, parsedRequest.data.question, { intent: chainPlan.steps[0].intent, confidence: chainPlan.confidence, reason: chainPlan.reason, missingContext: chainPlan.missingContext }, "chain_complete", enrichedAnswer, Date.now() - requestStartedAt);
-        Object.assign(agentRuntimeStatus, {
-          lastRunAt: new Date().toISOString(),
-          lastStatus: "chain_complete",
-          lastError: "",
-          lastCaseId: graph.spec.caseId,
-          lastModel: apiConfig.llm.model,
-          lastBaseURL: apiConfig.llm.baseURL
-        });
-        syncMemoryFromQueryRuns(loadGraph(graph.spec.caseId));
-        writeStreamEvent(res, "chain_done", { chainId: chainPlan.chainId, summaries: results.map((r) => ({ stepId: r.stepId, status: r.status })) });
-        writeStreamEvent(res, "delta", { text: enrichedAnswer.answer });
-        writeStreamEvent(res, "done", enrichedAnswer);
-        return res.end();
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        recordErrorRun(graph.spec.caseId, parsedRequest.data.question, { intent: chainPlan.steps[0].intent, confidence: chainPlan.confidence, reason: chainPlan.reason, missingContext: chainPlan.missingContext }, "chain_error", error, Date.now() - requestStartedAt);
-        Object.assign(agentRuntimeStatus, {
-          lastRunAt: new Date().toISOString(),
-          lastStatus: "chain_error",
-          lastError: message,
-          lastCaseId: graph.spec.caseId,
-          lastModel: apiConfig.llm.model,
-          lastBaseURL: apiConfig.llm.baseURL
-        });
-        writeStreamEvent(res, "error", { error: message });
-        return res.end();
-      }
-    }
-
-    const plan = { intent: chainPlan.steps[0].intent, confidence: chainPlan.confidence, reason: chainPlan.reason, missingContext: chainPlan.missingContext };
     try {
-      const plannedResult = await executeAgentIntentPlan(graph, parsedRequest.data.question, plan);
-      if (plannedResult) {
-        const answer = answerWithPlannerThought(plannedResult.answer, plan);
-        recordPlannerRun(graph.spec.caseId, parsedRequest.data.question, plan, plannerDurationMs);
-        recordAnswerRun(graph.spec.caseId, parsedRequest.data.question, plan, plannedResult.status, answer, Date.now() - requestStartedAt);
-        Object.assign(agentRuntimeStatus, {
-          lastRunAt: new Date().toISOString(),
-          lastStatus: plannedResult.status,
-          lastError: "",
-          lastCaseId: graph.spec.caseId,
-          lastModel: apiConfig.llm.model,
-          lastBaseURL: apiConfig.llm.baseURL
-        });
-        answer.thoughts?.forEach((thought) => writeStreamEvent(res, "thought", { text: thought }));
-        writeStreamEvent(res, "delta", { text: answer.answer });
-        writeStreamEvent(res, "done", answer);
-        return res.end();
-      }
+      await agentRuntimeService.stream(graph, parsedRequest.data, {
+        event: (event, data) => writeStreamEvent(res, event, data),
+        thought: (text) => writeStreamEvent(res, "thought", { text }),
+        delta: (text) => writeStreamEvent(res, "delta", { text }),
+        done: (answer) => writeStreamEvent(res, "done", answer),
+        error: (error) => writeStreamEvent(res, "error", { error })
+      });
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      recordPlannerRun(graph.spec.caseId, parsedRequest.data.question, plan, plannerDurationMs);
-      recordErrorRun(graph.spec.caseId, parsedRequest.data.question, plan, `${plan.intent}_error`, error, Date.now() - requestStartedAt);
-      Object.assign(agentRuntimeStatus, {
-        lastRunAt: new Date().toISOString(),
-        lastStatus: `${plan.intent}_error`,
-        lastError: message,
-        lastCaseId: graph.spec.caseId,
-        lastModel: apiConfig.llm.model,
-        lastBaseURL: apiConfig.llm.baseURL
-      });
-      writeStreamEvent(res, "error", { error: message });
-      return res.end();
+      writeStreamEvent(res, "error", { error: error instanceof Error ? error.message : String(error) });
     }
-    if (apiConfig.llm.apiKey && plan.intent === "llm_explain") {
-      try {
-        const answer = await runPcapTroubleshootingAgent({
-          graph,
-          question: buildAgentQuestion(parsedRequest.data),
-          chatHistory: parsedRequest.data.chatHistory,
-          onTrace: (text) => writeStreamEvent(res, "thought", { text })
-        });
-        const plannedAnswer = answerWithPlannerThought(answer, plan);
-        recordPlannerRun(graph.spec.caseId, parsedRequest.data.question, plan, plannerDurationMs);
-        recordAnswerRun(graph.spec.caseId, parsedRequest.data.question, plan, "success", plannedAnswer, Date.now() - requestStartedAt);
-        Object.assign(agentRuntimeStatus, {
-          lastRunAt: new Date().toISOString(),
-          lastStatus: "success",
-          lastError: "",
-          lastCaseId: graph.spec.caseId,
-          lastModel: apiConfig.llm.model,
-          lastBaseURL: apiConfig.llm.baseURL
-        });
-        plannedAnswer.thoughts?.forEach((thought) => writeStreamEvent(res, "thought", { text: thought }));
-        for (let index = 0; index < plannedAnswer.answer.length; index += 24) {
-          writeStreamEvent(res, "delta", { text: plannedAnswer.answer.slice(index, index + 24) });
-        }
-        syncMemoryFromQueryRuns(loadGraph(graph.spec.caseId));
-        writeStreamEvent(res, "done", plannedAnswer);
-      } catch (error) {
-        const message = `LLM 调用失败：${error instanceof Error ? error.message : String(error)}`;
-        recordPlannerRun(graph.spec.caseId, parsedRequest.data.question, plan, plannerDurationMs);
-        recordErrorRun(graph.spec.caseId, parsedRequest.data.question, plan, "error", error, Date.now() - requestStartedAt);
-        Object.assign(agentRuntimeStatus, {
-          lastRunAt: new Date().toISOString(),
-          lastStatus: "error",
-          lastError: message,
-          lastCaseId: graph.spec.caseId,
-          lastModel: apiConfig.llm.model,
-          lastBaseURL: apiConfig.llm.baseURL
-        });
-        writeStreamEvent(res, "error", { error: message });
-      }
-      return res.end();
-    }
-
-    if (shouldAnswerUsageHelp(parsedRequest.data.question)) {
-      const answer = usageHelpAnswer();
-      Object.assign(agentRuntimeStatus, {
-        lastRunAt: new Date().toISOString(),
-        lastStatus: "usage_help",
-        lastError: "",
-        lastCaseId: graph.spec.caseId,
-        lastModel: apiConfig.llm.model,
-        lastBaseURL: apiConfig.llm.baseURL
-      });
-      answer.thoughts?.forEach((thought) => writeStreamEvent(res, "thought", { text: thought }));
-      writeStreamEvent(res, "delta", { text: answer.answer });
-      writeStreamEvent(res, "done", answer);
-      return res.end();
-    }
-
-    const deterministicAnswer = await deterministicStatisticsAnswer(graph, parsedRequest.data.question);
-    if (deterministicAnswer) {
-      Object.assign(agentRuntimeStatus, {
-        lastRunAt: new Date().toISOString(),
-        lastStatus: "deterministic_statistics",
-        lastError: "",
-        lastCaseId: graph.spec.caseId,
-        lastModel: apiConfig.llm.model,
-        lastBaseURL: apiConfig.llm.baseURL
-      });
-      writeStreamEvent(res, "thought", { text: "识别为确定性统计问题，直接调用对应统计工具，不进入 LLM 自由推理。" });
-      writeStreamEvent(res, "delta", { text: deterministicAnswer.answer });
-      writeStreamEvent(res, "done", deterministicAnswer);
-      return res.end();
-    }
-
-    if (shouldApplyCorrelationContext(parsedRequest.data.question, graph)) {
-      writeStreamEvent(res, "thought", { text: "识别为多文件关联后的上下文补充，准备写入 hint 并重跑关联。" });
-      try {
-        const answer = await applyCorrelationContextAndRerun(graph, parsedRequest.data.question);
-        Object.assign(agentRuntimeStatus, {
-          lastRunAt: new Date().toISOString(),
-          lastStatus: "correlation_context_applied",
-          lastError: "",
-          lastCaseId: graph.spec.caseId,
-          lastModel: apiConfig.llm.model,
-          lastBaseURL: apiConfig.llm.baseURL
-        });
-        answer.thoughts?.forEach((thought) => writeStreamEvent(res, "thought", { text: thought }));
-        writeStreamEvent(res, "delta", { text: answer.answer });
-        writeStreamEvent(res, "done", answer);
-      } catch (error) {
-        const message = `关联上下文应用失败：${error instanceof Error ? error.message : String(error)}`;
-        Object.assign(agentRuntimeStatus, {
-          lastRunAt: new Date().toISOString(),
-          lastStatus: "correlation_context_error",
-          lastError: message,
-          lastCaseId: graph.spec.caseId,
-          lastModel: apiConfig.llm.model,
-          lastBaseURL: apiConfig.llm.baseURL
-        });
-        writeStreamEvent(res, "error", { error: message });
-      }
-      return res.end();
-    }
-
-    if (shouldCorrelateCaptures(parsedRequest.data.question)) {
-      writeStreamEvent(res, "thought", { text: "识别为多文件/多节点链路关联问题，创建 QueryRun。" });
-      writeStreamEvent(res, "thought", { text: "调用 tshark-query MCP 列出 TCP conversations，并按 exact tuple / mapping hint / time offset 关联。" });
-      try {
-        const answer = await createCaptureCorrelationQueryRun(graph, parsedRequest.data.question);
-        Object.assign(agentRuntimeStatus, {
-          lastRunAt: new Date().toISOString(),
-          lastStatus: "capture_correlation",
-          lastError: "",
-          lastCaseId: graph.spec.caseId,
-          lastModel: apiConfig.llm.model,
-          lastBaseURL: apiConfig.llm.baseURL
-        });
-        writeStreamEvent(res, "delta", { text: answer.answer });
-        writeStreamEvent(res, "done", answer);
-      } catch (error) {
-        const message = `多文件关联失败：${error instanceof Error ? error.message : String(error)}`;
-        Object.assign(agentRuntimeStatus, {
-          lastRunAt: new Date().toISOString(),
-          lastStatus: "capture_correlation_error",
-          lastError: message,
-          lastCaseId: graph.spec.caseId,
-          lastModel: apiConfig.llm.model,
-          lastBaseURL: apiConfig.llm.baseURL
-        });
-        writeStreamEvent(res, "error", { error: message });
-      }
-      return res.end();
-    }
-
-    try {
-      const learnedPatterns = loadLearnedPatterns();
-      const adapterResult = await runProtocolAdapter(protocolAdapters, graph, parsedRequest.data.question, learnedPatterns);
-      if (adapterResult) {
-        adapterResult.answer.thoughts?.forEach((thought) => writeStreamEvent(res, "thought", { text: thought }));
-        Object.assign(agentRuntimeStatus, {
-          lastRunAt: new Date().toISOString(),
-          lastStatus: adapterResult.adapter.status,
-          lastError: "",
-          lastCaseId: graph.spec.caseId,
-          lastModel: apiConfig.llm.model,
-          lastBaseURL: apiConfig.llm.baseURL
-        });
-        writeStreamEvent(res, "delta", { text: adapterResult.answer.answer });
-        writeStreamEvent(res, "done", adapterResult.answer);
-        return res.end();
-      }
-    } catch (error) {
-      const message = protocolAdapterErrorMessage(error);
-      Object.assign(agentRuntimeStatus, {
-        lastRunAt: new Date().toISOString(),
-        lastStatus: protocolAdapterErrorStatus(),
-        lastError: message,
-        lastCaseId: graph.spec.caseId,
-        lastModel: apiConfig.llm.model,
-        lastBaseURL: apiConfig.llm.baseURL
-      });
-      writeStreamEvent(res, "error", { error: message });
-      return res.end();
-    }
-
-    if (shouldCreateQueryRun(parsedRequest.data.question)) {
-      writeStreamEvent(res, "thought", { text: "识别为访问链路查询，创建 QueryRun。" });
-      writeStreamEvent(res, "thought", { text: "调用 tshark-query MCP 生成 display filter 并查询通讯对。" });
-      try {
-        const queryInput = QueryRunInputSchema.parse({ ...inferQueryRunInput(parsedRequest.data.question, graph), question: parsedRequest.data.question });
-        const nextGraph = await createQueryRun(graph, queryInput);
-        const answer = queryRunAnswer(nextGraph, nextGraph.activeQueryRunId || "");
-        Object.assign(agentRuntimeStatus, {
-          lastRunAt: new Date().toISOString(),
-          lastStatus: "query_run",
-          lastError: "",
-          lastCaseId: nextGraph.spec.caseId,
-          lastModel: apiConfig.llm.model,
-          lastBaseURL: apiConfig.llm.baseURL
-        });
-        writeStreamEvent(res, "delta", { text: answer.answer });
-        writeStreamEvent(res, "done", answer);
-      } catch (error) {
-        const message = `QueryRun 创建失败：${error instanceof Error ? error.message : String(error)}`;
-        Object.assign(agentRuntimeStatus, {
-          lastRunAt: new Date().toISOString(),
-          lastStatus: "query_run_error",
-          lastError: message,
-          lastCaseId: graph.spec.caseId,
-          lastModel: apiConfig.llm.model,
-          lastBaseURL: apiConfig.llm.baseURL
-        });
-        writeStreamEvent(res, "error", { error: message });
-      }
-      return res.end();
-    }
-
-    if (graph.queryRuns.length && shouldAnswerActiveQueryRun(parsedRequest.data.question)) {
-      const answer = activeQueryRunAnswer(graph, parsedRequest.data.question);
-      Object.assign(agentRuntimeStatus, {
-        lastRunAt: new Date().toISOString(),
-        lastStatus: "query_run_diagnosis",
-        lastError: "",
-        lastCaseId: graph.spec.caseId,
-        lastModel: apiConfig.llm.model,
-        lastBaseURL: apiConfig.llm.baseURL
-      });
-      writeStreamEvent(res, "thought", { text: "识别为当前访问链路问题，读取 active QueryRun。" });
-      writeStreamEvent(res, "thought", { text: "使用选中通讯对的确定性诊断结果回答，不让模型泛化判断。" });
-      writeStreamEvent(res, "delta", { text: answer.answer });
-      writeStreamEvent(res, "done", answer);
-      return res.end();
-    }
-
-    if (shouldAskForTroubleshootingScope(parsedRequest.data.question, graph)) {
-      const answer = troubleshootingScopeAnswer();
-      Object.assign(agentRuntimeStatus, {
-        lastRunAt: new Date().toISOString(),
-        lastStatus: "needs_query_scope",
-        lastError: "",
-        lastCaseId: graph.spec.caseId,
-        lastModel: apiConfig.llm.model,
-        lastBaseURL: apiConfig.llm.baseURL
-      });
-      answer.thoughts?.forEach((thought) => writeStreamEvent(res, "thought", { text: thought }));
-      writeStreamEvent(res, "delta", { text: answer.answer });
-      writeStreamEvent(res, "done", answer);
-      return res.end();
-    }
-
-    const question = buildAgentQuestion(parsedRequest.data);
-    writeStreamEvent(res, "thought", { text: `未命中确定性分流，进入 Agents SDK 解释流程；case=${graph.spec.caseId}，activeQueryRun=${graph.activeQueryRunId || "无"}。` });
-
-    if (!apiConfig.llm.apiKey) {
-      const fallback = fallbackAgentAnswer(graph);
-      Object.assign(agentRuntimeStatus, {
-        lastRunAt: new Date().toISOString(),
-        lastStatus: "fallback_no_key",
-        lastError: "",
-        lastCaseId: graph.spec.caseId,
-        lastModel: apiConfig.llm.model,
-        lastBaseURL: apiConfig.llm.baseURL
-      });
-      writeStreamEvent(res, "delta", { text: fallback.answer });
-      writeStreamEvent(res, "done", fallback);
-      return res.end();
-    }
-
-    try {
-      const answer = await runPcapTroubleshootingAgent({
-        graph,
-        question,
-        onTrace: (text) => writeStreamEvent(res, "thought", { text })
-      });
-      Object.assign(agentRuntimeStatus, {
-        lastRunAt: new Date().toISOString(),
-        lastStatus: "success",
-        lastError: "",
-        lastCaseId: graph.spec.caseId,
-        lastModel: apiConfig.llm.model,
-        lastBaseURL: apiConfig.llm.baseURL
-      });
-      const adapterIds = protocolAdapters.map((a) => a.id);
-      learnFromAgentRun(parsedRequest.data.question, answer.toolCalls || [], adapterIds).catch(() => {});
-      for (let index = 0; index < answer.answer.length; index += 24) {
-        writeStreamEvent(res, "delta", { text: answer.answer.slice(index, index + 24) });
-      }
-      writeStreamEvent(res, "done", answer);
-      return res.end();
-    } catch (error) {
-      const message = `LLM 调用失败：${error instanceof Error ? error.message : String(error)}`;
-      Object.assign(agentRuntimeStatus, {
-        lastRunAt: new Date().toISOString(),
-        lastStatus: "error",
-        lastError: message,
-        lastCaseId: graph.spec.caseId,
-        lastModel: apiConfig.llm.model,
-        lastBaseURL: apiConfig.llm.baseURL
-      });
-      writeStreamEvent(res, "error", { error: message });
-      return res.end();
-    }
+    return res.end();
   });
 
   return router;

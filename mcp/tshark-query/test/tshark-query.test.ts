@@ -213,6 +213,7 @@ test("parseTsharkRows parses HTTP fields", () => {
     "",
     "",
     "",
+    "",
     "37",
     ""
   ].join("\t");

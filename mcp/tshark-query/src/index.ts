@@ -192,6 +192,7 @@ const tsharkFields = [
   "http.transfer_encoding",
   "http.authorization",
   "http.www_authenticate",
+  "http.via",
   "http.upgrade",
   "http.accept_encoding",
   "http.content_encoding",

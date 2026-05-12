@@ -2,7 +2,9 @@
 
 ## 架构概览
 
-pcapAI 是 Agent-first 本地浏览器工作台，用于离线分析网络故障。主流程以 `POST /api/cases/:caseId/agent/stream` 为准：用户上传 pcap 并提问 → Insight Engine 确定性分析 → Chain Planner (LLM) 规划分析链 → 确定性 protocol adapter 运行 tshark 产出证据 → 必要时 Leader Agent 通过 MCP 工具综合解读证据链 → SSE 输出诊断结论。
+pcapAI 是 Agent SDK-first 本地浏览器工作台，用于离线分析网络故障。主流程以 `POST /api/cases/:caseId/agent/stream` 为准：用户上传 pcap 并提问 → HTTP 层进入 `AgentRuntimeService` → OpenAI Agents SDK runtime 规划问题和编排子 Agent → Packet Analysis Service 作为工具层运行 QueryRun / ProtocolAdapter / EvidenceCard / checks → 必要时通过 MCP 查询 tshark 或打开 Wireshark → SSE 输出证据链和诊断结论。
+
+当前不引入 Codex Server App。pcapAI 的统一入口是 Web/API 后面的 OpenAI Agents SDK Runtime；Codex Server App 只作为未来可选外壳，不在当前主链路中。
 
 ## 系统架构图
 
@@ -14,12 +16,17 @@ flowchart TB
 
   subgraph API["apps/api — Express + Agent Runtime"]
     Router["routes.ts<br/>REST + SSE 端点"]
-    Planner["Chain Planner<br/>(LLM / 本地兜底)"]
+    RuntimeSvc["AgentRuntimeService<br/>统一对话编排入口"]
+    InsightEng["Insight Engine<br/>29 个确定性分析器"]
+    CaseStore["caseStore<br/>data/cases/:id/case.json"]
+  end
+
+  subgraph PacketService["Packet Analysis Service"]
+    Planner["Chain Planner<br/>(Agents SDK / 本地兜底)"]
     ChainExec["executeChain<br/>链式执行引擎"]
     Adapters["Protocol Adapters<br/>TCP/DNS/TLS/HTTP/ICMP/UDP"]
-    InsightEng["Insight Engine<br/>29 个确定性分析器"]
+    QueryRunSvc["QueryRun / EvidenceCard / checks"]
     PatternLearner["Pattern Learner"]
-    CaseStore["caseStore<br/>data/cases/:id/case.json"]
   end
 
   subgraph LLM["LLM Provider"]
@@ -52,15 +59,17 @@ flowchart TB
   end
 
   UI -->|"HTTP / SSE"| Router
-  Router -->|"planChain()"| Planner
+  Router -->|"agentRuntimeService.run/stream"| RuntimeSvc
+  RuntimeSvc -->|"planChain()"| Planner
   Planner -->|"AnalysisChainPlan"| ChainExec
   Planner --> LLM
   ChainExec -->|"单步路由"| Adapters
   ChainExec -->|"llm_explain"| AgentRuntime
-  Router -->|"agent fallback"| AgentRuntime
+  RuntimeSvc -->|"agent fallback"| AgentRuntime
   AgentRuntime --> LLM
 
   Adapters -->|"tsharkQueryClient"| TQ
+  Adapters --> QueryRunSvc
   AgentRuntime --> CG
   AgentRuntime --> TQ
   Router --> EO
@@ -74,7 +83,7 @@ flowchart TB
   Adapters -->|"写入 QueryRun"| CaseStore
   ChainExec -->|"reloadGraph"| CaseStore
 
-  Router -->|"agent 成功后"| PatternLearner
+  RuntimeSvc -->|"agent 成功后"| PatternLearner
   PatternLearner --> LLM
 
   Shared["packages/shared<br/>Zod Schema + TypeScript 类型"] -.-> API
@@ -92,28 +101,30 @@ flowchart TB
   ↓
 1. loadGraphWithInsights() — 懒运行 Insight Engine（29 个确定性分析器）
   ↓
-2. Chain Planner (LLM 或本地正则兜底) → AnalysisChainPlan
+2. routes.ts 只做 HTTP/SSE、profile 激活和参数校验，随后进入 AgentRuntimeService
   ↓
-3a. chain 路径 (planKind=chain):
+3. AgentRuntimeService 调用 Chain Planner (Agents SDK 或本地兜底) → AnalysisChainPlan
+  ↓
+4a. chain 路径 (planKind=chain):
     executeChain → 逐步执行，每步后 reloadGraph
     确定性步骤 → protocol adapter → tshark → evidenceCards
     llm_explain 步骤 → Leader Agent → handoff subagent
     无 llm_explain → 自动追加 LLM 综合解读
   ↓
-3b. single 确定性路径:
+4b. single 工具路径:
     protocol adapter 三层路由:
       hardcoded regex → tshark 查询
       learned pattern → tshark 查询
       无匹配 → agent fallback (Leader Agent + case-graph + tshark-query MCP)
     → evidenceCards + checks + protocolCorrelations → 写入 QueryRun
   ↓
-3c. llm_explain 路径:
+4c. llm_explain 路径:
     Leader Agent → handoff → subagent
     → case-graph MCP 读取 case graph
     → tshark-query MCP 查询原始包数据
     → 诊断结论 + suggestedQueries
   ↓
-4. SSE 流式输出 → Web 聊天气泡
+5. SSE 流式输出 → Web 聊天气泡
 ```
 
 ## 组件详解
@@ -121,21 +132,25 @@ flowchart TB
 ### `apps/api` — Express API + Agent Runtime
 
 #### HTTP 层 (`src/http/`)
-- **routes.ts** — REST 端点 + SSE 流式 agent 回答：
-  1. `loadGraphWithInsights()` 懒运行 Insight Engine
-  2. `planChain()` 规划分析链
-  3. `executeChain()` 逐步执行，每步后 `reloadGraph()` 刷新 case graph
-  4. 无 `llm_explain` 步骤时自动追加 LLM 综合解读
-  5. agent fallback 成功后异步触发 Pattern Learner
+- **routes.ts** — REST 端点 + SSE 流式 agent 回答。对话入口只负责加载 case、校验请求、激活 LLM profile、写 SSE；不再直接抢答统计、RST、QueryRun 或多节点关联问题。
 - **caseStore.ts** — case 持久化：`data/cases/:caseId/case.json`
 - **capturePreprocess.ts** — 通过 `editcap -s` 裁剪 payload
 - **reportBuilder.ts** — 从 case graph 生成结构化 Markdown 报告
 - **llmSettings.ts** — LLM 配置文件管理（`.env` 中 `PCAPAI_LLM_PROFILE_*`）
 
+#### Agent Runtime Service (`src/services/agentRuntimeService.ts`)
+- **AgentRuntimeService** — Web/API 后面的统一对话编排入口：
+  1. 调用 `planChain()` 生成单步或多步计划
+  2. `planKind=chain` 时调用 `executeChain()`，每步后刷新 case graph
+  3. 单步计划调用 `executeAgentIntentPlan()`，由工具层执行 QueryRun、统计、协议 adapter、报告或上下文追问
+  4. 工具层无法处理时进入 `runPcapTroubleshootingAgent()`
+  5. 统一记录 ToolRun、Agent runtime 状态，并把 QueryRun 结果同步到 case memory
+  6. 对 `/agent` 和 `/agent/stream` 使用同一套逻辑，SSE 只影响输出方式
+
 #### Agent 层 (`src/agents/`)
 - **runtime.ts** — OpenAI Agents SDK runtime：
   - `runChainPlanner()` — 规划分析链，输出 `AnalysisChainPlan`
-  - `runIntentPlanner()` — 单步意图分类，用于普通 `/agent` 路径；无 LLM 时由 `plannerService.ts` 本地兜底
+  - `runIntentPlanner()` — 单步意图分类能力，保留给兼容路径和本地兜底；主对话入口优先使用 `runChainPlanner()`
   - `runPcapTroubleshootingAgent()` — Leader Agent + 5 个 handoff subagent：
     - **DiagnosticInterviewAgent** — 诊断访谈，收集故障现象、网络拓扑、抓包位置
     - **HypothesisAgent** — 假设验证，优先读取 insights，再按需调用 tshark-query MCP
@@ -244,15 +259,17 @@ Zod schema + TypeScript 类型，定义完整领域模型：
   ↓
 1. loadGraphWithInsights() — 懒运行 Insight Engine
   ↓
-2. Chain Planner 分类 → AnalysisChainPlan
+2. routes.ts 进入 AgentRuntimeService
   ↓
-3a. Chain path (planKind=chain):
+3. Chain Planner 分类 → AnalysisChainPlan
+  ↓
+4a. Chain path (planKind=chain):
     executeChain → 逐步执行
     每步后 reloadGraph 刷新 case graph
     支持 paramsFrom 参数绑定
     无 llm_explain 步骤 → 自动追加 LLM 综合解读
   ↓
-3b. Single deterministic path:
+4b. Single tool path:
     protocol adapter 三层路由:
       hardcoded regex match → tshark 查询
       learned pattern match → tshark 查询
@@ -260,13 +277,13 @@ Zod schema + TypeScript 类型，定义完整领域模型：
     → evidenceCards + checks + protocolCorrelations
     → 写入 QueryRun
   ↓
-3c. Agent path (llm_explain intent):
+4c. Agent path (llm_explain intent):
     Leader Agent → handoff → subagent
     → 通过 case-graph MCP + tshark-query MCP
     → 诊断结论 + suggestedQueries
 ```
 
-普通 `POST /api/cases/:caseId/agent` 仍保留单步兼容路径：`planUserIntent()` → `executeAgentIntentPlan()` → 必要时 `runPcapTroubleshootingAgent()`。它不完全等同于上面的 Chain Planner 主路径。
+普通 `POST /api/cases/:caseId/agent` 与流式接口共用 `AgentRuntimeService`，只是不通过 SSE 输出中间事件。
 
 ### QueryRun 创建（`POST /api/cases/:caseId/query-runs`）
 
@@ -314,7 +331,7 @@ Protocol adapter 路由采用三层 fallback：
 
 ### 自动综合
 
-当分析链无 `llm_explain` 步骤但配置了 LLM key 时，routes.ts 自动追加 LLM 综合解读：读取所有 QueryRun 的 evidenceCards 和 checks，产出诊断结论。
+当分析链无 `llm_explain` 步骤但配置了 LLM key 时，`AgentRuntimeService` 自动追加 LLM 综合解读：读取 QueryRun 的 evidenceCards 和 checks，产出诊断结论。
 
 ## 数据持久化
 
