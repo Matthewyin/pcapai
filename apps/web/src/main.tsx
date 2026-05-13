@@ -722,10 +722,24 @@ function App() {
   const [renamingCaseId, setRenamingCaseId] = React.useState("");
   const [renameDraft, setRenameDraft] = React.useState("");
   const [pinnedCaseIds, setPinnedCaseIds] = React.useState<string[]>(() => loadPinnedCaseIds());
+  const [rightPanelHighlight, setRightPanelHighlight] = React.useState<"evidence" | "conversation" | "">("");
   const chatMessagesRef = React.useRef<HTMLDivElement | null>(null);
   const chatSaveTimerRef = React.useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const composerFileInputRef = React.useRef<HTMLInputElement | null>(null);
+  const evidenceContextRef = React.useRef<HTMLElement | null>(null);
+  const selectedConversationRef = React.useRef<HTMLElement | null>(null);
+  const rightPanelHighlightTimerRef = React.useRef<number | undefined>(undefined);
   const uploadDisabledReason = !graph ? "请先新建案例。" : !captureDrafts.length ? "请选择一个或多个 pcap/pcapng 文件。" : "";
+
+  function focusRightPanel(target: "evidence" | "conversation") {
+    if (rightPanelHighlightTimerRef.current) clearTimeout(rightPanelHighlightTimerRef.current);
+    setRightPanelHighlight(target);
+    window.setTimeout(() => {
+      const node = target === "evidence" ? evidenceContextRef.current : selectedConversationRef.current;
+      node?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 80);
+    rightPanelHighlightTimerRef.current = window.setTimeout(() => setRightPanelHighlight(""), 1800);
+  }
 
   function resetCreateFlow() {
     setCreateStep(1);
@@ -972,6 +986,7 @@ function App() {
     if (response.ok) {
       setGraph(data);
       setStatus(cardId ? "已跳转到轨迹关联的 QueryRun 和证据卡。" : "已跳转到轨迹关联的 QueryRun。");
+      focusRightPanel(cardId ? "evidence" : "conversation");
     } else {
       setStatus(formatApiError(data));
     }
@@ -980,13 +995,14 @@ function App() {
   async function openToolRun(run: ToolRun) {
     if (!graph) return;
     const card = evidenceCardFromToolRun(run);
-    if (run.pcapFilename && run.displayFilter) {
+    const runDisplayFilter = run.displayFilter || run.packetDisplayFilter || (run.frameNumber ? `frame.number == ${run.frameNumber}` : "");
+    if (run.pcapFilename && runDisplayFilter) {
       const response = await fetch(`/api/cases/${graph.spec.caseId}/evidence/open`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           pcapFilename: run.pcapFilename,
-          displayFilter: run.displayFilter,
+          displayFilter: runDisplayFilter,
           frameNumber: run.frameNumber,
           queryRunId: run.queryRunId,
           cardId: card?.cardId
@@ -1024,6 +1040,21 @@ function App() {
     if (run.kind === "mcp") return run.target === "open_in_wireshark" ? "Wireshark" : "工具查询";
     if (run.kind === "agent") return "综合解读";
     return run.intent || run.target;
+  }
+
+  function toolRunKindLabel(run: ToolRun) {
+    if (run.kind === "planner") return "规划";
+    if (run.kind === "tool") return "Agent 工具";
+    if (run.kind === "mcp") return "MCP";
+    return "Agent";
+  }
+
+  function toolRunActionLabel(run: ToolRun) {
+    const card = evidenceCardFromToolRun(run);
+    if (run.pcapFilename && (run.displayFilter || run.packetDisplayFilter || run.frameNumber)) return "打开 Wireshark";
+    if (card?.pcapFilename && (card.displayFilter || card.packetDisplayFilter || card.frameNumber)) return "打开证据";
+    if (run.queryRunId || card?.queryRunId) return "跳转 QueryRun";
+    return "查看";
   }
 
   function toolRunDetail(run: ToolRun) {
@@ -2554,10 +2585,20 @@ function openWireshark(pcap,filter){fetch("${window.location.origin}/api/cases/$
                     title={toolRunDetail(run) || run.summary}
                   >
                     <div className="toolTraceRowMain">
-                      <strong>{toolRunTitle(run)}</strong>
+                      <div className="toolTraceRowHeader">
+                        <strong>{toolRunTitle(run)}</strong>
+                        <span className={`toolTraceStatus ${run.status}`}>{toolRunStatusLabel(run.status)}</span>
+                      </div>
                       <p>{run.summary}</p>
+                      <div className="toolTraceMeta">
+                        <span>{toolRunKindLabel(run)}</span>
+                        <span>{run.target}</span>
+                        {run.durationMs !== undefined ? <span>{Math.round(run.durationMs)}ms</span> : null}
+                        {run.queryRunId ? <span>QueryRun</span> : null}
+                        {run.evidenceCardIds?.length ? <span>{run.evidenceCardIds.length} 证据</span> : null}
+                      </div>
                     </div>
-                    <span className={`toolTraceStatus ${run.status}`}>{toolRunStatusLabel(run.status)}</span>
+                    <span className="toolTraceAction">{toolRunActionLabel(run)}</span>
                   </button>
                 ))}
               </div>
@@ -2609,7 +2650,7 @@ function openWireshark(pcap,filter){fetch("${window.location.origin}/api/cases/$
           </section>
 
           {selectedEvidenceCard ? (
-            <section className="evidenceContextPanel">
+            <section ref={evidenceContextRef} className={`evidenceContextPanel ${rightPanelHighlight === "evidence" ? "traceFocus" : ""}`}>
               <div className="panelTitleRow">
                 <h2>当前证据</h2>
                 <span className="statusBadge neutral">{selectedEvidenceCard.kind}</span>
@@ -2757,7 +2798,7 @@ function openWireshark(pcap,filter){fetch("${window.location.origin}/api/cases/$
           </section>
 
           {selectedConversation && (
-            <section className="selectedConversationPanel">
+            <section ref={selectedConversationRef} className={`selectedConversationPanel ${rightPanelHighlight === "conversation" ? "traceFocus" : ""}`}>
               <h2>选中通讯对</h2>
               <dl>
                 <dt>协议</dt><dd>{selectedConversation.protocol.toUpperCase()}</dd>

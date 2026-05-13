@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { Agent, MCPServerStdio, OpenAIProvider, run, setDefaultModelProvider, tool, withTrace } from "@openai/agents";
+import { Agent, MCPServerStdio, OpenAIProvider, run, setDefaultModelProvider, tool, withTrace, type Tool } from "@openai/agents";
 import { z } from "zod";
 import { AgentIntentEnum, AnalysisChainPlanSchema, type AgentAnswer, type AnalysisChainPlan, type AnalysisChainStep, type CaseGraph } from "../../../../packages/shared/src/index.js";
 import { apiConfig } from "../config.js";
@@ -11,6 +11,7 @@ type RuntimeInput = {
   question: string;
   chatHistory?: Array<{ role: "user" | "assistant"; content: string }>;
   onTrace?: (message: string) => void;
+  tools?: Tool[];
 };
 
 export const AgentIntentSchema = z.object({
@@ -496,6 +497,15 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
   input.onTrace?.("case-graph MCP 和 tshark-query MCP 已连接。");
 
   const mcpServers = [caseGraphMcp, tsharkQueryMcp];
+  const localTools = input.tools || [];
+  const agentToolInstruction = localTools.length
+    ? [
+      "## pcapAI 本地工具",
+      "你可以优先调用 pcapai_ 前缀的本地工具来创建 QueryRun、查询统计、关联多文件、诊断选中 session 或导出报告。",
+      "这些工具会写入 QueryRun、EvidenceCard、checks 和 ToolRun，适合回答用户的具体排障问题。",
+      "tshark-query MCP 仍用于更底层的包级查询；不要绕过 pcapai_ 工具重复做已经封装好的确定性查询。"
+    ].join("\n")
+    : "";
 
   const triageAgent = new Agent({
     name: "DiagnosticInterviewAgent",
@@ -542,7 +552,8 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
     ].join("\n"),
     model: apiConfig.llm.model,
     modelSettings: modelSettings(),
-    mcpServers
+    mcpServers,
+    tools: localTools
   });
 
   const evidenceAgent = new Agent({
@@ -658,7 +669,8 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
     ].join("\n"),
     model: apiConfig.llm.model,
     modelSettings: modelSettings(),
-    mcpServers
+    mcpServers,
+    tools: localTools
   });
 
   const pathAgent = new Agent({
@@ -677,7 +689,8 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
     ].join("\n"),
     model: apiConfig.llm.model,
     modelSettings: modelSettings(),
-    mcpServers
+    mcpServers,
+    tools: localTools
   });
 
   const protocolAgent = new Agent({
@@ -699,7 +712,8 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
     ].join("\n"),
     model: apiConfig.llm.model,
     modelSettings: modelSettings(),
-    mcpServers
+    mcpServers,
+    tools: localTools
   });
 
   const reportAgent = new Agent({
@@ -714,7 +728,8 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
     ].join("\n"),
     model: apiConfig.llm.model,
     modelSettings: modelSettings(),
-    mcpServers
+    mcpServers,
+    tools: localTools
   });
 
   const memoryInstruction = [
@@ -729,6 +744,7 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
       "你是 pcapAI 的网络排障诊断 leader。你的工作不是翻译 tshark 输出，而是像高级网络工程师一样诊断故障。",
       "",
       memoryInstruction,
+      agentToolInstruction,
       "",
       "## 诊断流程",
       "",
@@ -778,7 +794,8 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
     handoffs: [triageAgent, evidenceAgent, pathAgent, protocolAgent, reportAgent],
     model: apiConfig.llm.model,
     modelSettings: modelSettings(),
-    mcpServers
+    mcpServers,
+    tools: localTools
   });
   input.onTrace?.(`已创建 Leader Agent 和 5 个专家 Agent，模型=${apiConfig.llm.model}。`);
 

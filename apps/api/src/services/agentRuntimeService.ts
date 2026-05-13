@@ -1,4 +1,5 @@
 import type { AgentAnswer, AnalysisChainPlan, CaseGraph } from "../../../../packages/shared/src/index.js";
+import type { Tool } from "@openai/agents";
 import { apiConfig } from "../config.js";
 import { runPcapTroubleshootingAgent, type AgentIntentPlan } from "../agents/runtime.js";
 import { executeChain } from "./plannerService.js";
@@ -50,6 +51,7 @@ type AgentRuntimeDependencies = {
   recordErrorRun: (caseId: string, question: string, plan: AgentIntentPlan, status: string, error: unknown, durationMs: number) => void;
   updateRuntimeStatus: (patch: RuntimeStatusPatch) => void;
   adapterIds: () => string[];
+  createAgentTools: (caseId: string, question: string) => Tool[];
   learnFromAgentRun: (question: string, toolCalls: string[], adapterIds: string[]) => void;
 };
 
@@ -88,7 +90,8 @@ export function createAgentRuntimeService(deps: AgentRuntimeDependencies) {
       graph,
       question: deps.buildAgentQuestion(request),
       chatHistory: request.chatHistory,
-      onTrace
+      onTrace,
+      tools: deps.createAgentTools(graph.spec.caseId, request.question)
     });
     deps.learnFromAgentRun(request.question, answer.toolCalls || [], deps.adapterIds());
     return { status: plan.intent === "llm_explain" ? "success" : "agent_fallback", answer: deps.answerWithPlannerThought(answer, plan) };
@@ -163,7 +166,8 @@ export function createAgentRuntimeService(deps: AgentRuntimeDependencies) {
         const llmAnswer = await runPcapTroubleshootingAgent({
           graph: freshGraph,
           question: `基于以下分析链结果，综合解读异常并给出诊断结论：\n${finalAnswer.answer}`,
-          chatHistory: request.chatHistory
+          chatHistory: request.chatHistory,
+          tools: deps.createAgentTools(graph.spec.caseId, request.question)
         });
         answer = {
           ...finalAnswer,

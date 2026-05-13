@@ -7,9 +7,7 @@ import {
   CaptureNodeSchema,
   CaseSpecSchema,
   MappingHintSchema,
-  QueryRunInputSchema,
   TimeOffsetHintSchema,
-  type AgentAnswer,
   type CaseGraph,
   type EvidenceCard,
   type QueryRun,
@@ -24,7 +22,7 @@ import { createHttpAdapter } from "../protocolAdapters/http.js";
 import { createIcmpAdapter } from "../protocolAdapters/icmp.js";
 import { createTcpAdapters } from "../protocolAdapters/tcp.js";
 import { createTlsAdapter } from "../protocolAdapters/tls.js";
-import { runProtocolAdapter, type ProtocolAdapter, type ProtocolAdapterContext } from "../protocolAdapters/types.js";
+import { type ProtocolAdapter, type ProtocolAdapterContext } from "../protocolAdapters/types.js";
 import { createUdpAdapter } from "../protocolAdapters/udp.js";
 import { stripPayload } from "./capturePreprocess.js";
 import { addCapture, capturesDirectory, caseDirectory, createEmptyCase, deleteCases, listCaseSummaries, readAnalysisRunSnapshot, readCaseGraph, safePathPart, writeCaseGraph } from "./caseStore.js";
@@ -34,8 +32,11 @@ import { createAgentAnswerService } from "../services/agentAnswerService.js";
 import { createEvidenceOpenService } from "../services/evidenceOpenService.js";
 import { runLevel1Insights } from "../services/insightEngine.js";
 import { extractTcpAnomalies } from "../services/tcpPreprocessor.js";
+import { createAgentToolRegistryService } from "../services/agentToolRegistryService.js";
 import { createPlannerService } from "../services/plannerService.js";
 import { createAgentRuntimeService } from "../services/agentRuntimeService.js";
+import { createProtocolEventQueryService } from "../services/protocolEventQueryService.js";
+import { createQueryRunApiService } from "../services/queryRunApiService.js";
 import { createQueryRunService } from "../services/queryRunService.js";
 import { createStatisticsQueryService } from "../services/statisticsQueryService.js";
 import { createToolRunService } from "../services/toolRunService.js";
@@ -120,7 +121,7 @@ const toolRunService = createToolRunService({
   writeGraph: writeCaseGraph,
   setGraph: (caseId, graph) => cases.set(caseId, graph)
 });
-const { recordPlannerRun, recordAnswerRun, recordErrorRun, recordMcpRun, recordQueryRunMcp } = toolRunService;
+const { recordToolRun, recordPlannerRun, recordAnswerRun, recordErrorRun, recordMcpRun, recordQueryRunMcp } = toolRunService;
 const evidenceOpenService = createEvidenceOpenService({
   capturesDirectory,
   writeGraph: writeCaseGraph,
@@ -177,6 +178,18 @@ const {
   shouldCorrelateCaptures,
   shouldCreateQueryRun
 } = queryRunService;
+const queryRunApiService = createQueryRunApiService({
+  loadGraph,
+  writeCaseGraph,
+  setGraph: (caseId, graph) => cases.set(caseId, graph),
+  capturesDirectory,
+  conversationPacketLimit: apiConfig.query.conversationPacketLimit,
+  inferQueryRunInput,
+  createQueryRun,
+  selectConversation,
+  getConversationPackets: getConversationPacketsWithMcp,
+  evidenceOpenService
+});
 const statisticsQueryService = createStatisticsQueryService({
   retainedQueryRunLimit: apiConfig.query.retainedQueryRunLimit,
   captureQueryInputs,
@@ -395,90 +408,43 @@ const protocolAdapters: ProtocolAdapter[] = [
   createTlsAdapter(protocolAdapterContext),
   createHttpAdapter(protocolAdapterContext)
 ];
+const protocolEventQueryService = createProtocolEventQueryService({
+  adapters: protocolAdapters,
+  hasLlmApiKey: () => Boolean(apiConfig.llm.apiKey),
+  loadLearnedPatterns,
+  learnFromAgentRun: (question, toolCalls, adapterIds) => {
+    learnFromAgentRun(question, toolCalls, adapterIds).catch(() => {});
+  }
+});
+const agentToolRegistryService = createAgentToolRegistryService({
+  usageHelpAnswer,
+  deterministicStatisticsAnswer,
+  activeCorrelationNeedsContext,
+  applyCorrelationContextAndRerun,
+  createCaptureCorrelationQueryRun,
+  runProtocolEventQuery: protocolEventQueryService.run,
+  inferQueryRunInput,
+  createQueryRun,
+  queryRunAnswer,
+  selectedSessionProblemAnswer,
+  activeQueryRunAnswer,
+  reportAnswer,
+  troubleshootingScopeAnswer,
+  loadGraph,
+  recordToolRun,
+  runLlmExplain: async (graph, question) => {
+    const answer = await runPcapTroubleshootingAgent({ graph, question, chatHistory: undefined });
+    return answer;
+  }
+});
 const plannerService = createPlannerService({
   fallbackPatterns: apiConfig.planner.fallbackPatterns,
   hasLlmApiKey: () => Boolean(apiConfig.llm.apiKey),
   isProtocolStatisticsQuestion,
   shouldApplyCorrelationContext,
-  activeCorrelationNeedsContext,
   shouldCorrelateCaptures,
   shouldCreateQueryRun,
-  usageHelpAnswer,
-  deterministicStatisticsAnswer,
-  applyCorrelationContextAndRerun,
-  createCaptureCorrelationQueryRun,
-  runProtocolEventQuery: async (graph, question) => {
-    let matching = protocolAdapters.filter((candidate) => candidate.match(question));
-
-    // 如果多个 adapter 匹配，用协议关键词优先级筛选
-    if (matching.length > 1) {
-      const protocolHints: Record<string, RegExp> = {
-        dns: /\bdns\b|解析|域名|nxdomain|servfail/i,
-        tcp: /\btcp\b|重传|rst|zero.?window|握手|syn/i,
-        tls: /\btls\b|ssl|证书|cipher|handshake/i,
-        icmp: /\bicmp\b|unreachable|ttl|fragment/i,
-        udp: /\budp\b|quic/i,
-        http: /\bhttp\b|状态码|status.?code/i
-      };
-      const prioritized = matching.filter((adapter) => {
-        const hint = protocolHints[adapter.id];
-        return hint && hint.test(question);
-      });
-      if (prioritized.length === 1) matching = prioritized;
-      else if (prioritized.length > 1) matching = prioritized;
-    }
-
-    if (!matching.length) {
-      const learnedPatterns = loadLearnedPatterns();
-      const adapterResult = await runProtocolAdapter(protocolAdapters, graph, question, learnedPatterns);
-      if (adapterResult) return { status: adapterResult.adapter.status, answer: adapterResult.answer };
-      if (apiConfig.llm.apiKey) {
-        try {
-          const agentAnswer = await runPcapTroubleshootingAgent({ graph, question });
-          const adapterIds = protocolAdapters.map((a) => a.id);
-          learnFromAgentRun(question, agentAnswer.toolCalls || [], adapterIds).catch(() => {});
-          return { status: "agent_fallback", answer: agentAnswer };
-        } catch {
-          return null;
-        }
-      }
-      return null;
-    }
-    if (matching.length === 1) {
-      const answer = await matching[0].run(graph, question);
-      return { status: matching[0].status, answer };
-    }
-    const results = await Promise.all(matching.map(async (adapter) => ({ adapter, answer: await adapter.run(graph, question) })));
-    const combinedAnswer: AgentAnswer = {
-      answer: results.map((r) => r.answer.answer).join("\n\n---\n\n"),
-      thoughts: results.flatMap((r) => r.answer.thoughts || []),
-      evidenceCards: results.flatMap((r) => r.answer.evidenceCards || []),
-      actions: results.flatMap((r) => r.answer.actions || []),
-      evidenceIds: results.flatMap((r) => r.answer.evidenceIds),
-      packetIds: results.flatMap((r) => r.answer.packetIds),
-      sessionLinkIds: results.flatMap((r) => r.answer.sessionLinkIds),
-      findingIds: results.flatMap((r) => r.answer.findingIds),
-      missingContext: results.flatMap((r) => r.answer.missingContext),
-      confidence: results.every((r) => r.answer.confidence === "certain") ? "certain" : results.some((r) => r.answer.confidence === "low" || r.answer.confidence === "needs_context") ? "low" : "high",
-      suggestedActions: results.flatMap((r) => r.answer.suggestedActions),
-      suggestedQueries: results.flatMap((r) => r.answer.suggestedQueries || []),
-      handoffAgent: results[results.length - 1]?.answer.handoffAgent
-    };
-    return { status: "deterministic_multi_protocol", answer: combinedAnswer };
-  },
-  createTcpSessionQueryRun: async (graph, question) => {
-    const queryInput = QueryRunInputSchema.parse({ ...inferQueryRunInput(question, graph), question });
-    const nextGraph = await createQueryRun(graph, queryInput);
-    return queryRunAnswer(nextGraph, nextGraph.activeQueryRunId || "");
-  },
-  selectedSessionProblemAnswer,
-  activeQueryRunAnswer,
-  reportAnswer,
-  troubleshootingScopeAnswer,
-  runLlmExplain: async (graph, question) => {
-    const answer = await runPcapTroubleshootingAgent({ graph, question, chatHistory: undefined });
-    return answer;
-  }
+  executeToolIntent: agentToolRegistryService.execute
 });
 const {
   planChain,
@@ -499,7 +465,8 @@ const agentRuntimeService = createAgentRuntimeService({
   recordAnswerRun,
   recordErrorRun,
   updateRuntimeStatus: (patch) => Object.assign(agentRuntimeStatus, patch),
-  adapterIds: () => protocolAdapters.map((adapter) => adapter.id),
+  adapterIds: protocolEventQueryService.adapterIds,
+  createAgentTools: (caseId, question) => agentToolRegistryService.createSdkTools(caseId, question),
   learnFromAgentRun: (question, toolCalls, adapterIds) => {
     learnFromAgentRun(question, toolCalls, adapterIds).catch(() => {});
   }
@@ -817,15 +784,10 @@ export function createAgentRouter() {
   });
 
   router.post("/cases/:caseId/query-runs", async (req, res) => {
-    const caseId = String(req.params.caseId);
     try {
-      const graph = loadGraph(caseId);
-      const inferred = inferQueryRunInput(String(req.body?.question || ""), graph);
-      const parsed = QueryRunInputSchema.safeParse({ ...inferred, ...(req.body || {}) });
-      if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-      const nextGraph = await createQueryRun(graph, parsed.data);
-      const queryRun = nextGraph.queryRuns.find((run) => run.queryRunId === nextGraph.activeQueryRunId);
-      return res.status(201).json({ graph: nextGraph, queryRun });
+      const result = await queryRunApiService.create(String(req.params.caseId), req.body || {});
+      if (!result.ok) return res.status(result.status).json({ error: result.error });
+      return res.status(result.status || 200).json(result.data);
     } catch (error) {
       return res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
     }
@@ -833,10 +795,9 @@ export function createAgentRouter() {
 
   router.get("/cases/:caseId/query-runs/:queryRunId", (req, res) => {
     try {
-      const graph = loadGraph(String(req.params.caseId));
-      const queryRun = graph.queryRuns.find((run) => run.queryRunId === String(req.params.queryRunId));
-      if (!queryRun) return res.status(404).json({ error: "query run not found" });
-      return res.json({ queryRun });
+      const result = queryRunApiService.get(String(req.params.caseId), String(req.params.queryRunId));
+      if (!result.ok) return res.status(result.status).json({ error: result.error });
+      return res.json(result.data);
     } catch (error) {
       return res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
     }
@@ -844,19 +805,10 @@ export function createAgentRouter() {
 
   router.post("/cases/:caseId/query-runs/:queryRunId/activate", (req, res) => {
     try {
-      const graph = loadGraph(String(req.params.caseId));
-      const queryRunId = String(req.params.queryRunId);
       const cardId = typeof req.body?.cardId === "string" ? req.body.cardId : "";
-      const queryRun = graph.queryRuns.find((run) => run.queryRunId === queryRunId);
-      if (!queryRun) return res.status(404).json({ error: "query run not found" });
-      const nextGraph: CaseGraph = {
-        ...graph,
-        activeQueryRunId: queryRunId,
-        queryRuns: graph.queryRuns.map((run) => run.queryRunId === queryRunId && cardId ? { ...run, selectedEvidenceCardId: cardId } : run)
-      };
-      writeCaseGraph(nextGraph);
-      cases.set(graph.spec.caseId, nextGraph);
-      return res.json(nextGraph);
+      const result = queryRunApiService.activate(String(req.params.caseId), String(req.params.queryRunId), cardId);
+      if (!result.ok) return res.status(result.status).json({ error: result.error });
+      return res.json(result.data);
     } catch (error) {
       return res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
     }
@@ -864,16 +816,14 @@ export function createAgentRouter() {
 
   router.post("/cases/:caseId/query-runs/:queryRunId/conversations/:conversationId/select", async (req, res) => {
     try {
-      const graph = loadGraph(String(req.params.caseId));
-      const selected = await selectConversation(graph, String(req.params.queryRunId), String(req.params.conversationId));
-      if (selected.status === "query_not_found") return res.status(404).json({ error: "query run not found" });
-      if (selected.status === "conversation_not_found") return res.status(404).json({ error: "conversation not found" });
-      if (selected.status === "capture_not_found") return res.status(404).json({ error: "capture file not found" });
-      const shouldOpenWireshark = req.body?.openWireshark === true;
-      const wireshark = shouldOpenWireshark && selected.conversation.pcapFilename
-        ? await evidenceOpenService.openConversation(selected.graph, selected.queryRun, selected.conversation, "打开选中 TCP session 的 Wireshark filter。")
-        : null;
-      return res.json({ graph: selected.graph, queryRun: selected.queryRun, wireshark });
+      const result = await queryRunApiService.select(
+        String(req.params.caseId),
+        String(req.params.queryRunId),
+        String(req.params.conversationId),
+        req.body?.openWireshark === true
+      );
+      if (!result.ok) return res.status(result.status).json({ error: result.error });
+      return res.json(result.data);
     } catch (error) {
       return res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
     }
@@ -881,24 +831,9 @@ export function createAgentRouter() {
 
   router.get("/cases/:caseId/query-runs/:queryRunId/conversations/:conversationId/packets", async (req, res) => {
     try {
-      const graph = loadGraph(String(req.params.caseId));
-      const queryRun = graph.queryRuns.find((run) => run.queryRunId === String(req.params.queryRunId));
-      if (!queryRun) return res.status(404).json({ error: "query run not found" });
-      const conversation = queryRun.conversations.find((item) => item.conversationId === String(req.params.conversationId));
-      if (!conversation) return res.status(404).json({ error: "conversation not found" });
-      const capture = graph.captures.find((item) => item.nodeId === conversation.nodeId && item.pcapFilename === conversation.pcapFilename);
-      if (!capture?.pcapFilename) return res.status(404).json({ error: "capture file not found" });
-      const result = await getConversationPacketsWithMcp({
-        capture: {
-          nodeId: capture.nodeId,
-          name: capture.name,
-          pcapFilename: capture.pcapFilename,
-          pcapPath: path.join(capturesDirectory(graph.spec.caseId), capture.pcapFilename)
-        },
-        displayFilter: conversation.displayFilter,
-        limit: apiConfig.query.conversationPacketLimit
-      });
-      return res.json(result);
+      const result = await queryRunApiService.packets(String(req.params.caseId), String(req.params.queryRunId), String(req.params.conversationId));
+      if (!result.ok) return res.status(result.status).json({ error: result.error });
+      return res.json(result.data);
     } catch (error) {
       return res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
     }
@@ -906,17 +841,10 @@ export function createAgentRouter() {
 
   router.post("/cases/:caseId/query-runs/:queryRunId/open-wireshark", async (req, res) => {
     try {
-      const graph = loadGraph(String(req.params.caseId));
-      const queryRun = graph.queryRuns.find((run) => run.queryRunId === String(req.params.queryRunId));
-      if (!queryRun) return res.status(404).json({ error: "query run not found" });
-      const conversationId = String(req.body?.conversationId || queryRun.selectedConversationId || "");
-      const conversation = queryRun.conversations.find((item) => item.conversationId === conversationId);
-      if (!conversation) return res.status(404).json({ error: "conversation not found" });
-      const capture = graph.captures.find((item) => item.nodeId === conversation.nodeId && item.pcapFilename === conversation.pcapFilename);
-      if (!capture?.pcapFilename) return res.status(404).json({ error: "capture file not found" });
-      const wireshark = await evidenceOpenService.openConversation(graph, queryRun, conversation);
-      if (!wireshark) return res.status(404).json({ error: "capture file not found" });
-      return res.json(wireshark);
+      const conversationId = String(req.body?.conversationId || "");
+      const result = await queryRunApiService.openWireshark(String(req.params.caseId), String(req.params.queryRunId), conversationId);
+      if (!result.ok) return res.status(result.status).json({ error: result.error });
+      return res.json(result.data);
     } catch (error) {
       return res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
     }

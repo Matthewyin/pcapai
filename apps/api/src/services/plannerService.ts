@@ -22,20 +22,9 @@ export function createPlannerService(input: {
   hasLlmApiKey: () => boolean;
   isProtocolStatisticsQuestion: (question: string) => boolean;
   shouldApplyCorrelationContext: (question: string, graph: CaseGraph) => boolean;
-  activeCorrelationNeedsContext: (graph: CaseGraph) => boolean;
   shouldCorrelateCaptures: (question: string) => boolean;
   shouldCreateQueryRun: (question: string) => boolean;
-  usageHelpAnswer: () => AgentAnswer;
-  deterministicStatisticsAnswer: (graph: CaseGraph, question: string) => Promise<AgentAnswer | null>;
-  applyCorrelationContextAndRerun: (graph: CaseGraph, question: string) => Promise<AgentAnswer>;
-  createCaptureCorrelationQueryRun: (graph: CaseGraph, question: string) => Promise<AgentAnswer>;
-  runProtocolEventQuery: (graph: CaseGraph, question: string) => Promise<PlannedResult>;
-  createTcpSessionQueryRun: (graph: CaseGraph, question: string) => Promise<AgentAnswer>;
-  selectedSessionProblemAnswer: (graph: CaseGraph) => AgentAnswer;
-  activeQueryRunAnswer: (graph: CaseGraph, question: string) => AgentAnswer;
-  reportAnswer: (graph: CaseGraph) => AgentAnswer;
-  troubleshootingScopeAnswer: () => AgentAnswer;
-  runLlmExplain: (graph: CaseGraph, question: string) => Promise<AgentAnswer>;
+  executeToolIntent: (graph: CaseGraph, question: string, intent: AgentIntentPlan["intent"]) => Promise<PlannedResult>;
 }) {
   const matchesUsageHelp = patternMatcher(input.fallbackPatterns.usageHelp);
   const matchesNetworkStatistics = patternMatcher(input.fallbackPatterns.networkStatistics);
@@ -122,69 +111,11 @@ export function createPlannerService(input: {
 
   async function executeChainStep(graph: CaseGraph, question: string, intent: string, params: Record<string, unknown>): Promise<PlannedResult> {
     const stepQuestion = typeof params.question === "string" ? params.question : (typeof params.purpose === "string" ? params.purpose : question);
-    switch (intent) {
-      case "usage_help":
-        return { status: "usage_help", answer: input.usageHelpAnswer() };
-      case "protocol_statistics":
-      case "network_statistics": {
-        const answer = await input.deterministicStatisticsAnswer(graph, stepQuestion);
-        return answer ? { status: "deterministic_statistics", answer } : null;
-      }
-      case "mapping_hint_update":
-        if (!input.activeCorrelationNeedsContext(graph)) return null;
-        return { status: "correlation_context_applied", answer: await input.applyCorrelationContextAndRerun(graph, stepQuestion) };
-      case "capture_correlation":
-        return { status: "capture_correlation", answer: await input.createCaptureCorrelationQueryRun(graph, stepQuestion) };
-      case "protocol_event_query":
-        return input.runProtocolEventQuery(graph, stepQuestion);
-      case "tcp_session_query":
-        return { status: "query_run", answer: await input.createTcpSessionQueryRun(graph, stepQuestion) };
-      case "selected_session_diagnosis":
-        return graph.queryRuns.length ? { status: "selected_session_diagnosis", answer: input.selectedSessionProblemAnswer(graph) } : null;
-      case "active_query_explain":
-        return graph.queryRuns.length ? { status: "query_run_diagnosis", answer: input.activeQueryRunAnswer(graph, stepQuestion) } : null;
-      case "report_request":
-        return { status: "report", answer: input.reportAnswer(graph) };
-      case "needs_clarification":
-        return { status: "needs_query_scope", answer: input.troubleshootingScopeAnswer() };
-      case "llm_explain":
-        return { status: "llm_explain", answer: await input.runLlmExplain(graph, stepQuestion) };
-      default:
-        return null;
-    }
+    return input.executeToolIntent(graph, stepQuestion, intent as AgentIntentPlan["intent"]);
   }
 
   async function executeAgentIntentPlan(graph: CaseGraph, question: string, plan: AgentIntentPlan): Promise<PlannedResult> {
-    switch (plan.intent) {
-      case "usage_help":
-        return { status: "usage_help", answer: input.usageHelpAnswer() };
-      case "protocol_statistics":
-      case "network_statistics": {
-        const answer = await input.deterministicStatisticsAnswer(graph, question);
-        return answer ? { status: "deterministic_statistics", answer } : null;
-      }
-      case "mapping_hint_update":
-        if (!input.activeCorrelationNeedsContext(graph)) return null;
-        return { status: "correlation_context_applied", answer: await input.applyCorrelationContextAndRerun(graph, question) };
-      case "capture_correlation":
-        return { status: "capture_correlation", answer: await input.createCaptureCorrelationQueryRun(graph, question) };
-      case "protocol_event_query":
-        return input.runProtocolEventQuery(graph, question);
-      case "tcp_session_query":
-        return { status: "query_run", answer: await input.createTcpSessionQueryRun(graph, question) };
-      case "selected_session_diagnosis":
-        return graph.queryRuns.length ? { status: "selected_session_diagnosis", answer: input.selectedSessionProblemAnswer(graph) } : null;
-      case "active_query_explain":
-        return graph.queryRuns.length ? { status: "query_run_diagnosis", answer: input.activeQueryRunAnswer(graph, question) } : null;
-      case "report_request":
-        return { status: "report", answer: input.reportAnswer(graph) };
-      case "needs_clarification":
-        return { status: "needs_query_scope", answer: input.troubleshootingScopeAnswer() };
-      case "llm_explain":
-        return { status: "llm_explain", answer: await input.runLlmExplain(graph, question) };
-      default:
-        return null;
-    }
+    return input.executeToolIntent(graph, question, plan.intent);
   }
 
   return {

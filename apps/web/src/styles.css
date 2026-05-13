@@ -643,6 +643,20 @@ main.app > header {
   overflow: hidden;
 }
 
+.traceFocus {
+  animation: traceFocusPulse 1800ms ease;
+  border-color: var(--accent);
+}
+
+@keyframes traceFocusPulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(211, 108, 15, 0.34);
+  }
+  100% {
+    box-shadow: 0 0 0 10px rgba(211, 108, 15, 0);
+  }
+}
+
 .queryPanel p,
 .queryPanel span {
   color: var(--text);
@@ -729,7 +743,7 @@ main.app > header {
 }
 
 .toolTraceRow {
-  align-items: center;
+  align-items: start;
   background: var(--card);
   border: 1px solid var(--line);
   border-left: 3px solid var(--accent);
@@ -738,9 +752,8 @@ main.app > header {
   cursor: pointer;
   display: grid;
   gap: 12px;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr);
   min-width: 0;
-  min-height: 74px;
   padding: 12px;
   text-align: left;
   width: 100%;
@@ -760,7 +773,15 @@ main.app > header {
 
 .toolTraceRowMain {
   display: grid;
-  gap: 4px;
+  gap: 8px;
+  min-width: 0;
+}
+
+.toolTraceRowHeader {
+  align-items: center;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) auto;
   min-width: 0;
 }
 
@@ -775,13 +796,44 @@ main.app > header {
   white-space: nowrap;
 }
 
+.toolTraceMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.toolTraceMeta span,
+.toolTraceAction {
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--text);
+  font-size: 11px;
+  line-height: 1;
+  max-width: 100%;
+  overflow: hidden;
+  padding: 6px 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.toolTraceAction {
+  align-self: start;
+  background: transparent;
+  border-color: var(--accent);
+  color: var(--text);
+  font-size: 12px;
+  justify-self: start;
+}
+
 .toolTraceStatus {
   border: 1px solid var(--line);
   border-radius: 999px;
   color: var(--text);
-  font-size: 13px;
+  font-size: 12px;
   line-height: 1;
-  padding: 7px 10px;
+  padding: 6px 8px;
   white-space: nowrap;
 }
 
@@ -806,7 +858,7 @@ main.app > header {
   overflow: hidden;
   overflow-wrap: anywhere;
   text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
   word-break: break-word;
 }
 

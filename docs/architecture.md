@@ -112,7 +112,8 @@ flowchart TB
     无 llm_explain → 自动追加 LLM 综合解读
   ↓
 4b. single 工具路径:
-    protocol adapter 三层路由:
+    AgentToolRegistry 执行对应 `pcapai_` 工具
+    → protocol adapter 三层路由:
       hardcoded regex → tshark 查询
       learned pattern → tshark 查询
       无匹配 → agent fallback (Leader Agent + case-graph + tshark-query MCP)
@@ -147,6 +148,15 @@ flowchart TB
   5. 统一记录 ToolRun、Agent runtime 状态，并把 QueryRun 结果同步到 case memory
   6. 对 `/agent` 和 `/agent/stream` 使用同一套逻辑，SSE 只影响输出方式
 
+#### Agent Tool Registry (`src/services/agentToolRegistryService.ts`)
+- **AgentToolRegistryService** — Agent 和 Planner 共用的确定性工具目录：
+  - 统一注册 `list_protocols`、`get_network_statistics`、`create_query_run`、`query_protocol_events`、`diagnose_selected_session`、`correlate_captures`、`export_report` 等工具能力
+  - `plannerService` 只产出 intent，不直接持有每个工具实现
+  - `plannerService` 通过 registry 执行 intent
+  - `AgentRuntimeService` 会把 registry 转成 OpenAI Agents SDK function tools 注入 Leader Agent 和 5 个 subagent
+  - SDK tool 名称使用 `pcapai_` 前缀，避免和 `tshark-query MCP` 的底层工具同名冲突
+  - 每次 registry 工具执行都会写入 `ToolRun(kind=tool)`；如果工具内部调用 MCP，下层 MCP 仍单独写入 `ToolRun(kind=mcp)`
+
 #### Agent 层 (`src/agents/`)
 - **runtime.ts** — OpenAI Agents SDK runtime：
   - `runChainPlanner()` — 规划分析链，输出 `AnalysisChainPlan`
@@ -157,24 +167,32 @@ flowchart TB
     - **PathAgent** — 多节点路径分析和跨链路关联
     - **ProtocolAgent** — 协议级行为分析，可直接调用 tshark-query MCP 查询原始包数据
     - **ReportAgent** — 生成结构化诊断报告
-  - Leader Agent 和所有 subagent 同时挂载 case-graph MCP 和 tshark-query MCP；Chain Planner Agent 不使用 MCP
+  - Leader Agent 和所有 subagent 同时挂载 case-graph MCP、tshark-query MCP 和 `pcapai_` 本地工具；Chain Planner Agent 不使用 MCP
   - MCP 连接方式：`MCPServerStdio`，每次 `runPcapTroubleshootingAgent` 调用时创建临时 case graph JSON 文件并通过 `PCAPAI_CASE_GRAPH_PATH` 环境变量传给 case-graph MCP
   - 返回 `AgentAnswerWithToolCalls`，包含 tool call 名称用于 pattern learning
 
 #### Planner 层 (`src/services/`)
 - **plannerService.ts** — 分析链执行引擎：
-  - `createPlannerService()` — 工厂函数，接收 12 个 intent handler
+  - `createPlannerService()` — 工厂函数，接收统一的 `executeToolIntent`
   - `planChain()` / `planUserIntent()` — 规划（LLM 或本地兜底）
   - `executeChain()` — 逐步执行，支持 `paramsFrom` 参数绑定 + `reloadGraph` 回调
-  - `executeChainStep()` — 单步 intent 路由（12 种 intent）
+  - `executeChainStep()` — 单步 intent 委托给 AgentToolRegistry
   - 本地兜底模式：无 LLM key 时使用正则匹配
+- **protocolEventQueryService.ts** — 协议事件查询编排：
+  - 接收 TCP/DNS/TLS/HTTP/ICMP/UDP adapter 列表
+  - 负责 adapter 多匹配消歧、learned pattern fallback、agent fallback 和多协议结果合并
+  - `routes.ts` 不直接处理协议 adapter 匹配细节
+- **queryRunApiService.ts** — QueryRun HTTP 编排：
+  - 封装创建 QueryRun、激活 QueryRun、选择 conversation、查询 conversation packets、打开 Wireshark
+  - 复用 `queryRunService` 和 `evidenceOpenService`，不新增业务判断
+  - `routes.ts` 只负责把 service result 转成 HTTP status 和 JSON
 - **patternLearner.ts** — protocol adapter 自改进模块：
   - `loadLearnedPatterns()` — 从 `data/learned_patterns.json` 加载 learned regex→adapterId 对
   - `learnFromAgentRun()` — agent fallback 后，用 LLM 生成 regex + adapterId；验证后持久化
   - 无硬编码 tool→adapter 映射，LLM 从问题上下文和 adapter 列表决定路由
 
 #### Protocol Adapters (`src/protocolAdapters/`)
-6 个确定性 adapter，绕过 LLM 直接运行 tshark：
+6 个确定性 adapter，作为 `pcapai_` 工具背后的确定性实现运行 tshark：
 - **tcp.ts** — RST session pairs、retransmission pairs、zero-window pairs、SYN-no-SYN/ACK、one-way traffic、TCP issues overview
 - **dns.ts** — DNS 失败/无响应事务，rcode 分组，多 check 输出
 - **tls.ts** — TLS 握手事件（ClientHello/ServerHello/Alert），握手完整性检查，多 check 输出
@@ -236,7 +254,7 @@ Zod schema + TypeScript 类型，定义完整领域模型：
 
 #### `mcp/tshark-query` — tshark 查询引擎（19 个工具）
 被两个调用方使用：
-- **API 层**（`tsharkQueryClient.ts`）：protocol adapter 和 routes.ts 直接调用 tshark 查询
+- **Packet Analysis Service**（`tsharkQueryClient.ts`）：QueryRun、统计服务和 protocol adapter 调用 tshark 查询
 - **Agent Runtime**：Leader Agent 和 subagent 通过 MCP 协议调用，查询原始包数据
 
 工具：`build_display_filter`、`get_capture_time_range`、`list_protocols`、`get_network_statistics`、`list_tcp_conversations`、`query_packets`、`get_conversation_packets`、`get_tshark_packet_detail`、`list_tcp_resets`、`list_tcp_retransmissions`、`list_tcp_zero_window`、`list_icmp_events`、`list_dns_packets`、`list_udp_packets`、`list_tls_packets`、`list_http_packets`、`list_tcp_streams`、`follow_tcp_stream`、`get_expert_info`
@@ -270,7 +288,8 @@ Zod schema + TypeScript 类型，定义完整领域模型：
     无 llm_explain 步骤 → 自动追加 LLM 综合解读
   ↓
 4b. Single tool path:
-    protocol adapter 三层路由:
+    AgentToolRegistry 执行 `pcapai_` 工具
+    → protocol adapter 三层路由:
       hardcoded regex match → tshark 查询
       learned pattern match → tshark 查询
       无匹配 → agent fallback (case-graph + tshark-query MCP)
