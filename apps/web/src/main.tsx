@@ -2487,6 +2487,11 @@ function openWireshark(pcap,filter){fetch("${window.location.origin}/api/cases/$
               ) : null}
               <textarea
                 rows={composerExpanded ? 6 : 1}
+                name="pcapai-chat-question"
+                autoComplete="off"
+                autoCorrect="off"
+                autoCapitalize="off"
+                spellCheck={false}
                 value={question}
                 onChange={(event) => setQuestion(event.target.value)}
                 onKeyDown={(event) => {

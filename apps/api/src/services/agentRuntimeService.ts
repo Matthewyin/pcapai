@@ -44,7 +44,6 @@ type AgentRuntimeDependencies = {
   loadGraph: (caseId: string) => CaseGraph;
   buildAgentQuestion: (input: AgentChatRequest) => string;
   answerWithPlannerThought: (answer: AgentAnswer, plan: AgentIntentPlan) => AgentAnswer;
-  fallbackAgentAnswer: (graph: CaseGraph) => AgentAnswer;
   syncMemoryFromQueryRuns: (graph: CaseGraph) => CaseGraph;
   recordPlannerRun: (caseId: string, question: string, plan: AgentIntentPlan, durationMs: number) => void;
   recordAnswerRun: (caseId: string, question: string, plan: AgentIntentPlan, status: string, answer: AgentAnswer, durationMs: number) => void;
@@ -81,10 +80,38 @@ function emitAnswerInChunks(emit: StreamEmitter, answer: string) {
   }
 }
 
+function llmKeyRequiredAnswer(): AgentAnswer {
+  return {
+    answer: "当前没有配置 LLM API Key，Agent 分析未启动。请先到“设置 → 模型配置”中填写 OpenAI 兼容的 Base URL、API Key 和模型名称，并完成连接测试后再继续分析。",
+    thoughts: ["未检测到 LLM API Key，已停止 Agent 编排。"],
+    evidenceIds: [],
+    packetIds: [],
+    sessionLinkIds: [],
+    findingIds: [],
+    missingContext: ["LLM API Key"],
+    confidence: "needs_context",
+    suggestedActions: [
+      "打开设置菜单，进入模型配置。",
+      "填写 Base URL、API Key 和模型名称。",
+      "点击连接测试，确认模型可用后重新提问。"
+    ]
+  };
+}
+
+function llmKeyRequiredPlan(): AgentIntentPlan {
+  return {
+    intent: "needs_clarification",
+    confidence: "high",
+    reason: "缺少 LLM API Key，不能启动 Agent 分析。",
+    missingContext: ["LLM API Key"]
+  };
+}
+
 export function createAgentRuntimeService(deps: AgentRuntimeDependencies) {
   async function runLlmFallback(graph: CaseGraph, request: AgentChatRequest, plan: AgentIntentPlan, onTrace?: (message: string) => void) {
     if (!apiConfig.llm.apiKey) {
-      return { status: "fallback_no_key", answer: deps.fallbackAgentAnswer(graph) };
+      onTrace?.("未配置 LLM API Key，Agent 分析未启动。");
+      return { status: "llm_key_required", answer: llmKeyRequiredAnswer() };
     }
     const answer = await runPcapTroubleshootingAgent({
       graph,
@@ -192,6 +219,13 @@ export function createAgentRuntimeService(deps: AgentRuntimeDependencies) {
 
   async function run(graph: CaseGraph, request: AgentChatRequest) {
     const startedAt = Date.now();
+    if (!apiConfig.llm.apiKey) {
+      const plan = llmKeyRequiredPlan();
+      const answer = llmKeyRequiredAnswer();
+      deps.recordAnswerRun(graph.spec.caseId, request.question, plan, "llm_key_required", answer, Date.now() - startedAt);
+      deps.updateRuntimeStatus(statusPatch(graph, "llm_key_required", "missing llm api key"));
+      return { status: "llm_key_required", answer };
+    }
     const plannerStartedAt = Date.now();
     const chainPlan = await deps.planChain(graph, request.question, undefined, request.chatHistory);
     const durationMs = Date.now() - plannerStartedAt;
@@ -201,6 +235,16 @@ export function createAgentRuntimeService(deps: AgentRuntimeDependencies) {
 
   async function stream(graph: CaseGraph, request: AgentChatRequest, emit: StreamEmitter) {
     const startedAt = Date.now();
+    if (!apiConfig.llm.apiKey) {
+      const plan = llmKeyRequiredPlan();
+      const answer = llmKeyRequiredAnswer();
+      deps.recordAnswerRun(graph.spec.caseId, request.question, plan, "llm_key_required", answer, Date.now() - startedAt);
+      deps.updateRuntimeStatus(statusPatch(graph, "llm_key_required", "missing llm api key"));
+      emit.thought("未配置 LLM API Key，Agent 分析未启动。");
+      emitAnswerInChunks(emit, answer.answer);
+      emit.done(answer);
+      return;
+    }
     const plannerStartedAt = Date.now();
     const chainPlan = await deps.planChain(graph, request.question, (text) => emit.thought(text), request.chatHistory);
     const durationMs = Date.now() - plannerStartedAt;

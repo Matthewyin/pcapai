@@ -228,6 +228,32 @@ const tsharkFields = [
   "ssh.message_code"
 ];
 
+export function expandTsharkRowsToFullFields(output: string, selectedFields: string[]) {
+  return output.split("\n").filter(Boolean).map((line) => {
+    const values = line.split("\t");
+    let selectedIndex = 0;
+    const expanded = tsharkFields.map((field) => {
+      if (selectedFields[selectedIndex] === field) {
+        const value = values[selectedIndex] || "";
+        selectedIndex += 1;
+        return value;
+      }
+      return "";
+    });
+    return expanded.join("\t");
+  }).join("\n");
+}
+
+function parseUnsupportedTsharkFields(message = "") {
+  const marker = "Some fields aren't valid:";
+  const markerIndex = message.indexOf(marker);
+  if (markerIndex < 0) return [];
+  return message.slice(markerIndex + marker.length)
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((field) => field.length > 0);
+}
+
 const networkStatFields = [
   "ip.src",
   "ipv6.src",
@@ -578,34 +604,43 @@ export function parseNetworkStatisticsRows(output: string, capture: CaptureInput
 
 async function queryCapturePackets(capture: CaptureInput, displayFilter = "tcp", limit?: number) {
   if (!capture.pcapPath) return [];
-  const args = [
-    "-r",
-    capture.pcapPath,
-    "-Y",
-    displayFilter,
-    "-T",
-    "fields",
-    "-E",
-    "header=n",
-    "-E",
-    "separator=/t",
-    "-E",
-    "occurrence=f",
-    ...tsharkFields.flatMap((field) => ["-e", field])
-  ];
+  let selectedFields = [...tsharkFields];
   let stdout: string;
-  try {
-    ({ stdout } = await execFileAsync(tsharkCommand, args, { maxBuffer }));
-  } catch (err: unknown) {
-    // tshark 在存在不支持的字段名时仍可能输出有效数据，但退出码为 1
-    const e = err as { stdout?: string; stderr?: string };
-    if (e.stdout && e.stdout.trim().length > 0) {
-      stdout = e.stdout;
-    } else {
-      throw err;
+  for (;;) {
+    const args = [
+      "-r",
+      capture.pcapPath,
+      "-Y",
+      displayFilter,
+      "-T",
+      "fields",
+      "-E",
+      "header=n",
+      "-E",
+      "separator=/t",
+      "-E",
+      "occurrence=f",
+      ...selectedFields.flatMap((field) => ["-e", field])
+    ];
+    try {
+      ({ stdout } = await execFileAsync(tsharkCommand, args, { maxBuffer }));
+      break;
+    } catch (err: unknown) {
+      // 不同 tshark 版本支持的字段会有差异，移除明确报错的字段后重试。
+      const e = err as { stdout?: string; stderr?: string; message?: string };
+      if (e.stdout && e.stdout.trim().length > 0) {
+        stdout = e.stdout;
+        break;
+      }
+      const unsupportedFields = parseUnsupportedTsharkFields(`${e.stderr || ""}\n${e.message || ""}`);
+      const nextFields = selectedFields.filter((field) => !unsupportedFields.includes(field));
+      if (unsupportedFields.length === 0 || nextFields.length === selectedFields.length) {
+        throw err;
+      }
+      selectedFields = nextFields;
     }
   }
-  const rows = parseTsharkRows(stdout, capture);
+  const rows = parseTsharkRows(expandTsharkRowsToFullFields(stdout, selectedFields), capture);
   return limit ? rows.slice(0, limit) : rows;
 }
 

@@ -62,18 +62,13 @@ export function createPlannerService(input: {
 
   async function planUserIntent(graph: CaseGraph, question: string, onTrace?: (message: string) => void, chatHistory?: Array<{ role: string; content: string }>) {
     if (!input.hasLlmApiKey()) {
-      const plan = fallbackIntentPlan(graph, question);
-      const fallbackPlan = { ...plan, reason: `未配置 LLM API Key，使用本地兜底意图计划。${plan.reason}` };
-      onTrace?.(`${fallbackPlan.reason} intent=${fallbackPlan.intent}。`);
-      return fallbackPlan;
+      throw new Error("未配置 LLM API Key，无法启动 Agent 意图规划。");
     }
     try {
       return await runIntentPlanner({ graph, question, chatHistory, onTrace });
     } catch (error) {
-      const plan = fallbackIntentPlan(graph, question);
-      const fallbackPlan = { ...plan, reason: `Leader Intent Planner 调用失败，切换到本地兜底计划：${error instanceof Error ? error.message : String(error)}。${plan.reason}` };
-      onTrace?.(`${fallbackPlan.reason} intent=${fallbackPlan.intent}。`);
-      return fallbackPlan;
+      onTrace?.(`Leader Intent Planner 调用失败：${error instanceof Error ? error.message : String(error)}。`);
+      throw error;
     }
   }
 
@@ -92,20 +87,13 @@ export function createPlannerService(input: {
 
   async function planChain(graph: CaseGraph, question: string, onTrace?: (message: string) => void, chatHistory?: Array<{ role: string; content: string }>): Promise<AnalysisChainPlan> {
     if (!input.hasLlmApiKey()) {
-      const plan = fallbackChainPlan(graph, question);
-      onTrace?.(`未配置 LLM API Key，使用本地兜底单步计划。planKind=${plan.planKind}。`);
-      return plan;
+      throw new Error("未配置 LLM API Key，无法启动 Agent 分析链规划。");
     }
     try {
       return await runChainPlanner({ graph, question, chatHistory, onTrace });
     } catch (error) {
-      const plan = fallbackChainPlan(graph, question);
-      const fallbackChain = AnalysisChainPlanSchema.parse({
-        ...plan,
-        reason: `Chain Planner 调用失败，切换到本地兜底：${error instanceof Error ? error.message : String(error)}。${plan.reason}`
-      });
-      onTrace?.(`${fallbackChain.reason} planKind=${fallbackChain.planKind}。`);
-      return fallbackChain;
+      onTrace?.(`Chain Planner 调用失败：${error instanceof Error ? error.message : String(error)}。`);
+      throw error;
     }
   }
 

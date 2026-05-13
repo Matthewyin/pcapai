@@ -136,7 +136,6 @@ const {
   selectedSessionProblemAnswer,
   usageHelpAnswer,
   activeQueryRunAnswer,
-  fallbackAgentAnswer,
   troubleshootingScopeAnswer,
   reportAnswer,
   answerWithPlannerThought
@@ -459,7 +458,6 @@ const agentRuntimeService = createAgentRuntimeService({
   loadGraph,
   buildAgentQuestion,
   answerWithPlannerThought,
-  fallbackAgentAnswer,
   syncMemoryFromQueryRuns,
   recordPlannerRun,
   recordAnswerRun,

@@ -130,6 +130,9 @@ async function callTsharkQueryTool<T>(toolName: string, args: Record<string, unk
     try {
       return schema.parse(JSON.parse(text));
     } catch (error) {
+      if (!text.trim().startsWith("{") && !text.trim().startsWith("[")) {
+        throw new Error(`tshark-query MCP ${toolName} failed: ${text.slice(0, 1000)}`);
+      }
       throw new Error(`tshark-query MCP ${toolName} returned invalid JSON: ${text.slice(0, 1000)}${error instanceof Error ? `; ${error.message}` : ""}`);
     }
   } finally {

@@ -1,6 +1,39 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { parseNetworkStatisticsRows, parseTsharkRows } from "../src/index.js";
+import { expandTsharkRowsToFullFields, parseNetworkStatisticsRows, parseTsharkRows } from "../src/index.js";
+
+test("expandTsharkRowsToFullFields keeps parser columns stable when tshark fields are unsupported", () => {
+  const compactRow = [
+    "7",
+    "1769249100.123",
+    "10.0.0.1",
+    "49152",
+    "10.0.0.2",
+    "443",
+    "TCP",
+    "1",
+    "74",
+    "SYN"
+  ].join("\t");
+  const expanded = expandTsharkRowsToFullFields(compactRow, [
+    "frame.number",
+    "frame.time_epoch",
+    "ip.src",
+    "tcp.srcport",
+    "ip.dst",
+    "tcp.dstport",
+    "_ws.col.Protocol",
+    "tcp.flags.syn",
+    "frame.len",
+    "_ws.col.Info"
+  ]);
+  const packets = parseTsharkRows(expanded, { nodeId: "node-1", name: "client", pcapFilename: "client.pcap" });
+  assert.equal(packets[0].srcIp, "10.0.0.1");
+  assert.equal(packets[0].srcPort, 49152);
+  assert.equal(packets[0].dstIp, "10.0.0.2");
+  assert.equal(packets[0].dstPort, 443);
+  assert.deepEqual(packets[0].tcpFlags, ["SYN"]);
+});
 
 test("parseTsharkRows parses TCP analysis fields", () => {
   const row = [
