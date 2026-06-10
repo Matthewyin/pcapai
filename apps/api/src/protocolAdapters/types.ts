@@ -105,14 +105,21 @@ export type ProtocolAdapterContext = {
   listHttpPackets: (input: { captures: CaptureQueryInput[]; displayFilter: string; limit?: number }) => Promise<{ packets: PacketSummary[] }>;
 };
 
-export async function runProtocolAdapter(adapters: ProtocolAdapter[], graph: CaseGraph, question: string, learnedPatterns?: { regex: RegExp; adapterId: string }[]): Promise<{ adapter: ProtocolAdapter; answer: AgentAnswer } | null> {
+export type ProtocolAdapterMatch = {
+  adapter: ProtocolAdapter;
+  answer: AgentAnswer;
+  matchSource: "builtin" | "learned";
+  learnedRegex?: string;
+};
+
+export async function runProtocolAdapter(adapters: ProtocolAdapter[], graph: CaseGraph, question: string, learnedPatterns?: { regex: RegExp; adapterId: string }[]): Promise<ProtocolAdapterMatch | null> {
   const adapter = adapters.find((candidate) => candidate.match(question));
-  if (adapter) return { adapter, answer: await adapter.run(graph, question) };
+  if (adapter) return { adapter, answer: await adapter.run(graph, question), matchSource: "builtin" };
   if (learnedPatterns) {
     for (const { regex, adapterId } of learnedPatterns) {
       if (regex.test(question)) {
         const matched = adapters.find((a) => a.id === adapterId);
-        if (matched) return { adapter: matched, answer: await matched.run(graph, question) };
+        if (matched) return { adapter: matched, answer: await matched.run(graph, question), matchSource: "learned", learnedRegex: regex.source };
       }
     }
   }

@@ -42,6 +42,18 @@ export function loadLearnedPatterns(): { regex: RegExp; adapterId: string }[] {
     .filter((p): p is { regex: RegExp; adapterId: string } => p !== null);
 }
 
+export function listLearnedPatterns(): LearnedPattern[] {
+  return readStore().patterns;
+}
+
+export function deleteLearnedPattern(regex: string, adapterId: string): boolean {
+  const store = readStore();
+  const remaining = store.patterns.filter((p) => !(p.regex === regex && p.adapterId === adapterId));
+  if (remaining.length === store.patterns.length) return false;
+  writeStore({ patterns: remaining });
+  return true;
+}
+
 export function incrementHitCount(adapterId: string, regexSource: string) {
   const store = readStore();
   const pattern = store.patterns.find((p) => p.adapterId === adapterId && p.regex === regexSource);

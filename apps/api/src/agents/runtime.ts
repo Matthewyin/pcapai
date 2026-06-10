@@ -361,6 +361,7 @@ export async function runChainPlanner(input: ChainPlannerInput): Promise<Analysi
       "steps 中每个 step 的字段：stepId（\"step-0\", \"step-1\"...）、intent、purpose（中文描述这一步要做什么）。",
       "如果某个 step 的查询参数来自前序 step 的结果，用 paramsFrom 字段表达。",
       "paramsFrom 的 key 是查询参数名（srcIp, dstIp, port, protocol），value 是路径表达式如 \"step-0.dstIp\"。",
+      "每个 step 执行后会暴露结构化结果：TCP 会话查询暴露 srcIp/dstIp/srcPort/dstPort/port，DNS 查询暴露解析出的地址（dstIp 和 resolvedIps）。",
       "",
       "intent 只能是以下之一：",
       "- usage_help：用户问怎么使用、帮助、流程。",

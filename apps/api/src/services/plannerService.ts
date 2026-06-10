@@ -168,14 +168,20 @@ function chainStepData(graph: CaseGraph): Record<string, unknown> | undefined {
   const queryRun = graph.queryRuns.find((run) => run.queryRunId === graph.activeQueryRunId) || graph.queryRuns[graph.queryRuns.length - 1];
   if (!queryRun) return undefined;
   const conversation = queryRun.conversations.find((item) => item.conversationId === queryRun.selectedConversationId) || queryRun.conversations[0];
+  // 协议事件查询没有 TCP 会话时，从 dns_to_tcp 关联提取解析 IP 作为绑定源
+  const resolvedIps = [...new Set(queryRun.protocolCorrelations
+    .filter((correlation) => correlation.kind === "dns_to_tcp")
+    .map((correlation) => correlation.targetDisplayFilter.match(/ip\.addr == ((?:\d{1,3}\.){3}\d{1,3})/)?.[1])
+    .filter((ip): ip is string => Boolean(ip)))];
   const entries = Object.entries({
     srcIp: conversation?.srcIp,
-    dstIp: conversation?.dstIp,
+    dstIp: conversation?.dstIp || resolvedIps[0],
     srcPort: conversation?.srcPort,
     dstPort: conversation?.dstPort,
     port: conversation?.dstPort,
     protocol: queryRun.protocol,
-    displayFilter: queryRun.displayFilter
+    displayFilter: queryRun.displayFilter,
+    resolvedIps: resolvedIps.length ? resolvedIps : undefined
   }).filter(([, value]) => value !== undefined && value !== "");
   return entries.length ? Object.fromEntries(entries) : undefined;
 }
@@ -254,7 +260,8 @@ function aggregateChainResults(plan: AnalysisChainPlan, results: ChainStepResult
     sessionLinkIds: results.flatMap((result) => result.answer.sessionLinkIds),
     findingIds: results.flatMap((result) => result.answer.findingIds),
     missingContext: results.flatMap((result) => result.answer.missingContext),
-    confidence: results.every((result) => result.answer.confidence === "certain") ? "certain" : results.some((result) => result.answer.confidence === "low" || result.answer.confidence === "needs_context") ? "low" : "high",
+    // 任一步骤置信度缺失或偏低时保守聚合为 low，不高估整体结论
+    confidence: results.every((result) => result.answer.confidence === "certain") ? "certain" : results.some((result) => !result.answer.confidence || result.answer.confidence === "low" || result.answer.confidence === "needs_context") ? "low" : "high",
     suggestedActions: results.flatMap((result) => result.answer.suggestedActions),
     handoffAgent: results[results.length - 1]?.answer.handoffAgent
   };

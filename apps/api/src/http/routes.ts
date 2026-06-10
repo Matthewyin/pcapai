@@ -13,7 +13,7 @@ import {
   type QueryRun,
 } from "../../../../packages/shared/src/index.js";
 import { runAgentCompatibilityCheck, runPcapTroubleshootingAgent } from "../agents/runtime.js";
-import { learnFromAgentRun, loadLearnedPatterns } from "../services/patternLearner.js";
+import { deleteLearnedPattern, incrementHitCount, learnFromAgentRun, listLearnedPatterns, loadLearnedPatterns } from "../services/patternLearner.js";
 import { apiConfig } from "../config.js";
 import { getCaptureTimeRangeWithMcp, getConversationPacketsWithMcp, listDnsPacketsWithMcp, listHttpPacketsWithMcp, listIcmpEventsWithMcp, listTcpResetsWithMcp, listTcpRetransmissionsWithMcp, listTcpStreamsWithMcp, followTcpStreamWithMcp, listTcpZeroWindowWithMcp, listTlsPacketsWithMcp, listUdpPacketsWithMcp, queryPacketsWithMcp } from "../mcp/tsharkQueryClient.js";
 import { createPacketPairAnswer, createProtocolQueryAnswer, groupPacketPairs, noCaptureAnswer, pairGroupFromPackets, pairKey, protocolPacketCard } from "../protocolAdapters/builders.js";
@@ -414,7 +414,8 @@ const protocolEventQueryService = createProtocolEventQueryService({
   loadLearnedPatterns,
   learnFromAgentRun: (question, toolCalls, adapterIds) => {
     learnFromAgentRun(question, toolCalls, adapterIds).catch(() => {});
-  }
+  },
+  incrementHitCount
 });
 const agentToolRegistryService = createAgentToolRegistryService({
   usageHelpAnswer,
@@ -601,6 +602,17 @@ export function createAgentRouter() {
     const parsed = DeleteLlmProfilesRequestSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
     return res.json(deleteLlmProfiles(parsed.data.profileIds));
+  });
+
+  router.get("/settings/learned-patterns", (_req, res) => {
+    res.json({ patterns: listLearnedPatterns() });
+  });
+
+  router.delete("/settings/learned-patterns", (req, res) => {
+    const { regex, adapterId } = req.body || {};
+    if (typeof regex !== "string" || typeof adapterId !== "string") return res.status(400).json({ error: "regex 和 adapterId 是必填字符串" });
+    const deleted = deleteLearnedPattern(regex, adapterId);
+    return deleted ? res.json({ deleted: true }) : res.status(404).json({ error: "未找到匹配的 learned pattern" });
   });
 
   router.post("/settings/llm/test", async (req, res) => {

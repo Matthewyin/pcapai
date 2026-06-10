@@ -11,6 +11,7 @@ type ProtocolEventQueryServiceInput = {
   hasLlmApiKey: () => boolean;
   loadLearnedPatterns: () => LearnedPattern[];
   learnFromAgentRun: (question: string, toolCalls: string[], adapterIds: string[]) => void;
+  incrementHitCount: (adapterId: string, regexSource: string) => void;
 };
 
 const protocolHints: Record<string, RegExp> = {
@@ -44,7 +45,7 @@ function combineProtocolAnswers(results: Array<{ adapter: ProtocolAdapter; answe
     missingContext: results.flatMap((result) => result.answer.missingContext),
     confidence: results.every((result) => result.answer.confidence === "certain")
       ? "certain"
-      : results.some((result) => result.answer.confidence === "low" || result.answer.confidence === "needs_context")
+      : results.some((result) => !result.answer.confidence || result.answer.confidence === "low" || result.answer.confidence === "needs_context")
         ? "low"
         : "high",
     suggestedActions: results.flatMap((result) => result.answer.suggestedActions),
@@ -62,7 +63,17 @@ export function createProtocolEventQueryService(input: ProtocolEventQueryService
     const matching = prioritizeAdapters(input.adapters.filter((adapter) => adapter.match(question)), question);
     if (!matching.length) {
       const adapterResult = await runProtocolAdapter(input.adapters, graph, question, input.loadLearnedPatterns());
-      if (adapterResult) return { status: adapterResult.adapter.status, answer: adapterResult.answer };
+      if (adapterResult) {
+        // 命中自学习模式时标注来源并累计命中次数，便于发现错误路由和评估模式质量
+        if (adapterResult.matchSource === "learned" && adapterResult.learnedRegex) {
+          input.incrementHitCount(adapterResult.adapter.id, adapterResult.learnedRegex);
+          adapterResult.answer.thoughts = [
+            `命中自学习模式（regex: ${adapterResult.learnedRegex}），路由到 ${adapterResult.adapter.id}。如路由有误，可通过 DELETE /api/settings/learned-patterns 删除该模式。`,
+            ...(adapterResult.answer.thoughts || [])
+          ];
+        }
+        return { status: adapterResult.adapter.status, answer: adapterResult.answer };
+      }
       if (!input.hasLlmApiKey()) return null;
       try {
         const agentAnswer = await runPcapTroubleshootingAgent({ graph, question });
