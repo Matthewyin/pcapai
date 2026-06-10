@@ -1,10 +1,8 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import path from "node:path";
-import { Agent, MCPServerStdio, OpenAIProvider, run, setDefaultModelProvider, tool, withTrace, type Tool } from "@openai/agents";
+import { Agent, OpenAIProvider, run, setDefaultModelProvider, tool, withTrace, type Tool } from "@openai/agents";
 import { z } from "zod";
 import { AgentIntentEnum, AnalysisChainPlanSchema, type AgentAnswer, type AnalysisChainPlan, type AnalysisChainStep, type CaseGraph } from "../../../../packages/shared/src/index.js";
 import { apiConfig } from "../config.js";
+import { getTsharkQueryMcp, resetTsharkQueryMcp } from "../mcp/tsharkQueryMcpRuntime.js";
 
 type RuntimeInput = {
   graph: CaseGraph;
@@ -34,13 +32,6 @@ export const AgentIntentSchema = z.object({
   missingContext: z.array(z.string()).default([])
 });
 export type AgentIntentPlan = z.infer<typeof AgentIntentSchema>;
-
-type IntentPlannerInput = {
-  graph: CaseGraph;
-  question: string;
-  chatHistory?: ChatMessage[];
-  onTrace?: (message: string) => void;
-};
 
 type CompatibilityInput = {
   apiKey: string;
@@ -174,23 +165,6 @@ function firstJsonObject(text: string) {
   return "";
 }
 
-function parseIntentOutput(output: unknown): AgentIntentPlan {
-  const text = typeof output === "string" ? output : JSON.stringify(output);
-  const jsonText = firstJsonObject(text);
-  if (!jsonText) throw new Error(`intent planner returned non-json output: ${text.slice(0, 500)}`);
-  const parsed = JSON.parse(jsonText);
-  if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-    const value = parsed as Record<string, unknown>;
-    const confidence = typeof value.confidence === "string" ? value.confidence.trim().toLowerCase() : "";
-    if (confidence === "certain" || confidence === "confident" || confidence === "确定") value.confidence = "high";
-    if (confidence === "needs_context" || confidence === "uncertain" || confidence === "不确定") value.confidence = "low";
-    if (value.confidence !== "high" && value.confidence !== "medium" && value.confidence !== "low") value.confidence = "medium";
-    if (typeof value.missingContext === "string") value.missingContext = value.missingContext.trim() ? [value.missingContext] : [];
-    if (value.missingContext === null || value.missingContext === undefined) value.missingContext = [];
-  }
-  return AgentIntentSchema.parse(parsed);
-}
-
 function parseChainPlanOutput(output: unknown, question: string): AnalysisChainPlan {
   const text = typeof output === "string" ? output : JSON.stringify(output);
   const jsonText = firstJsonObject(text);
@@ -279,57 +253,12 @@ function intentPlannerContext(graph: CaseGraph, question: string, chatHistory?: 
   };
 }
 
-function processEnv() {
-  return Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined));
-}
-
 function modelSettings() {
   return Object.keys(apiConfig.llm.providerData).length ? { providerData: apiConfig.llm.providerData } : {};
 }
 
 function modelSettingsFrom(providerData: Record<string, unknown>) {
   return Object.keys(providerData).length ? { providerData } : {};
-}
-
-export async function runIntentPlanner(input: IntentPlannerInput): Promise<AgentIntentPlan> {
-  setDefaultModelProvider(new OpenAIProvider({
-    apiKey: apiConfig.llm.apiKey,
-    baseURL: apiConfig.llm.baseURL,
-    useResponses: apiConfig.llm.useResponses
-  }));
-
-  const plannerAgent = new Agent({
-    name: "PcapIntentPlanner",
-    instructions: [
-      "你是 pcapAI 的 Leader Intent Planner，只负责理解用户意图，不执行分析，不调用 MCP，不读取 pcap。",
-      "你必须输出一个 JSON 对象，不要 Markdown，不要解释。",
-      "字段固定为 intent、confidence、reason、missingContext。",
-      "intent 只能是：",
-      "- usage_help：用户问怎么使用、帮助、流程、怎么开始。",
-      "- protocol_statistics：用户问协议种类、协议数量、协议分布。",
-      "- network_statistics：用户问 IP 数量、源/目的 IP 排名、端口分布、RST 数量、重传数量、HTTP 状态码分布、DNS rcode 分布等事实统计。",
-      "- tcp_session_query：用户给出时间、源/目的、端口，要求分析访问、通信对、TCP session、路径候选。",
-      "- protocol_event_query：用户要求列出 DNS/HTTP/TLS/ICMP/UDP/RST/重传/Zero Window/包级事件或前 N 个异常 session。即使问题同时提到多种协议，也只选一个 intent——选择用户最关注的那种协议。",
-      "- capture_correlation：用户问多个 pcap/两个文件/多节点能否串起来、路径还原、跨节点关联。",
-      "- mapping_hint_update：用户补充 NAT/F5/LB/SLB/代理/地址转换/时间偏移/节点上下文，用于重跑多文件关联。",
-      "- selected_session_diagnosis：用户问当前选中的 session 为什么失败、问题在哪、哪里异常。",
-      "- active_query_explain：用户问当前查询、当前证据、当前路径的解释。",
-      "- report_request：用户要求生成报告、总结、复盘。",
-      "- needs_clarification：用户想排障但缺时间、源、目的、端口、节点等关键条件。",
-      "- llm_explain：其他需要自然语言解释且没有明确工具动作的问题。",
-      "如果用户的问题是泛化帮助，即使包含“这个”，也必须选 usage_help，不能选 active_query_explain。",
-      "如果用户问“多少、几个、分布、排名、列出、有没有某类包”，优先选统计或协议事件工具类 intent。",
-      "如果用户只是说“帮我看看”“哪里有问题”“为什么失败”，但没有给出故障时间、源、目的、端口或明确协议，必须选 needs_clarification。",
-      "如果不确定，选 needs_clarification，不要猜具体故障。"
-    ].join("\n"),
-    model: apiConfig.llm.model,
-    modelSettings: modelSettings()
-  });
-  input.onTrace?.("Leader Intent Planner 正在判断用户意图。");
-  const result = await run(plannerAgent, JSON.stringify(intentPlannerContext(input.graph, input.question, input.chatHistory)), { maxTurns: 2 });
-  const plan = parseIntentOutput(result.finalOutput);
-  input.onTrace?.(`Leader Intent Planner 输出：${plan.intent}（${plan.confidence}）- ${plan.reason}`);
-  return plan;
 }
 
 type ChainPlannerInput = {
@@ -436,6 +365,96 @@ export async function runAgentCompatibilityCheck(input: CompatibilityInput) {
 
 export type AgentAnswerWithToolCalls = AgentAnswer & { toolCalls?: string[] };
 
+// 诊断知识库：按 insight 类型组织，运行时只注入当前 case 实际检测到的部分
+const insightDescriptions: Record<string, string> = {
+  connection_lifecycle: "SYN 无 SYN/ACK、握手后 RST、半关闭",
+  ack_gap: "ACK 缺失 → 重传 → RST/hung（含指数退避检测）",
+  tcp_timing: "RTT 估算、空闲间隔、突发模式",
+  tcp_window_trend: "接收窗口缩小、Zero Window Probe",
+  tcp_rst_direction: "RST 来源方向分析（中间设备检测）、RST 风暴",
+  tcp_handshake_retry: "SYN/SYNACK 重传、同时打开/关闭",
+  tcp_delayed_ack: "Delayed ACK 模式统计",
+  tcp_connection_flood: "SYN 突发、半开连接聚集",
+  tcp_segment_anomaly: "小包/超大段异常",
+  tcp_keepalive: "Keep-Alive 探测、超时断开",
+  tcp_throughput: "吞吐量估算、重传开销、BDP",
+  tcp_options: "SACK 协商、Timestamps、TCP Fast Open",
+  http_status_chain: "3xx 重定向链、4xx/5xx 聚合、错误突发、重复 URI",
+  http_header_anomaly: "Cookie 缺失/不一致、XFF 多跳、Content-Length 截断、缓存缺失、认证失败、压缩缺失、Host vs SNI 不一致",
+  http_timing: "慢响应（>3s）、响应延迟聚合",
+  http_uri_anomaly: "URI 大小写差异、URL 编码差异、尾部斜杠差异",
+  tls_handshake: "Alert 告警、握手失败原因、TLS 版本降级、弱加密套件、证书 SAN 不匹配、ALPN 协商",
+  icmp_echo_pair: "Echo/Reply 精确配对、RTT、丢包率、抖动",
+  icmp_unreachable: "Unreachable 子类型分析、突发检测、与 TCP 流关联、Traceroute 模式",
+  icmp_mtu: "Path MTU Discovery 黑洞检测、Fragmentation Needed 事件",
+  icmp_redirect: "Redirect 消息检测、路由异常",
+  dns_anomaly: "NXDOMAIN、SERVFAIL、无响应、慢解析、查询突发、TTL 异常、CNAME 链",
+  udp_anomaly: "UDP 端口扫描、UDP Flood、单向上行流、QUIC 检测",
+  udp_flow: "UDP 端点对聚合、流量分布",
+  quic_anomaly: "QUIC 连接概览、握手状态、版本不匹配",
+  ntp_anomaly: "Stratum 分布、Root Delay、时间源质量",
+  ssh_anomaly: "消息类型分布、连接断开、认证失败重试",
+  cross_protocol_chain: "DNS→TCP→TLS→HTTP 全链路时序分解",
+  l7_proxy_detected: "Via/XFF/SSL 卸载/TCP 分段代理检测",
+  nat_heuristic: "NAT 多目标/ISN/孤儿 SYN 启发式检测",
+  tcp_connection_split: "TCP 连接被中间设备拆分"
+};
+
+const hypothesisPlaybook: Array<{ hypothesis: string; prediction: string; insightTypes: string[]; fallbackTool: string }> = [
+  { hypothesis: "服务端瓶颈", prediction: "Zero Window、慢响应、无响应", insightTypes: ["ack_gap", "http_timing", "tcp_window_trend"], fallbackTool: "list_tcp_zero_window + list_http_packets" },
+  { hypothesis: "网络丢包", prediction: "重传、RTT 波动", insightTypes: ["ack_gap", "tcp_timing", "icmp_echo_pair", "tcp_throughput"], fallbackTool: "list_tcp_retransmissions" },
+  { hypothesis: "中间设备 RST", prediction: "来自非端点的 RST", insightTypes: ["tcp_rst_direction", "connection_lifecycle"], fallbackTool: "list_tcp_resets（分析方向）" },
+  { hypothesis: "SSL/TLS 问题", prediction: "Alert、握手失败、弱加密", insightTypes: ["tls_handshake", "cross_protocol_chain"], fallbackTool: "list_tls_packets" },
+  { hypothesis: "证书问题", prediction: "SAN 不匹配、证书过期", insightTypes: ["tls_handshake"], fallbackTool: "list_tls_packets" },
+  { hypothesis: "DNS 问题", prediction: "NXDOMAIN、SERVFAIL、无响应", insightTypes: ["dns_anomaly"], fallbackTool: "list_dns_packets" },
+  { hypothesis: "应用层慢", prediction: "HTTP 响应延迟", insightTypes: ["http_timing", "cross_protocol_chain"], fallbackTool: "list_http_packets" },
+  { hypothesis: "连接挂起", prediction: "ACK 缺失、重传后 RST", insightTypes: ["ack_gap", "tcp_keepalive"], fallbackTool: "query_packets" },
+  { hypothesis: "重定向异常", prediction: "3xx 循环、多次重定向", insightTypes: ["http_status_chain"], fallbackTool: "list_http_packets" },
+  { hypothesis: "认证失败", prediction: "401/403、Cookie 缺失", insightTypes: ["http_header_anomaly"], fallbackTool: "list_http_packets" },
+  { hypothesis: "路径匹配失败", prediction: "URI 变体、大小写/编码差异", insightTypes: ["http_uri_anomaly", "http_status_chain"], fallbackTool: "list_http_packets" },
+  { hypothesis: "性能问题", prediction: "高延迟、低吞吐", insightTypes: ["tcp_throughput", "tcp_delayed_ack", "tcp_timing"], fallbackTool: "get_network_statistics" },
+  { hypothesis: "SYN Flood", prediction: "大量 SYN 无响应", insightTypes: ["tcp_connection_flood"], fallbackTool: "query_packets(SYN)" },
+  { hypothesis: "连接超时", prediction: "Keep-Alive 失败、空闲断开", insightTypes: ["tcp_keepalive", "tcp_window_trend"], fallbackTool: "query_packets" },
+  { hypothesis: "压缩/缓存问题", prediction: "未压缩大响应、无缓存头", insightTypes: ["http_header_anomaly"], fallbackTool: "list_http_packets" },
+  { hypothesis: "UDP 端口扫描", prediction: "大量不同目标端口的 UDP 包", insightTypes: ["udp_anomaly"], fallbackTool: "list_udp_packets" },
+  { hypothesis: "UDP Flood", prediction: "单端口高频 UDP 突发", insightTypes: ["udp_anomaly"], fallbackTool: "list_udp_packets" },
+  { hypothesis: "QUIC 连接异常", prediction: "QUIC 版本不匹配、连接失败、Initial 无 Handshake 响应", insightTypes: ["udp_anomaly", "quic_anomaly"], fallbackTool: "list_udp_packets" },
+  { hypothesis: "ICMP/PMTU 黑洞", prediction: "Fragmentation Needed 被丢弃 + TCP 重传", insightTypes: ["icmp_mtu", "icmp_unreachable", "ack_gap"], fallbackTool: "list_icmp_events" },
+  { hypothesis: "Traceroute 问题", prediction: "TTL Exceeded 不完整、路径不对称", insightTypes: ["icmp_unreachable"], fallbackTool: "list_icmp_events" },
+  { hypothesis: "DNS 攻击/劫持/隧道", prediction: "查询突发、同域名多服务器不同结果、异常域名模式", insightTypes: ["dns_anomaly"], fallbackTool: "list_dns_packets" },
+  { hypothesis: "时间同步问题", prediction: "NTP Stratum 高、延迟大", insightTypes: ["ntp_anomaly"], fallbackTool: "get_expert_info" },
+  { hypothesis: "SSH 连接异常", prediction: "认证重试、断开消息", insightTypes: ["ssh_anomaly"], fallbackTool: "get_expert_info" },
+  { hypothesis: "L7 代理/SSL 卸载", prediction: "Via/XFF 头、前后端连接拆分", insightTypes: ["l7_proxy_detected", "tcp_connection_split"], fallbackTool: "list_http_packets" },
+  { hypothesis: "NAT 转换", prediction: "多目标映射、ISN 关联、孤儿 SYN", insightTypes: ["nat_heuristic"], fallbackTool: "query_packets" }
+];
+
+// 只注入当前 case 实际检测到的洞察类型与相关假设，控制提示词体积
+function hypothesisKnowledge(graph: CaseGraph) {
+  const counts = new Map<string, number>();
+  for (const insight of graph.insights) counts.set(insight.type, (counts.get(insight.type) || 0) + 1);
+  if (!counts.size) {
+    return [
+      "## 数据包洞察",
+      "本 case 暂无自动洞察结果；先调用 get_insights 确认，再用 tshark-query 工具直接查询证据。"
+    ].join("\n");
+  }
+  const insightLines = [...counts.entries()].map(([type, count]) => `- ${type}（${count} 条）：${insightDescriptions[type] || "见 get_insights 明细"}`);
+  const rows = hypothesisPlaybook.filter((row) => row.insightTypes.some((type) => counts.has(type)));
+  const tableLines = rows.length
+    ? [
+      "| 假设 | 预测在包数据中看到 | 优先检查 insight 类型 | 备用查询工具 |",
+      ...rows.map((row) => `| ${row.hypothesis} | ${row.prediction} | ${row.insightTypes.join(", ")} | ${row.fallbackTool} |`)
+    ]
+    : ["当前洞察类型没有匹配的预置假设；根据症状自行形成假设，用 get_insights 和 tshark-query 验证。"];
+  return [
+    "## 本 case 已检测到的数据包洞察（调用 get_insights 取明细，不要重复查询已有结论）",
+    ...insightLines,
+    "",
+    "## 与本 case 相关的假设与预测",
+    ...tableLines
+  ].join("\n");
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function extractToolCalls(result: any): string[] {
   const tools: string[] = [];
@@ -457,49 +476,11 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
     useResponses: apiConfig.llm.useResponses
   }));
 
-  const tempDirectory = mkdtempSync(path.join(tmpdir(), "pcapai-case-graph-"));
-  const caseGraphPath = path.join(tempDirectory, "case.json");
-  // 精简 agent 图谱：移除 insights 和 queryRuns 中的大数据字段，防止 LLM context 超限
-  const slimQueryRuns = input.graph.queryRuns.map((qr) => ({
-    ...qr,
-    conversations: qr.conversations?.map((c) => ({
-      conversationId: c.conversationId,
-      srcIp: c.srcIp, srcPort: c.srcPort, dstIp: c.dstIp, dstPort: c.dstPort,
-      protocol: c.protocol, packetCount: c.packetCount, byteCount: c.byteCount
-    })) || [],
-    candidateGroups: qr.candidateGroups?.map((g) => ({
-      groupId: g.groupId, conversationIds: g.conversationIds
-    })) || [],
-    evidenceCards: qr.evidenceCards?.map((ec) => ({
-      cardId: ec.cardId, kind: ec.kind, title: ec.title, displayFilter: ec.displayFilter
-    })) || []
-  }));
-  const agentGraph = { ...input.graph, insights: [], queryRuns: slimQueryRuns };
-  writeFileSync(caseGraphPath, JSON.stringify(agentGraph));
-  input.onTrace?.(`已生成只读 case graph 快照：${input.graph.spec.caseId}，captures=${input.graph.captures.length}，queryRuns=${input.graph.queryRuns.length}。`);
-  const caseGraphMcp = new MCPServerStdio({
-    name: "case-graph-mcp",
-    command: apiConfig.caseGraphMcp.command,
-    args: apiConfig.caseGraphMcp.args,
-    cwd: apiConfig.caseGraphMcp.cwd,
-    env: { ...processEnv(), PCAPAI_CASE_GRAPH_PATH: caseGraphPath },
-    cacheToolsList: true
-  });
+  input.onTrace?.("正在获取常驻 tshark-query MCP 连接。");
+  const tsharkQueryMcp = await getTsharkQueryMcp();
+  input.onTrace?.("tshark-query MCP 已就绪；case graph 工具以进程内方式提供。");
 
-  const tsharkQueryMcp = new MCPServerStdio({
-    name: "tshark-query-mcp",
-    command: apiConfig.tsharkQueryMcp.command,
-    args: apiConfig.tsharkQueryMcp.args,
-    cwd: apiConfig.tsharkQueryMcp.cwd,
-    cacheToolsList: true
-  });
-
-  input.onTrace?.("正在连接 case-graph MCP 和 tshark-query MCP。");
-  await caseGraphMcp.connect();
-  await tsharkQueryMcp.connect();
-  input.onTrace?.("case-graph MCP 和 tshark-query MCP 已连接。");
-
-  const mcpServers = [caseGraphMcp, tsharkQueryMcp];
+  const mcpServers = [tsharkQueryMcp];
   const localTools = input.tools || [];
   const agentToolInstruction = localTools.length
     ? [
@@ -509,55 +490,6 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
       "tshark-query MCP 仍用于更底层的包级查询；不要绕过 pcapai_ 工具重复做已经封装好的确定性查询。"
     ].join("\n")
     : "";
-
-  const triageAgent = new Agent({
-    name: "DiagnosticInterviewAgent",
-    instructions: [
-      "你是 pcapAI 的诊断访谈专家。你的职责是通过多轮对话收集故障信息和网络拓扑。",
-      "",
-      "## 记忆",
-      "先调用 get_case_memory 读取已有记忆。当用户提供网络拓扑或关键补充信息时，调用 update_case_memory 保存（topology 参数覆盖，userNotes 追加）。避免重复询问已记录的信息。",
-      "",
-      "## 诊断访谈流程",
-      "",
-      "### 第一步：症状收集",
-      "先调用 load_case_graph 了解当前 case 的情况。然后根据对话历史判断用户是否已描述清楚故障现象：",
-      "- 故障现象是什么？（超时、断连、慢、错误、间歇性）",
-      "- 受影响的服务/IP/端口？",
-      "- 什么时候开始的？持续还是间歇性？",
-      "- 影响范围？所有用户还是部分？",
-      "",
-      "### 第二步：网络拓扑收集",
-      "症状清楚后，追问网络路径：",
-      "- 客户端到服务端经过了哪些设备？（防火墙、LB、WAF、SSL 卸载、代理、NAT 网关）",
-      "- 每个设备的关键配置？",
-      "  - 防火墙：NAT 规则、ACL、会话超时",
-      "  - 负载均衡：算法、健康检查、会话保持、TCP profile",
-      "  - SSL：证书、协议版本",
-      "  - WAF：规则集、拦截模式",
-      "- 拓扑信息用 update_network_topology 工具保存",
-      "",
-      "### 第三步：抓包位置确认",
-      "- 每个 pcap 文件是从哪个位置抓的？（客户端侧、服务端侧、LB 前端、LB 后端）",
-      "- 多个 pcap 时逐一确认每个文件的抓包位置和方向",
-      "- 抓包位置决定如何解读包数据",
-      "",
-      "### 判断何时结束访谈",
-      "- 当用户表达\"没有了\"\"就这些\"\"没更多信息\"时，diagnosticPhase 设为 \"hypothesis\"",
-      "- 总结收集到的症状和拓扑，说明接下来会进行假设驱动分析",
-      "",
-      "### 追问格式",
-      "- 每轮最多问 2-3 个问题，不要一次问太多",
-      "- followUpQuestions 字段列出下一步要问的问题",
-      "- diagnosticPhase 为 \"interview\" 直到信息充分",
-      "",
-      jsonOutputInstruction
-    ].join("\n"),
-    model: apiConfig.llm.model,
-    modelSettings: modelSettings(),
-    mcpServers,
-    tools: localTools
-  });
 
   const evidenceAgent = new Agent({
     name: "HypothesisAgent",
@@ -575,48 +507,7 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
       "   - 对比证据与预测，标记 status 为 confirmed 或 ruled_out",
       "   - 把支持证据写入 evidenceFor，矛盾证据写入 evidenceAgainst",
       "",
-      "## 数据包洞察（get_insights）",
-      "系统已自动运行以下分析，结果在 insights 中：",
-      "TCP 分析：",
-      "- connection_lifecycle: SYN 无 SYN/ACK、握手后 RST、半关闭",
-      "- ack_gap: ACK 缺失 → 重传 → RST/hung（含指数退避检测）",
-      "- tcp_timing: RTT 估算、空闲间隔、突发模式",
-      "- tcp_window_trend: 接收窗口缩小、Zero Window Probe",
-      "- tcp_rst_direction: RST 来源方向分析（中间设备检测）、RST 风暴",
-      "- tcp_handshake_retry: SYN/SYNACK 重传、同时打开/关闭",
-      "- tcp_delayed_ack: Delayed ACK 模式统计",
-      "- tcp_connection_flood: SYN 突发、半开连接聚集",
-      "- tcp_segment_anomaly: 小包/超大段异常",
-      "- tcp_keepalive: Keep-Alive 探测、超时断开",
-      "- tcp_throughput: 吞吐量估算、重传开销、BDP",
-      "- tcp_options: SACK 协商、Timestamps、TCP Fast Open",
-      "HTTP 分析：",
-      "- http_status_chain: 3xx 重定向链、4xx/5xx 聚合、错误突发、重复 URI",
-      "- http_header_anomaly: Cookie 缺失/不一致、XFF 多跳、Content-Length 截断、缓存缺失、认证失败、Content-Type 混合、Connection: close、WebSocket 升级、压缩缺失、Host vs SNI 不一致",
-      "- http_timing: 慢响应（>3s）、响应延迟聚合",
-      "- http_uri_anomaly: URI 大小写差异、URL 编码差异、尾部斜杠差异",
-      "TLS 分析：",
-      "- tls_handshake: Alert 告警、握手失败原因、握手阶段缺失、TLS 版本降级、弱加密套件、证书 SAN 不匹配、会话恢复、ALPN 协商、TLS 重协商",
-      "ICMP 高级分析：",
-      "- icmp_echo_pair: Echo/Reply 精确配对（基于 Identifier+Sequence）、RTT、丢包率、抖动",
-      "- icmp_unreachable: Unreachable 子类型分析（Port/Host/Network/Fragmentation Needed）、突发检测、错误与 TCP 流关联、Traceroute 模式识别",
-      "- icmp_mtu: Path MTU Discovery 黑洞检测、Fragmentation Needed 事件",
-      "- icmp_redirect: Redirect 消息检测、路由异常",
-      "DNS 高级分析：",
-      "- dns_anomaly: NXDOMAIN、SERVFAIL、无响应、慢解析、RCODE 异常",
-      "- dns_anomaly（高级）: 查询突发、响应成功率、重复域名、服务器分布、AXFR/IXFR、TTL 异常、CNAME 链、截断响应、NODATA 响应",
-      "UDP 分析：",
-      "- udp_anomaly: UDP 端口扫描、UDP Flood、单向上行流、有效载荷异常、QUIC 协议检测",
-      "- udp_flow: UDP 端点对聚合、流量分布",
-      "QUIC 分析：",
-      "- quic_anomaly: QUIC 连接概览、握手状态、版本不匹配",
-      "NTP 分析：",
-      "- ntp_anomaly: Stratum 分布、Root Delay、时间源质量",
-      "SSH 分析：",
-      "- ssh_anomaly: 消息类型分布、连接断开、认证失败重试、协议版本",
-      "跨协议：",
-      "- cross_protocol_chain: DNS→TCP→TLS→HTTP 全链路时序分解",
-      "直接引用 insights 中的描述和场景，不要重复查询已有结论。",
+      hypothesisKnowledge(input.graph),
       "",
       "## 可用的 tshark-query 工具",
       "- list_tcp_resets / list_tcp_retransmissions / list_tcp_zero_window：TCP 异常",
@@ -626,35 +517,6 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
       "- get_network_statistics：网络统计",
       "capturesJson 参数从 case graph 的 captures 字段获取。",
       "",
-      "## 常见假设与预测",
-      "| 假设 | 预测在包数据中看到 | 优先检查 insight 类型 | 备用查询工具 |",
-      "| 服务端瓶颈 | Zero Window、慢响应、无响应 | ack_gap, http_timing, tcp_window_trend | list_tcp_zero_window + list_http_packets |",
-      "| 网络丢包 | 重传、RTT 波动 | ack_gap, tcp_timing, icmp_echo_pair, tcp_throughput | list_tcp_retransmissions |",
-      "| 中间设备 RST | 来自非端点的 RST | tcp_rst_direction, connection_lifecycle | list_tcp_resets（分析方向）|",
-      "| SSL/TLS 问题 | Alert、握手失败、弱加密 | tls_handshake, cross_protocol_chain | list_tls_packets |",
-      "| 证书问题 | SAN 不匹配、证书过期 | tls_handshake（证书分析）| list_tls_packets |",
-      "| DNS 问题 | NXDOMAIN、SERVFAIL、无响应 | dns_anomaly | list_dns_packets |",
-      "| 应用层慢 | HTTP 响应延迟 | http_timing, cross_protocol_chain | list_http_packets |",
-      "| 连接挂起 | ACK 缺失、重传后 RST | ack_gap, tcp_keepalive | query_packets |",
-      "| 重定向异常 | 3xx 循环、多次重定向 | http_status_chain | list_http_packets |",
-      "| 认证失败 | 401/403、Cookie 缺失 | http_header_anomaly | list_http_packets |",
-      "| 路径匹配失败 | URI 变体、大小写/编码差异 | http_uri_anomaly, http_status_chain | list_http_packets |",
-      "| 性能问题 | 高延迟、低吞吐 | tcp_throughput, tcp_delayed_ack, tcp_timing | get_network_statistics |",
-      "| SYN Flood | 大量 SYN 无响应 | tcp_connection_flood | query_packets(SYN) |",
-      "| 连接超时 | Keep-Alive 失败、空闲断开 | tcp_keepalive, tcp_window_trend | query_packets |",
-      "| 压缩/缓存问题 | 未压缩大响应、无缓存头 | http_header_anomaly | list_http_packets |",
-      "| UDP 端口扫描 | 大量不同目标端口的 UDP 包 | udp_anomaly | list_udp_packets |",
-      "| UDP Flood | 单端口高频 UDP 突发 | udp_anomaly | list_udp_packets |",
-      "| QUIC 连接异常 | QUIC 版本不匹配、连接失败 | udp_anomaly | list_udp_packets |",
-      "| ICMP 黑洞 | PMTU 失败、Fragmentation Needed 被丢弃 | icmp_mtu, icmp_unreachable | list_icmp_events |",
-      "| Traceroute 问题 | TTL Exceeded 不完整、路径不对称 | icmp_unreachable | list_icmp_events |",
-      "| DNS 放大攻击 | 大量 DNS 查询突发、高查询率 | dns_anomaly | list_dns_packets |",
-      "| DNS 劫持 | 相同域名多服务器返回不同结果 | dns_anomaly | list_dns_packets |",
-      "| DNS 隧道 | 查询突发、异常域名模式 | dns_anomaly | list_dns_packets |",
-      "| QUIC 握手失败 | Initial 无 Handshake 响应 | quic_anomaly | list_udp_packets |",
-      "| 时间同步问题 | NTP Stratum 高、延迟大 | ntp_anomaly | get_expert_info |",
-      "| SSH 连接异常 | 认证重试、断开消息 | ssh_anomaly | get_expert_info |",
-      "| PMTU 黑洞 | ICMP Fragmentation Needed + TCP 重传 | icmp_to_tcp, ack_gap | list_icmp_events |",
       "",
       "## 输出格式",
       "- hypotheses 数组：每个假设的 id、description、status、evidenceFor、evidenceAgainst",
@@ -719,22 +581,6 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
     tools: localTools
   });
 
-  const reportAgent = new Agent({
-    name: "ReportAgent",
-    instructions: [
-      "你是 pcapAI 的中文排障报告专家。",
-      "必须调用 export_report 获取报告草稿，再按用户问题压缩或解释。",
-      "只整理已有 case graph，不新增证据判断。",
-      "报告包含：问题现象、路径还原、L7 关联、关键证据、判断结论、下一步动作。",
-      "所有结论必须引用 QueryRun、PathEdge、protocolCorrelation、evidenceIds、packetIds、findingIds 或 sessionLinkIds。",
-      jsonOutputInstruction
-    ].join("\n"),
-    model: apiConfig.llm.model,
-    modelSettings: modelSettings(),
-    mcpServers,
-    tools: localTools
-  });
-
   const memoryInstruction = [
     input.graph.memory?.topology ? `## 已确认的网络拓扑\n${input.graph.memory.topology}\n` : "",
     input.graph.memory?.findings?.length ? `## 已有分析结论\n${input.graph.memory.findings.map((f) => `- ${f.query}：${f.conclusion}`).join("\n")}\n` : "",
@@ -751,41 +597,32 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
       "",
       "## 诊断流程",
       "",
-      "根据对话上下文判断当前处于哪个诊断阶段，选择对应的专家：",
+      "根据对话上下文判断当前处于哪个诊断阶段：",
       "",
-      "### 阶段 1：症状收集（interview）",
-      "用户第一次提问时，如果还没有描述清楚故障现象，交给 DiagnosticInterviewAgent 收集：",
-      "- 故障现象（超时、断连、慢、错误、间歇性）",
-      "- 受影响的服务/IP/端口",
-      "- 时间范围、频率",
-      "- 影响范围",
+      "### 阶段 1：信息收集（interview）",
+      "症状或拓扑信息不足时不要交接，由你直接收集：先调用 get_case_memory 和 load_case_graph 了解已有信息，避免重复询问；然后用 followUpQuestions 追问（每轮最多 2-3 个问题）：",
+      "- 故障现象（超时、断连、慢、错误、间歇性）、受影响的服务/IP/端口、时间范围、影响范围",
+      "- 网络路径经过哪些设备（防火墙、LB、WAF、SSL、代理、NAT）及其关键配置",
+      "- 每个 pcap 文件的抓包位置（客户端侧/服务端侧/设备前后）和方向",
+      "用户提供拓扑用 update_network_topology 保存；其他关键补充信息用 update_case_memory 保存。",
       "diagnosticPhase 为 \"interview\"。",
       "",
-      "### 阶段 2：拓扑 + 抓包位置收集（interview）",
-      "症状清楚后，交给 DiagnosticInterviewAgent 收集网络拓扑：",
-      "- 网络路径经过了哪些设备（防火墙、LB、WAF、SSL、代理、NAT）",
-      "- 每个设备的配置（NAT 规则、TCP profile、SSL 证书、会话超时等）",
-      "- 每个 pcap 文件的抓包位置（客户端侧/服务端侧/设备前后）",
-      "diagnosticPhase 为 \"interview\"。",
-      "",
-      "### 阶段 3：假设驱动分析（hypothesis + testing）",
-      "当用户表达\"没有了\"\"就这些\"时，交给 HypothesisAgent 进行假设驱动分析：",
+      "### 阶段 2：假设驱动分析（hypothesis + testing）",
+      "信息充分或用户表达\"没有了\"\"就这些\"时，交给 HypothesisAgent 进行假设驱动分析：",
       "- 基于症状 + 拓扑形成 2-4 个假设",
       "- 每个假设预测在包数据中会看到什么",
       "- 用 tshark-query MCP 查询证据",
       "- 确认或排除假设",
       "diagnosticPhase 为 \"hypothesis\" 或 \"testing\"。",
       "",
-      "### 阶段 4：结论（conclusion）",
+      "### 阶段 3：结论（conclusion）",
       "diagnosticPhase 为 \"conclusion\"。给出因果链和针对性建议。",
       "",
       "## 专家选择规则",
-      "- 信息不足、需要追问 → DiagnosticInterviewAgent",
-      "- 假设验证、因果链分析 → HypothesisAgent",
+      "- 假设验证、因果链分析、统计类问题 → HypothesisAgent",
       "- 多节点路径、断点分析 → PathAgent",
       "- DNS/TLS/HTTP/ICMP/UDP 协议专项 → ProtocolAgent",
-      "- 生成报告 → ReportAgent",
-      "- 统计类问题、时间范围 → HypothesisAgent（使用 get_case_statistics）",
+      "- 生成报告 → 不交接，调用 export_report 工具获取草稿后按用户要求整理",
       "",
       "## 关键规则",
       "- 不要翻译 tshark 输出。要解释证据与故障的关系。",
@@ -794,13 +631,13 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
       "- 输出必须绑定 QueryRun、evidenceIds、packetIds 等可回溯 ID。",
       jsonOutputInstruction
     ].join("\n"),
-    handoffs: [triageAgent, evidenceAgent, pathAgent, protocolAgent, reportAgent],
+    handoffs: [evidenceAgent, pathAgent, protocolAgent],
     model: apiConfig.llm.model,
     modelSettings: modelSettings(),
     mcpServers,
     tools: localTools
   });
-  input.onTrace?.(`已创建 Leader Agent 和 5 个专家 Agent，模型=${apiConfig.llm.model}。`);
+  input.onTrace?.(`已创建 Leader Agent 和 3 个专家 Agent，模型=${apiConfig.llm.model}。`);
 
   try {
     input.onTrace?.("开始运行 OpenAI Agents SDK，等待模型选择专家并调用 case-graph 工具。");
@@ -820,10 +657,9 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
     const answer = parseAgentOutput(result.finalOutput);
     const toolCalls = extractToolCalls(result);
     return { ...answer, toolCalls };
-  } finally {
-    await tsharkQueryMcp.close();
-    await caseGraphMcp.close();
-    rmSync(tempDirectory, { recursive: true, force: true });
-    input.onTrace?.("MCP 已关闭，临时 case graph 快照已清理。");
+  } catch (error) {
+    // 会话失败可能源于 MCP 连接断开，重置单例让下一次请求重新拉起
+    resetTsharkQueryMcp();
+    throw error;
   }
 }

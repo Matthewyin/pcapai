@@ -117,11 +117,11 @@
       "summary": "API、Web、MCP、LLM、tshark 等默认配置。"
     },
     {
-      "id": "mcp-case-graph",
-      "label": "mcp/case-graph",
-      "type": "mcp",
-      "group": "mcp",
-      "summary": "只读 case graph，供 Agent 查询案件上下文。"
+      "id": "case-graph-tools",
+      "label": "agents/caseGraphTools",
+      "type": "component",
+      "group": "api",
+      "summary": "case graph 进程内工具（原 mcp/case-graph），供 Agent 查询案件上下文，写操作直接落 caseStore。"
     },
     {
       "id": "mcp-tshark-query",
@@ -274,10 +274,10 @@
         },
         {
           "from": "agent-runtime",
-          "to": "mcp-case-graph",
-          "method": "stdio MCP",
+          "to": "case-graph-tools",
+          "method": "in-process tool call",
           "label": "read case graph",
-          "payload": "PCAPAI_CASE_GRAPH_PATH"
+          "payload": "CaseGraph from caseStore"
         },
         {
           "from": "agent-runtime",
@@ -480,7 +480,7 @@
         },
         {
           "from": "shared",
-          "to": "mcp-case-graph",
+          "to": "case-graph-tools",
           "method": "TypeScript import",
           "label": "CaseGraphSchema",
           "payload": "runtime validation"

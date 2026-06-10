@@ -1,90 +1,13 @@
 import type { AgentAnswer, AnalysisChainPlan, AnalysisChainStep, CaseGraph, ChainStepResult } from "../../../../packages/shared/src/index.js";
-import { AnalysisChainPlanSchema, ChainStepResultSchema } from "../../../../packages/shared/src/index.js";
-import { runChainPlanner, runIntentPlanner, type AgentIntentPlan } from "../agents/runtime.js";
+import { ChainStepResultSchema } from "../../../../packages/shared/src/index.js";
+import { runChainPlanner, type AgentIntentPlan } from "../agents/runtime.js";
 
 type PlannedResult = { status: string; answer: AgentAnswer } | null;
 
-function patternMatcher(pattern: string) {
-  const regex = new RegExp(pattern, "i");
-  return (value: string) => regex.test(value);
-}
-
 export function createPlannerService(input: {
-  fallbackPatterns: {
-    usageHelp: string;
-    networkStatistics: string;
-    selectedSessionDiagnosis: string;
-    activeQueryExplain: string;
-    reportRequest: string;
-    broadTroubleshootingProblem: string;
-    concreteTroubleshootingScope: string;
-  };
   hasLlmApiKey: () => boolean;
-  isProtocolStatisticsQuestion: (question: string) => boolean;
-  shouldApplyCorrelationContext: (question: string, graph: CaseGraph) => boolean;
-  shouldCorrelateCaptures: (question: string) => boolean;
-  shouldCreateQueryRun: (question: string) => boolean;
   executeToolIntent: (graph: CaseGraph, question: string, intent: AgentIntentPlan["intent"], params?: Record<string, unknown>) => Promise<PlannedResult>;
 }) {
-  const matchesUsageHelp = patternMatcher(input.fallbackPatterns.usageHelp);
-  const matchesNetworkStatistics = patternMatcher(input.fallbackPatterns.networkStatistics);
-  const matchesSelectedSessionDiagnosis = patternMatcher(input.fallbackPatterns.selectedSessionDiagnosis);
-  const matchesActiveQueryExplain = patternMatcher(input.fallbackPatterns.activeQueryExplain);
-  const matchesReportRequest = patternMatcher(input.fallbackPatterns.reportRequest);
-  const matchesBroadTroubleshootingProblem = patternMatcher(input.fallbackPatterns.broadTroubleshootingProblem);
-  const matchesConcreteTroubleshootingScope = patternMatcher(input.fallbackPatterns.concreteTroubleshootingScope);
-
-  function shouldAskForTroubleshootingScope(question: string, graph: CaseGraph) {
-    if (graph.queryRuns.length) return false;
-    return matchesBroadTroubleshootingProblem(question) && !matchesConcreteTroubleshootingScope(question);
-  }
-
-  function fallbackIntentPlan(graph: CaseGraph, question: string): AgentIntentPlan {
-    if (matchesUsageHelp(question)) return { intent: "usage_help", confidence: "high", reason: "本地兜底识别为使用帮助。", missingContext: [] };
-    if (input.isProtocolStatisticsQuestion(question)) return { intent: "protocol_statistics", confidence: "high", reason: "本地兜底识别为协议统计。", missingContext: [] };
-    if (matchesNetworkStatistics(question)) return { intent: "network_statistics", confidence: "medium", reason: "本地兜底识别为确定性统计或事件查询。", missingContext: [] };
-    if (input.shouldApplyCorrelationContext(question, graph)) return { intent: "mapping_hint_update", confidence: "medium", reason: "本地兜底识别为多文件关联上下文补充。", missingContext: [] };
-    if (input.shouldCorrelateCaptures(question)) return { intent: "capture_correlation", confidence: "medium", reason: "本地兜底识别为多文件关联。", missingContext: [] };
-    if (input.shouldCreateQueryRun(question)) return { intent: "tcp_session_query", confidence: "medium", reason: "本地兜底识别为访问链路查询。", missingContext: [] };
-    if (graph.queryRuns.length && matchesSelectedSessionDiagnosis(question)) return { intent: "selected_session_diagnosis", confidence: "medium", reason: "本地兜底识别为当前 session 诊断追问。", missingContext: [] };
-    if (graph.queryRuns.length && matchesActiveQueryExplain(question)) return { intent: "active_query_explain", confidence: "medium", reason: "本地兜底识别为当前 QueryRun 解释。", missingContext: [] };
-    if (matchesReportRequest(question)) return { intent: "report_request", confidence: "medium", reason: "本地兜底识别为报告请求。", missingContext: [] };
-    if (shouldAskForTroubleshootingScope(question, graph)) {
-      return {
-        intent: "needs_clarification",
-        confidence: "medium",
-        reason: "本地兜底识别为宽泛排障问题。",
-        missingContext: ["故障时间段", "源 IP", "目的 IP", "端口", "故障现象类型"]
-      };
-    }
-    return { intent: "llm_explain", confidence: "low", reason: "本地兜底未识别到确定性工具意图。", missingContext: [] };
-  }
-
-  async function planUserIntent(graph: CaseGraph, question: string, onTrace?: (message: string) => void, chatHistory?: Array<{ role: string; content: string }>) {
-    if (!input.hasLlmApiKey()) {
-      throw new Error("未配置 LLM API Key，无法启动 Agent 意图规划。");
-    }
-    try {
-      return await runIntentPlanner({ graph, question, chatHistory, onTrace });
-    } catch (error) {
-      onTrace?.(`Leader Intent Planner 调用失败：${error instanceof Error ? error.message : String(error)}。`);
-      throw error;
-    }
-  }
-
-  function fallbackChainPlan(graph: CaseGraph, question: string): AnalysisChainPlan {
-    const intentPlan = fallbackIntentPlan(graph, question);
-    return AnalysisChainPlanSchema.parse({
-      chainId: `chain-${Date.now()}`,
-      planKind: "single",
-      question,
-      steps: [{ stepId: "step-0", intent: intentPlan.intent, purpose: intentPlan.reason }],
-      confidence: intentPlan.confidence,
-      reason: intentPlan.reason,
-      missingContext: intentPlan.missingContext
-    });
-  }
-
   async function planChain(graph: CaseGraph, question: string, onTrace?: (message: string) => void, chatHistory?: Array<{ role: string; content: string }>): Promise<AnalysisChainPlan> {
     if (!input.hasLlmApiKey()) {
       throw new Error("未配置 LLM API Key，无法启动 Agent 分析链规划。");
@@ -107,13 +30,6 @@ export function createPlannerService(input: {
   }
 
   return {
-    shouldAnswerUsageHelp: matchesUsageHelp,
-    shouldAnswerActiveQueryRun: matchesActiveQueryExplain,
-    shouldExplainSelectedSessionProblem: matchesSelectedSessionDiagnosis,
-    shouldAskForTroubleshootingScope,
-    fallbackIntentPlan,
-    fallbackChainPlan,
-    planUserIntent,
     planChain,
     executeAgentIntentPlan,
     executeChainStep

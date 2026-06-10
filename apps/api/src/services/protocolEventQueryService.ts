@@ -1,3 +1,4 @@
+import type { Tool } from "@openai/agents";
 import type { AgentAnswer, CaseGraph } from "../../../../packages/shared/src/index.js";
 import { runPcapTroubleshootingAgent } from "../agents/runtime.js";
 import { runProtocolAdapter, type ProtocolAdapter } from "../protocolAdapters/types.js";
@@ -12,6 +13,7 @@ type ProtocolEventQueryServiceInput = {
   loadLearnedPatterns: () => LearnedPattern[];
   learnFromAgentRun: (question: string, toolCalls: string[], adapterIds: string[]) => void;
   incrementHitCount: (adapterId: string, regexSource: string) => void;
+  createCaseGraphTools: (caseId: string) => Tool[];
 };
 
 const protocolHints: Record<string, RegExp> = {
@@ -76,7 +78,7 @@ export function createProtocolEventQueryService(input: ProtocolEventQueryService
       }
       if (!input.hasLlmApiKey()) return null;
       try {
-        const agentAnswer = await runPcapTroubleshootingAgent({ graph, question });
+        const agentAnswer = await runPcapTroubleshootingAgent({ graph, question, tools: input.createCaseGraphTools(graph.spec.caseId) });
         input.learnFromAgentRun(question, agentAnswer.toolCalls || [], adapterIds());
         return { status: "agent_fallback", answer: agentAnswer };
       } catch {

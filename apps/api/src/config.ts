@@ -81,10 +81,6 @@ const defaults = JSON.parse(readFileSync(configPath, "utf8")) as {
       command: string;
       args: string[];
     };
-    caseGraphMcp: {
-      command: string;
-      args: string[];
-    };
   };
   llm: {
     baseURL: string;
@@ -160,13 +156,6 @@ export const apiConfig = {
     args: process.env.PCAPAI_EVIDENCE_OPENER_MCP_ARGS
       ? process.env.PCAPAI_EVIDENCE_OPENER_MCP_ARGS.split(" ").filter(Boolean)
       : defaults.api.evidenceOpenerMcp.args,
-    cwd: workspaceRoot
-  },
-  caseGraphMcp: {
-    command: process.env.PCAPAI_CASE_GRAPH_MCP_COMMAND || defaults.api.caseGraphMcp.command,
-    args: process.env.PCAPAI_CASE_GRAPH_MCP_ARGS
-      ? process.env.PCAPAI_CASE_GRAPH_MCP_ARGS.split(" ").filter(Boolean)
-      : defaults.api.caseGraphMcp.args,
     cwd: workspaceRoot
   },
   llm: {

@@ -30,7 +30,7 @@ flowchart TB
   end
 
   subgraph LLM["LLM Provider"]
-    Model["OpenAI 兼容 API<br/>(Doubao/Claude/GPT)"]
+    Model["OpenAI 兼容 API<br/>(MiniMax/DeepSeek/Ollama)"]
   end
 
   subgraph AgentRuntime["Agent Runtime (OpenAI Agents SDK)"]
@@ -246,7 +246,7 @@ Zod schema + TypeScript 类型，定义完整领域模型：
 
 ### `config/defaults.json` — 集中配置
 
-所有运行时默认值：API host/port（默认 `30022`）、CORS、MCP 启动命令、LLM 设置（默认 Doubao/ByteDance Ark）、tshark 配置、查询限制、诊断阈值。所有值可通过 `PCAPAI_*` 环境变量覆盖。
+所有运行时默认值：API host/port（默认 `30022`）、CORS、MCP 启动命令、LLM 设置（默认 MiniMax）、tshark 配置、查询限制、诊断阈值。所有值可通过 `PCAPAI_*` 环境变量覆盖。
 
 ### MCP 服务器
 

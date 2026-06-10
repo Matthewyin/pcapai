@@ -60,15 +60,11 @@
     "evidenceOpenerMcp": {
       "command": "npm",
       "args": ["run", "dev", "-w", "mcp/evidence-opener"]
-    },
-    "caseGraphMcp": {
-      "command": "npm",
-      "args": ["run", "dev", "-w", "mcp/case-graph"]
     }
   },
   "llm": {
-    "baseURL": "https://ark.cn-beijing.volces.com/api/coding/v3",
-    "model": "doubao-seed-2.0-pro",
+    "baseURL": "https://api.minimaxi.com/v1",
+    "model": "MiniMax-M2.7-highspeed",
     "useResponses": false,
     "traceIncludeSensitiveData": false
   },

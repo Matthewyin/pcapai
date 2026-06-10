@@ -33,7 +33,7 @@ npm workspace monorepo with three workspace groups:
 Zod schemas + TypeScript types for the entire domain model: `CaseSpec`, `CaptureNode`, `MappingHint`, `TimeOffsetHint`, `PacketSummary`, `Conversation`, `QueryRun`, `QueryPath`, `SessionSegment`, `SessionLink`, `EvidenceEvent`, `Finding`, `PathGraph`, `AnalysisRun`, `CaseGraph`, `AgentAnswer`, `QueryDiagnosis`, `ProtocolCorrelation`, `EvidenceCard`, `AccessCandidateGroup`, `PacketInsight`, `TcpStreamSummary`, `ToolRun`, `ConnectionLink`, `AnalysisChainPlan`, `AnalysisChainStep`, `ChainStepResult`. All other packages consume these types. API imports shared via a relative path (`../../../../packages/shared/src/index.js`).
 
 ### `config/defaults.json` — Central configuration
-All runtime defaults live here: API host/port (default `30022`), CORS origins, MCP server launch commands, LLM settings (default: Doubao/ByteDance Ark endpoint), tshark config, query limits, diagnosis thresholds, and web settings. Every config value can be overridden via `PCAPAI_*` env vars. The API, web Vite config, and MCP servers all resolve the workspace root by walking up to find `config/defaults.json`.
+All runtime defaults live here: API host/port (default `30022`), CORS origins, MCP server launch commands, LLM settings (default: MiniMax endpoint), tshark config, query limits, diagnosis thresholds, and web settings. Every config value can be overridden via `PCAPAI_*` env vars. The API, web Vite config, and MCP servers all resolve the workspace root by walking up to find `config/defaults.json`.
 
 ### `apps/api` — Express API + Agent runtime (`@pcapai/api`)
 - **`src/config.ts`** — loads defaults from `config/defaults.json` and applies `PCAPAI_*` env overrides. Exports `apiConfig` and `updateLlmConfig()`.
@@ -78,9 +78,9 @@ All runtime defaults live here: API host/port (default `30022`), CORS origins, M
 - **`src/mcp/tsharkQueryClient.ts`** — stdio MCP client for tshark-query; wraps 18 tool calls (including `list_tcp_streams`, `follow_tcp_stream`, `get_expert_info`)
 - **`src/mcp/evidenceOpenerClient.ts`** — stdio MCP client for evidence-opener
 - **`src/agents/runtime.ts`** — OpenAI Agents SDK runtime with three phases:
-  1. **Chain planner** (`runChainPlanner`) — plans single-step or multi-step analysis chains; outputs `AnalysisChainPlan` with ordered steps, each referencing one of 12 intents. Falls back to single-step `runIntentPlanner` when no LLM key.
+  1. **Chain planner** (`runChainPlanner`) — plans single-step or multi-step analysis chains; outputs `AnalysisChainPlan` with ordered steps, each referencing one of 12 intents. Requires an LLM key (requests fail fast with `llm_key_required` otherwise).
   2. **Deterministic tools** — AgentToolRegistry executes structured capabilities without asking the LLM to infer packet facts. The chain execution engine (`executeChain` in `plannerService.ts`) orchestrates multi-step plans with parameter binding via `paramsFrom` JSON path expressions and graph reload between steps.
-  3. **Agent conversation** (`runPcapTroubleshootingAgent`) — creates temp file with case graph JSON, launches both `case-graph MCP` and `tshark-query MCP` via stdio, and injects `pcapai_` local tools. Leader agent with 5 handoff subagents (DiagnosticInterview, Hypothesis, Path, Protocol, Report), all sharing both MCP servers and local tools. Protocol agent can call tshark-query tools directly for packet data. Returns `AgentAnswerWithToolCalls` including extracted tool call names for pattern learning. Uses `OpenAIProvider` with configurable base URL/model. `maxTurns: 8`.
+  3. **Agent conversation** (`runPcapTroubleshootingAgent`) — uses in-process case graph tools (`src/agents/caseGraphTools.ts`, reads live graph from caseStore; memory/topology writes persist), a persistent `tshark-query MCP` singleton (`src/mcp/tsharkQueryMcpRuntime.ts`), and injects `pcapai_` local tools. Leader agent with 3 handoff subagents (Hypothesis, Path, Protocol); the leader handles interview follow-ups and report formatting itself. Protocol agent can call tshark-query tools directly for packet data. Returns `AgentAnswerWithToolCalls` including extracted tool call names for pattern learning. Uses `OpenAIProvider` with configurable base URL/model. `maxTurns: 16`.
 - **`src/services/plannerService.ts`** — planner service factory: `planChain` calls the chain planner, `executeChainStep` delegates a single step intent to AgentToolRegistry via `executeToolIntent`, `executeChain` runs multi-step plans with SSE callbacks, graph reload, and parameter binding. Falls back to local pattern matching when no LLM key.
 
 ### `apps/web` — React workbench (`@pcapai/web`)
@@ -100,10 +100,9 @@ Single-file React 19 app (`src/main.tsx`). Chat-first layout with session histor
 - Insight rendering in chat for diagnostic patterns
 
 ### `mcp/*` — MCP servers
-Three stdio-based MCP servers using `@modelcontextprotocol/sdk`:
+Two stdio-based MCP servers using `@modelcontextprotocol/sdk`:
 - **`tshark-query`** — reads capture metadata with `capinfos`, builds display filters, and runs `tshark` for conversations, packet queries, packet details, TCP resets/retransmissions/zero-window, ICMP events, DNS packets, UDP flows, TLS events, HTTP packets, protocol listing, and network statistics. 19 tools (including `list_tcp_streams`, `follow_tcp_stream`, `get_expert_info`, `get_tshark_packet_detail`).
 - **`evidence-opener`** — opens local Wireshark for a pcap path and display filter. It does not analyze packets.
-- **`case-graph`** — Read-only MCP server for agents. Reads case graph from temp file set via `PCAPAI_CASE_GRAPH_PATH`. 20 tools: `load_case_graph`, `get_case_statistics`, `get_query_runs`, `get_query_run`, `get_active_query_run`, `get_conversation`, `get_query_diagnosis`, `get_path_diagnosis`, `get_protocol_correlations`, `get_evidence_cards`, `get_finding`, `get_evidence`, `get_session_link`, `get_packet_detail`, `explain_path`, `get_network_topology`, `update_network_topology`, `suggest_next_query`, `get_insights`, `export_report`.
 
 ## Query Pipeline
 
@@ -111,8 +110,8 @@ Three stdio-based MCP servers using `@modelcontextprotocol/sdk`:
 1. **Chain planner** classifies the question and produces a single-step or multi-step `AnalysisChainPlan`
 2. **Chain path**: if `planKind === "chain"`, `executeChain` runs multiple steps sequentially with parameter binding between steps and graph reload; auto-synthesis appends LLM interpretation if chain has no `llm_explain` step
 3. **Deterministic tool path**: for single-step plans, AgentToolRegistry executes the matching `pcapai_` tool. If a protocol adapter matches (hardcoded regex or learned pattern), it runs tshark queries, builds evidence cards and protocol correlations, writes the QueryRun, and records ToolRun.
-4. **Agent fallback**: when no adapter matches (hardcoded or learned), the leader agent handles the query using both case-graph MCP and tshark-query MCP, then triggers async pattern learning for future routing
-5. **Agent path**: for open-ended questions (`llm_explain` intent), the leader agent hands off to one of 5 subagents (Triage/Evidence/Path/Protocol/Report)
+4. **Agent fallback**: when no adapter matches (hardcoded or learned), the leader agent handles the query using in-process case graph tools and tshark-query MCP, then triggers async pattern learning for future routing
+5. **Agent path**: for open-ended questions (`llm_explain` intent), the leader agent hands off to one of 3 subagents (Hypothesis/Path/Protocol)
 
 `POST /api/cases/:caseId/query-runs` runs:
 1. Infer or accept time/address/port/protocol filters
@@ -134,12 +133,12 @@ The learning module (`src/services/patternLearner.ts`) has no hardcoded tool→a
 ## Key Design Constraints
 
 - **Deterministic tools bypass LLM fact inference** — protocol adapters (TCP/DNS/TLS/HTTP/ICMP/UDP) run tshark directly and produce structured evidence cards. Planner and Agents SDK can both invoke those tools through AgentToolRegistry.
-- **Agents read case graph AND can query tshark directly** — the leader agent and subagents have access to both case-graph MCP (read-only case data) and tshark-query MCP (raw packet queries). Protocol agent uses tshark-query tools when deterministic adapters don't match.
+- **Agents read case graph AND can query tshark directly** — the leader agent and subagents have access to in-process case graph tools (`caseGraphTools.ts`; reads live case data, memory/topology writes persist to caseStore) and tshark-query MCP (raw packet queries, persistent singleton connection). Protocol agent uses tshark-query tools when deterministic adapters don't match.
 - **Upload does not full-parse pcap files** — large-file handling depends on capture metadata first and display-filtered tshark queries later.
 - **No hardcoded business data or environment values in code** — defaults live in `config/defaults.json`, sample data lives in `data/fixtures`.
 - **Confidence levels**: `certain`, `high`, `low`, `needs_context`. No evidence = no confident conclusion. Missing observations must state coverage scope.
 - The chain planner classifies into single-step or multi-step plans (2-5 steps). Each step uses one of 12 intents. Steps can bind parameters from previous step results via `paramsFrom` JSON path expressions. No hard-coded scenarios — plans are dynamically generated from the case graph.
-- The leader agent hands off to exactly one subagent per question. `maxTurns: 8`.
+- The leader agent hands off to exactly one subagent per question. `maxTurns: 16`.
 - MCP servers communicate over stdio. API-to-MCP calls go through client wrappers under `apps/api/src/mcp`.
 - Case data persists as JSON files under `data/cases/:caseId/`. In-memory `Map<string, CaseGraph>` caches recently loaded graphs.
 - LLM profiles are stored as `PCAPAI_LLM_PROFILE_*` entries in `.env`. The active profile is tracked via `PCAPAI_LLM_ACTIVE_PROFILE`.

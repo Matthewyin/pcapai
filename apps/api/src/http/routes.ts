@@ -13,6 +13,7 @@ import {
   type QueryRun,
 } from "../../../../packages/shared/src/index.js";
 import { runAgentCompatibilityCheck, runPcapTroubleshootingAgent } from "../agents/runtime.js";
+import { createCaseGraphTools } from "../agents/caseGraphTools.js";
 import { deleteLearnedPattern, incrementHitCount, learnFromAgentRun, listLearnedPatterns, loadLearnedPatterns } from "../services/patternLearner.js";
 import { apiConfig } from "../config.js";
 import { getCaptureTimeRangeWithMcp, getConversationPacketsWithMcp, listDnsPacketsWithMcp, listHttpPacketsWithMcp, listIcmpEventsWithMcp, listTcpResetsWithMcp, listTcpRetransmissionsWithMcp, listTcpStreamsWithMcp, followTcpStreamWithMcp, listTcpZeroWindowWithMcp, listTlsPacketsWithMcp, listUdpPacketsWithMcp, queryPacketsWithMcp } from "../mcp/tsharkQueryClient.js";
@@ -329,6 +330,17 @@ async function loadGraphWithInsights(caseId: string): Promise<CaseGraph> {
 
 const setCaseGraph = (caseId: string, graph: CaseGraph) => cases.set(caseId, graph);
 
+// case graph 进程内工具：读内存 graph，写操作直接持久化到 caseStore
+function createCaseGraphToolsFor(caseId: string) {
+  return createCaseGraphTools({
+    loadGraph: () => loadGraph(caseId),
+    saveGraph: (graph) => {
+      writeCaseGraph(graph);
+      cases.set(graph.spec.caseId, graph);
+    }
+  });
+}
+
 // 从 QueryRuns 自动提取 findings 到 memory
 function syncMemoryFromQueryRuns(graph: CaseGraph): CaseGraph {
   const existingIds = new Set((graph.memory?.findings || []).map((f) => f.queryRunId).filter(Boolean));
@@ -415,7 +427,8 @@ const protocolEventQueryService = createProtocolEventQueryService({
   learnFromAgentRun: (question, toolCalls, adapterIds) => {
     learnFromAgentRun(question, toolCalls, adapterIds).catch(() => {});
   },
-  incrementHitCount
+  incrementHitCount,
+  createCaseGraphTools: createCaseGraphToolsFor
 });
 const agentToolRegistryService = createAgentToolRegistryService({
   usageHelpAnswer,
@@ -439,12 +452,7 @@ const agentToolRegistryService = createAgentToolRegistryService({
   }
 });
 const plannerService = createPlannerService({
-  fallbackPatterns: apiConfig.planner.fallbackPatterns,
   hasLlmApiKey: () => Boolean(apiConfig.llm.apiKey),
-  isProtocolStatisticsQuestion,
-  shouldApplyCorrelationContext,
-  shouldCorrelateCaptures,
-  shouldCreateQueryRun,
   executeToolIntent: agentToolRegistryService.execute
 });
 const {
@@ -467,7 +475,7 @@ const agentRuntimeService = createAgentRuntimeService({
   recordErrorRun,
   updateRuntimeStatus: (patch) => Object.assign(agentRuntimeStatus, patch),
   adapterIds: protocolEventQueryService.adapterIds,
-  createAgentTools: (caseId, question) => agentToolRegistryService.createSdkTools(caseId, question),
+  createAgentTools: (caseId, question) => [...createCaseGraphToolsFor(caseId), ...agentToolRegistryService.createSdkTools(caseId, question)],
   learnFromAgentRun: (question, toolCalls, adapterIds) => {
     learnFromAgentRun(question, toolCalls, adapterIds).catch(() => {});
   }
