@@ -1,0 +1,870 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>pcapAI 包和组件工作流程地图</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #071015;
+        --panel: #0d1820;
+        --panel-2: #101f2a;
+        --line: #24414f;
+        --text: #e5f7fb;
+        --muted: #8fb7c4;
+        --cyan: #06b6d4;
+        --purple: #7c3aed;
+        --amber: #f59e0b;
+        --green: #22c55e;
+        --red: #ef4444;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background:
+          radial-gradient(circle at 20% 10%, rgba(6, 182, 212, 0.16), transparent 28rem),
+          radial-gradient(circle at 80% 0%, rgba(124, 58, 237, 0.14), transparent 30rem),
+          linear-gradient(135deg, #05090c 0%, var(--bg) 52%, #0b1020 100%);
+        color: var(--text);
+        font-family:
+          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+          sans-serif;
+      }
+
+      button,
+      input,
+      select {
+        font: inherit;
+      }
+
+      .app {
+        min-height: 100vh;
+        padding: 28px;
+        display: grid;
+        grid-template-rows: auto 1fr;
+        gap: 20px;
+      }
+
+      header {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-end;
+        gap: 24px;
+      }
+
+      .title-block h1 {
+        margin: 0;
+        font-size: clamp(28px, 4vw, 52px);
+        line-height: 1.02;
+        letter-spacing: 0;
+      }
+
+      .title-block p {
+        margin: 10px 0 0;
+        color: var(--muted);
+        max-width: 960px;
+        font-size: 16px;
+        line-height: 1.6;
+      }
+
+      .meta {
+        flex: 0 0 auto;
+        display: flex;
+        gap: 10px;
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .pill {
+        border: 1px solid rgba(6, 182, 212, 0.28);
+        border-radius: 999px;
+        padding: 7px 10px;
+        background: rgba(6, 182, 212, 0.06);
+      }
+
+      .layout {
+        min-height: 0;
+        display: grid;
+        grid-template-columns: 310px minmax(560px, 1fr) 360px;
+        gap: 18px;
+      }
+
+      .panel {
+        min-height: 0;
+        border: 1px solid rgba(6, 182, 212, 0.22);
+        border-radius: 18px;
+        background: rgba(13, 24, 32, 0.82);
+        box-shadow: 0 0 48px rgba(6, 182, 212, 0.08);
+        overflow: hidden;
+      }
+
+      .panel-head {
+        padding: 18px 18px 14px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+      }
+
+      .panel-head h2 {
+        margin: 0;
+        font-size: 18px;
+      }
+
+      .panel-head p {
+        margin: 6px 0 0;
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.45;
+      }
+
+      .flow-controls {
+        padding: 14px 14px 0;
+        display: grid;
+        gap: 10px;
+      }
+
+      .search,
+      .category {
+        width: 100%;
+        border: 1px solid rgba(143, 183, 196, 0.24);
+        border-radius: 12px;
+        padding: 10px 12px;
+        color: var(--text);
+        background: rgba(255, 255, 255, 0.04);
+        outline: none;
+      }
+
+      .flow-list {
+        height: calc(100vh - 244px);
+        overflow: auto;
+        padding: 14px;
+        display: grid;
+        align-content: start;
+        gap: 10px;
+      }
+
+      .flow-button {
+        width: 100%;
+        border: 1px solid rgba(143, 183, 196, 0.18);
+        border-radius: 14px;
+        padding: 13px;
+        color: var(--text);
+        background: rgba(255, 255, 255, 0.04);
+        text-align: left;
+        cursor: pointer;
+        transition:
+          border-color 160ms ease,
+          background 160ms ease,
+          transform 160ms ease;
+      }
+
+      .flow-button:hover {
+        transform: translateY(-1px);
+        border-color: rgba(6, 182, 212, 0.45);
+      }
+
+      .flow-button.active {
+        border-color: rgba(6, 182, 212, 0.86);
+        background: rgba(6, 182, 212, 0.12);
+      }
+
+      .flow-title {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 10px;
+        font-weight: 700;
+      }
+
+      .flow-summary {
+        margin-top: 7px;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.45;
+      }
+
+      .badge {
+        flex: 0 0 auto;
+        border-radius: 999px;
+        padding: 4px 7px;
+        font-size: 11px;
+        font-weight: 700;
+        color: #061015;
+        background: var(--cyan);
+      }
+
+      .badge.example {
+        background: var(--amber);
+      }
+
+      .badge.build {
+        background: var(--purple);
+        color: white;
+      }
+
+      .map-wrap {
+        position: relative;
+        min-height: 0;
+        height: calc(100vh - 138px);
+      }
+
+      .map-toolbar {
+        position: absolute;
+        top: 16px;
+        left: 16px;
+        right: 16px;
+        z-index: 4;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 12px;
+        pointer-events: none;
+      }
+
+      .legend {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        pointer-events: auto;
+      }
+
+      .legend-item {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 999px;
+        padding: 6px 9px;
+        background: rgba(5, 9, 12, 0.7);
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .dot {
+        width: 9px;
+        height: 9px;
+        border-radius: 50%;
+        background: var(--cyan);
+      }
+
+      .reset-button {
+        pointer-events: auto;
+        border: 1px solid rgba(6, 182, 212, 0.35);
+        border-radius: 12px;
+        padding: 8px 10px;
+        color: var(--text);
+        background: rgba(6, 182, 212, 0.08);
+        cursor: pointer;
+      }
+
+      .graph {
+        position: absolute;
+        inset: 0;
+        overflow: auto;
+      }
+
+      .graph-canvas {
+        position: relative;
+        width: 1320px;
+        height: 900px;
+        margin: 72px auto 40px;
+      }
+
+      .edge-layer {
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+        overflow: visible;
+      }
+
+      .edge-path {
+        stroke: rgba(143, 183, 196, 0.23);
+        stroke-width: 2;
+        fill: none;
+        marker-end: url(#arrow-muted);
+      }
+
+      .edge-path.active {
+        stroke: var(--cyan);
+        stroke-width: 4;
+        marker-end: url(#arrow-active);
+        filter: drop-shadow(0 0 8px rgba(6, 182, 212, 0.7));
+      }
+
+      .edge-label {
+        position: absolute;
+        min-width: 120px;
+        max-width: 230px;
+        transform: translate(-50%, -50%);
+        border: 1px solid rgba(143, 183, 196, 0.18);
+        border-radius: 999px;
+        padding: 5px 8px;
+        color: var(--muted);
+        background: rgba(5, 9, 12, 0.78);
+        font-size: 11px;
+        line-height: 1.2;
+        text-align: center;
+        opacity: 0.5;
+        pointer-events: none;
+      }
+
+      .edge-label.active {
+        color: var(--text);
+        border-color: rgba(6, 182, 212, 0.72);
+        background: rgba(6, 182, 212, 0.14);
+        opacity: 1;
+      }
+
+      .node {
+        position: absolute;
+        width: 172px;
+        min-height: 92px;
+        border: 1px solid rgba(143, 183, 196, 0.22);
+        border-radius: 16px;
+        padding: 13px;
+        background: rgba(16, 31, 42, 0.92);
+        color: var(--text);
+        transition:
+          transform 160ms ease,
+          border-color 160ms ease,
+          box-shadow 160ms ease,
+          opacity 160ms ease;
+      }
+
+      .node.dim {
+        opacity: 0.32;
+      }
+
+      .node.active {
+        transform: translateY(-2px);
+        border-color: rgba(6, 182, 212, 0.9);
+        box-shadow: 0 0 26px rgba(6, 182, 212, 0.28);
+      }
+
+      .node.current {
+        border-color: rgba(245, 158, 11, 0.95);
+        box-shadow: 0 0 24px rgba(245, 158, 11, 0.24);
+      }
+
+      .node-label {
+        font-size: 15px;
+        font-weight: 800;
+        line-height: 1.2;
+      }
+
+      .node-type {
+        margin-top: 8px;
+        color: var(--muted);
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 11px;
+        text-transform: uppercase;
+      }
+
+      .node-summary {
+        margin-top: 8px;
+        color: var(--muted);
+        font-size: 11px;
+        line-height: 1.35;
+      }
+
+      .node.frontend {
+        border-color: rgba(6, 182, 212, 0.35);
+      }
+
+      .node.backend {
+        border-color: rgba(34, 197, 94, 0.35);
+      }
+
+      .node.agent {
+        border-color: rgba(124, 58, 237, 0.48);
+      }
+
+      .node.analysis {
+        border-color: rgba(245, 158, 11, 0.42);
+      }
+
+      .node.mcp {
+        border-color: rgba(14, 165, 233, 0.44);
+      }
+
+      .node.external,
+      .node.example {
+        border-style: dashed;
+      }
+
+      .detail {
+        height: calc(100vh - 138px);
+        overflow: auto;
+      }
+
+      .detail-body {
+        padding: 16px;
+        display: grid;
+        gap: 14px;
+      }
+
+      .detail-card {
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 14px;
+        padding: 14px;
+        background: rgba(255, 255, 255, 0.035);
+      }
+
+      .detail-card h3 {
+        margin: 0 0 8px;
+        font-size: 15px;
+      }
+
+      .detail-card p {
+        margin: 0;
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.55;
+      }
+
+      .step-list {
+        display: grid;
+        gap: 10px;
+      }
+
+      .step {
+        border-left: 3px solid var(--cyan);
+        border-radius: 12px;
+        padding: 11px 12px;
+        background: rgba(6, 182, 212, 0.08);
+      }
+
+      .step-title {
+        display: flex;
+        gap: 8px;
+        align-items: baseline;
+        font-size: 13px;
+        font-weight: 800;
+      }
+
+      .step-title span {
+        color: var(--muted);
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 11px;
+      }
+
+      .step-meta {
+        margin-top: 7px;
+        display: grid;
+        gap: 4px;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.4;
+      }
+
+      .method {
+        color: var(--cyan);
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      }
+
+      .empty {
+        color: var(--muted);
+        padding: 16px;
+        line-height: 1.6;
+      }
+
+      @media (max-width: 1180px) {
+        .app {
+          padding: 18px;
+        }
+
+        header {
+          align-items: flex-start;
+          flex-direction: column;
+        }
+
+        .layout {
+          grid-template-columns: 1fr;
+        }
+
+        .flow-list,
+        .map-wrap,
+        .detail {
+          height: auto;
+          max-height: none;
+        }
+
+        .map-wrap {
+          min-height: 720px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="app">
+      <header>
+        <div class="title-block">
+          <h1>pcapAI 包和组件工作流程地图</h1>
+          <p id="page-description">点击左侧流程，查看它经过哪些包、组件、MCP、外部工具，以及每一步的传递方式。</p>
+        </div>
+        <div class="meta">
+          <span class="pill" id="node-count">节点 0</span>
+          <span class="pill" id="flow-count">流程 0</span>
+        </div>
+      </header>
+
+      <section class="layout">
+        <aside class="panel">
+          <div class="panel-head">
+            <h2>流程</h2>
+            <p>选择一个操作后，图上会高亮相关包和传递链路。</p>
+          </div>
+          <div class="flow-controls">
+            <input id="search" class="search" type="search" placeholder="搜索流程，例如 agent、Wireshark、build" />
+            <select id="category" class="category">
+              <option value="all">全部分类</option>
+            </select>
+          </div>
+          <div id="flow-list" class="flow-list"></div>
+        </aside>
+
+        <section class="panel map-wrap">
+          <div class="map-toolbar">
+            <div class="legend" id="legend"></div>
+            <button class="reset-button" id="reset-button" type="button">显示全局</button>
+          </div>
+          <div class="graph">
+            <div id="graph-canvas" class="graph-canvas">
+              <svg class="edge-layer" id="edge-layer" width="1320" height="900" viewBox="0 0 1320 900" aria-hidden="true">
+                <defs>
+                  <marker id="arrow-muted" markerWidth="10" markerHeight="10" refX="7" refY="3" orient="auto" markerUnits="strokeWidth">
+                    <path d="M0,0 L0,6 L8,3 z" fill="rgba(143,183,196,0.45)"></path>
+                  </marker>
+                  <marker id="arrow-active" markerWidth="12" markerHeight="12" refX="8" refY="4" orient="auto" markerUnits="strokeWidth">
+                    <path d="M0,0 L0,8 L10,4 z" fill="#06b6d4"></path>
+                  </marker>
+                </defs>
+              </svg>
+              <div id="edge-labels"></div>
+              <div id="nodes"></div>
+            </div>
+          </div>
+        </section>
+
+        <aside class="panel detail">
+          <div class="panel-head">
+            <h2 id="detail-title">流程详情</h2>
+            <p id="detail-summary">选择一个流程查看步骤、传递方式和数据。</p>
+          </div>
+          <div id="detail-body" class="detail-body"></div>
+        </aside>
+      </section>
+    </main>
+
+    <script>
+      const layout = {
+        web: [40, 70],
+        "web-config": [40, 210],
+        api: [280, 70],
+        routes: [280, 210],
+        "agent-runtime-service": [500, 70],
+        "planner-service": [500, 210],
+        "agent-tool-registry": [500, 350],
+        "agent-runtime": [720, 70],
+        "protocol-adapters": [720, 250],
+        "insight-engine": [720, 410],
+        "query-run-service": [280, 360],
+        "report-builder": [280, 510],
+        "case-store": [500, 520],
+        shared: [40, 520],
+        config: [40, 660],
+        "mcp-case-graph": [940, 70],
+        "mcp-tshark-query": [940, 230],
+        "mcp-evidence-opener": [940, 390],
+        "llm-provider": [1140, 70],
+        tshark: [1140, 250],
+        wireshark: [1140, 430],
+        env: [280, 660],
+        todesktop: [720, 660],
+        "email-service": [940, 660]
+      };
+
+      const groupColors = {
+        frontend: "#06b6d4",
+        backend: "#22c55e",
+        agent: "#7c3aed",
+        analysis: "#f59e0b",
+        storage: "#38bdf8",
+        schema: "#a78bfa",
+        config: "#94a3b8",
+        mcp: "#0ea5e9",
+        external: "#e5f7fb",
+        example: "#f59e0b"
+      };
+
+      const state = {
+        data: null,
+        selectedFlowId: null,
+        search: "",
+        category: "all"
+      };
+
+      const el = {
+        description: document.querySelector("#page-description"),
+        nodeCount: document.querySelector("#node-count"),
+        flowCount: document.querySelector("#flow-count"),
+        search: document.querySelector("#search"),
+        category: document.querySelector("#category"),
+        flowList: document.querySelector("#flow-list"),
+        legend: document.querySelector("#legend"),
+        reset: document.querySelector("#reset-button"),
+        nodes: document.querySelector("#nodes"),
+        edgeLayer: document.querySelector("#edge-layer"),
+        edgeLabels: document.querySelector("#edge-labels"),
+        detailTitle: document.querySelector("#detail-title"),
+        detailSummary: document.querySelector("#detail-summary"),
+        detailBody: document.querySelector("#detail-body")
+      };
+
+      async function loadData() {
+        try {
+          const response = await fetch("./flows.json", { cache: "no-store" });
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          return await response.json();
+        } catch (error) {
+          el.detailBody.innerHTML = `<div class="empty">无法读取 flows.json。请从 docs/workflow-map 目录启动本地静态服务，例如 <span class="method">python3 -m http.server 30026</span>，再访问 <span class="method">http://localhost:30026/</span>。</div>`;
+          throw error;
+        }
+      }
+
+      function init(data) {
+        state.data = data;
+        state.selectedFlowId = data.flows[0]?.id ?? null;
+        el.description.textContent = data.meta.description;
+        el.nodeCount.textContent = `节点 ${data.nodes.length}`;
+        el.flowCount.textContent = `流程 ${data.flows.length}`;
+        renderCategoryOptions();
+        renderLegend();
+        renderAll();
+      }
+
+      function renderCategoryOptions() {
+        const categories = [...new Set(state.data.flows.map((flow) => flow.category))].sort();
+        for (const category of categories) {
+          const option = document.createElement("option");
+          option.value = category;
+          option.textContent = category;
+          el.category.appendChild(option);
+        }
+      }
+
+      function renderLegend() {
+        const groups = [...new Set(state.data.nodes.map((node) => node.group))];
+        el.legend.innerHTML = groups
+          .map((group) => {
+            const color = groupColors[group] ?? "#8fb7c4";
+            return `<span class="legend-item"><span class="dot" style="background:${color}"></span>${group}</span>`;
+          })
+          .join("");
+      }
+
+      function selectedFlow() {
+        return state.data.flows.find((flow) => flow.id === state.selectedFlowId) ?? null;
+      }
+
+      function flowNodeIds(flow) {
+        if (!flow) return new Set();
+        const ids = new Set();
+        for (const step of flow.steps) {
+          ids.add(step.from);
+          ids.add(step.to);
+        }
+        return ids;
+      }
+
+      function edgeKey(step) {
+        return `${step.from}->${step.to}`;
+      }
+
+      function activeEdgeKeys(flow) {
+        return new Set((flow?.steps ?? []).map(edgeKey));
+      }
+
+      function filteredFlows() {
+        const query = state.search.trim().toLowerCase();
+        return state.data.flows.filter((flow) => {
+          const matchesCategory = state.category === "all" || flow.category === state.category;
+          const text = `${flow.label} ${flow.category} ${flow.status} ${flow.summary}`.toLowerCase();
+          return matchesCategory && (!query || text.includes(query));
+        });
+      }
+
+      function renderFlowList() {
+        const flows = filteredFlows();
+        if (flows.length === 0) {
+          el.flowList.innerHTML = `<div class="empty">没有匹配的流程。</div>`;
+          return;
+        }
+
+        el.flowList.innerHTML = "";
+        for (const flow of flows) {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = `flow-button ${flow.id === state.selectedFlowId ? "active" : ""}`;
+          const badgeClass = flow.status === "example" ? "example" : flow.category === "build" ? "build" : "";
+          button.innerHTML = `
+            <div class="flow-title">
+              <span>${escapeHtml(flow.label)}</span>
+              <span class="badge ${badgeClass}">${escapeHtml(flow.status)}</span>
+            </div>
+            <div class="flow-summary">${escapeHtml(flow.summary)}</div>
+          `;
+          button.addEventListener("click", () => {
+            state.selectedFlowId = flow.id;
+            renderAll();
+          });
+          el.flowList.appendChild(button);
+        }
+      }
+
+      function renderNodes() {
+        const flow = selectedFlow();
+        const activeNodes = flowNodeIds(flow);
+        const hasSelection = Boolean(flow);
+        el.nodes.innerHTML = "";
+
+        for (const node of state.data.nodes) {
+          const [x, y] = layout[node.id] ?? [40, 40];
+          const div = document.createElement("div");
+          const isActive = activeNodes.has(node.id);
+          div.className = `node ${node.group} ${hasSelection && !isActive ? "dim" : ""} ${isActive ? "active" : ""}`;
+          div.style.left = `${x}px`;
+          div.style.top = `${y}px`;
+          div.innerHTML = `
+            <div class="node-label">${escapeHtml(node.label)}</div>
+            <div class="node-type">${escapeHtml(node.type)} / ${escapeHtml(node.group)}</div>
+            <div class="node-summary">${escapeHtml(node.summary)}</div>
+          `;
+          div.addEventListener("mouseenter", () => div.classList.add("current"));
+          div.addEventListener("mouseleave", () => div.classList.remove("current"));
+          el.nodes.appendChild(div);
+        }
+      }
+
+      function renderEdges() {
+        const flow = selectedFlow();
+        const edgeKeys = activeEdgeKeys(flow);
+        const allSteps = state.data.flows.flatMap((item) => item.steps);
+        const unique = new Map();
+        for (const step of allSteps) {
+          if (!unique.has(edgeKey(step))) unique.set(edgeKey(step), step);
+        }
+
+        el.edgeLayer.querySelectorAll(".edge-path").forEach((item) => item.remove());
+        el.edgeLabels.innerHTML = "";
+
+        for (const step of unique.values()) {
+          const from = centerOf(step.from);
+          const to = centerOf(step.to);
+          if (!from || !to) continue;
+          const active = edgeKeys.has(edgeKey(step));
+          const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+          const midX = (from.x + to.x) / 2;
+          const curve = Math.max(40, Math.abs(to.x - from.x) * 0.28);
+          path.setAttribute("d", `M ${from.x} ${from.y} C ${midX - curve} ${from.y}, ${midX + curve} ${to.y}, ${to.x} ${to.y}`);
+          path.setAttribute("class", `edge-path ${active ? "active" : ""}`);
+          el.edgeLayer.appendChild(path);
+
+          const label = document.createElement("div");
+          label.className = `edge-label ${active ? "active" : ""}`;
+          label.style.left = `${midX}px`;
+          label.style.top = `${(from.y + to.y) / 2}px`;
+          label.textContent = active ? step.method : "";
+          el.edgeLabels.appendChild(label);
+        }
+      }
+
+      function centerOf(nodeId) {
+        const point = layout[nodeId];
+        if (!point) return null;
+        return { x: point[0] + 86, y: point[1] + 46 };
+      }
+
+      function renderDetail() {
+        const flow = selectedFlow();
+        if (!flow) {
+          el.detailTitle.textContent = "全局组件";
+          el.detailSummary.textContent = "当前未选择流程。";
+          el.detailBody.innerHTML = `<div class="empty">选择左侧流程后，这里会展示步骤和传递方式。</div>`;
+          return;
+        }
+
+        el.detailTitle.textContent = flow.label;
+        el.detailSummary.textContent = `${flow.category} / ${flow.status}`;
+        el.detailBody.innerHTML = `
+          <div class="detail-card">
+            <h3>流程说明</h3>
+            <p>${escapeHtml(flow.summary)}</p>
+          </div>
+          <div class="detail-card">
+            <h3>传递步骤</h3>
+            <div class="step-list">
+              ${flow.steps
+                .map((step, index) => {
+                  const from = nodeLabel(step.from);
+                  const to = nodeLabel(step.to);
+                  return `
+                    <div class="step">
+                      <div class="step-title"><span>${String(index + 1).padStart(2, "0")}</span>${escapeHtml(from)} → ${escapeHtml(to)}</div>
+                      <div class="step-meta">
+                        <div>方式：<span class="method">${escapeHtml(step.method)}</span></div>
+                        <div>动作：${escapeHtml(step.label)}</div>
+                        <div>数据：${escapeHtml(step.payload)}</div>
+                      </div>
+                    </div>
+                  `;
+                })
+                .join("")}
+            </div>
+          </div>
+        `;
+      }
+
+      function nodeLabel(id) {
+        return state.data.nodes.find((node) => node.id === id)?.label ?? id;
+      }
+
+      function renderAll() {
+        renderFlowList();
+        renderNodes();
+        renderEdges();
+        renderDetail();
+      }
+
+      function escapeHtml(value) {
+        return String(value)
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;")
+          .replaceAll('"', "&quot;")
+          .replaceAll("'", "&#039;");
+      }
+
+      el.search.addEventListener("input", (event) => {
+        state.search = event.target.value;
+        renderFlowList();
+      });
+
+      el.category.addEventListener("change", (event) => {
+        state.category = event.target.value;
+        renderFlowList();
+      });
+
+      el.reset.addEventListener("click", () => {
+        state.selectedFlowId = null;
+        renderAll();
+      });
+
+      loadData().then(init);
+    </script>
+  </body>
+</html>

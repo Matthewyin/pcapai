@@ -5,6 +5,63 @@ import { buildCaseReportMarkdown } from "../http/reportBuilder.js";
 export function createAgentAnswerService(input: {
   evidencePacketSampleLimit: number;
 }) {
+  function reviewableEvidenceCards(answer: AgentAnswer): NonNullable<AgentAnswer["evidenceCards"]> {
+    return (answer.evidenceCards || []).map((card) => {
+      const reviewQuery = card.reviewQuery || card.packetDisplayFilter || card.displayFilter || (card.frameNumber ? `frame.number == ${card.frameNumber}` : undefined);
+      const coverage = card.coverage || [
+        card.queryRunId ? `QueryRun ${card.queryRunId}` : "",
+        card.pcapFilename ? `文件 ${card.pcapFilename}` : "",
+        card.conversationId ? `会话 ${card.conversationId}` : "",
+        card.frameNumber ? `Frame ${card.frameNumber}` : ""
+      ].filter(Boolean).join("；") || "当前证据卡未声明覆盖范围。";
+      const reviewNotes = card.reviewNotes?.length ? card.reviewNotes : [
+        card.displayFilter ? `会话/事件过滤器：${card.displayFilter}` : "",
+        card.packetDisplayFilter ? `包级过滤器：${card.packetDisplayFilter}` : "",
+        card.frameNumber ? `可定位到 Frame ${card.frameNumber}` : ""
+      ].filter(Boolean);
+      return { ...card, coverage, reviewQuery, reviewNotes };
+    });
+  }
+
+  function hasReviewSections(text: string) {
+    return ["判断：", "证据：", "反证：", "置信度：", "下一步："].every((label) => text.includes(label));
+  }
+
+  function formatReviewableAnswer(answer: AgentAnswer): AgentAnswer {
+    if (hasReviewSections(answer.answer)) return { ...answer, evidenceCards: reviewableEvidenceCards(answer) };
+    const evidenceCards = reviewableEvidenceCards(answer);
+    const evidenceLine = evidenceCards.length
+      ? `已生成 ${evidenceCards.length} 张证据卡；可打开详情复制 display filter、定位 frame 或进入 Wireshark 复核。`
+      : answer.packetIds.length || answer.evidenceIds.length
+        ? `packetIds=${answer.packetIds.length}，evidenceIds=${answer.evidenceIds.length}。`
+        : "当前没有可复核证据；需要先补齐上下文或创建 QueryRun。";
+    const counterEvidence = answer.missingContext.length
+      ? `仍缺少 ${answer.missingContext.join("、")}，因此不能排除其他路径或设备因素。`
+      : evidenceCards.length
+        ? "未单独形成反向证据结论；请用证据卡过滤器复核返回方向、相邻节点和相反事件。"
+        : "没有足够证据支持或排除具体故障点。";
+    return {
+      ...answer,
+      evidenceCards,
+      answer: [
+        "判断：",
+        answer.answer || "当前没有形成明确判断。",
+        "",
+        "证据：",
+        evidenceLine,
+        "",
+        "反证：",
+        counterEvidence,
+        "",
+        "置信度：",
+        answer.confidence || "needs_context",
+        "",
+        "下一步：",
+        answer.suggestedActions.length ? answer.suggestedActions.map((action, index) => `${index + 1}. ${action}`).join("\n") : "补充故障时间、源/目的地址、端口和抓包位置后继续分析。"
+      ].join("\n")
+    };
+  }
+
   function fallbackAgentAnswer(graph: CaseGraph): AgentAnswer {
     return {
       answer: graph.findings[0]
@@ -270,6 +327,61 @@ export function createAgentAnswerService(input: {
     };
   }
 
+  function diagnosticInterviewAnswer(graph: CaseGraph, question: string, missingContext: string[] = []): AgentAnswer {
+    const captureLines = graph.captures.length
+      ? graph.captures.map((capture) => {
+        const packetText = typeof capture.packetCount === "number" ? `${capture.packetCount} 包` : "包数未知";
+        const timeText = capture.firstPacketTime && capture.lastPacketTime
+          ? `${new Date(capture.firstPacketTime * 1000).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false })} 到 ${new Date(capture.lastPacketTime * 1000).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false })}`
+          : "时间范围未知";
+        return `- ${capture.name || capture.nodeId}：${packetText}，${timeText}`;
+      })
+      : ["- 还没有上传 pcap 文件"];
+    const nodeQuestions = graph.captures.length > 1
+      ? [
+        "这几个 pcap 分别在哪个节点抓的？",
+        "节点顺序是什么？中间是否有 NAT、F5、SSL 卸载、代理或负载均衡？",
+        "如果有地址转换，请补充转换前后的 IP/端口；如果时间不同步，请补充时间偏移。"
+      ]
+      : [
+        "这个 pcap 是在哪个节点抓的？是客户端侧、服务端侧还是中间设备？",
+        "抓包方向是入口、出口还是双向？"
+      ];
+    const followUpQuestions = [
+      graph.captures.length ? "你要分析的是哪一次访问？请给出故障时间段、源 IP、目的 IP、端口或协议。" : "请先上传 pcap/pcapng/cap 文件。",
+      ...nodeQuestions,
+      "故障现象是什么？例如超时、RST、重传、DNS 失败、TLS 握手失败、HTTP 5xx 或访问慢。"
+    ];
+    return {
+      answer: [
+        "当前还不能直接下结论，需要先补齐排障上下文。",
+        "",
+        "已知数据：",
+        ...captureLines,
+        "",
+        "需要你补充：",
+        ...followUpQuestions.map((item, index) => `${index + 1}. ${item}`),
+        "",
+        "补齐后我再创建 QueryRun，用 tshark 查询证据，并按“判断 / 证据 / 反证 / 置信度 / 下一步”给出结果。"
+      ].join("\n"),
+      thoughts: [
+        "识别为排障访谈阶段。",
+        "当前上下文不足，先追问故障目标、抓包位置和路径转换信息。",
+        "暂不执行宽查询，避免生成无法评判的统计噪音。"
+      ],
+      evidenceIds: [],
+      packetIds: [],
+      sessionLinkIds: [],
+      findingIds: [],
+      missingContext: [...new Set(missingContext.length ? missingContext : followUpQuestions)],
+      confidence: "needs_context",
+      suggestedActions: followUpQuestions,
+      followUpQuestions,
+      diagnosticPhase: "interview",
+      handoffAgent: "DiagnosticInterviewAgent"
+    };
+  }
+
   function reportAnswer(graph: CaseGraph): AgentAnswer {
     return {
       answer: buildCaseReportMarkdown(graph),
@@ -289,25 +401,26 @@ export function createAgentAnswerService(input: {
   }
 
   function answerWithPlannerThought(answer: AgentAnswer, plan: AgentIntentPlan): AgentAnswer {
-    const evidenceCards = answer.evidenceCards || [];
-    const firstLine = answer.answer.split("\n").map((line) => line.trim()).find(Boolean) || "当前没有形成可解释的结论。";
-    const shouldCompact = evidenceCards.length > 0 && answer.answer.length > 800;
+    const reviewableAnswer = formatReviewableAnswer(answer);
+    const evidenceCards = reviewableAnswer.evidenceCards || [];
+    const firstLine = reviewableAnswer.answer.split("\n").map((line) => line.trim()).find((line) => line && !["判断：", "证据：", "反证：", "置信度：", "下一步："].includes(line)) || "当前没有形成可解释的结论。";
+    const shouldCompact = evidenceCards.length > 0 && reviewableAnswer.answer.length > 1200;
     const compactAnswer = shouldCompact ? [
       "问题：已按当前输入生成可回溯分析结果。",
       `判断：${firstLine}`,
       evidenceCards.length ? `证据：已生成 ${evidenceCards.length} 张 EvidenceCard；前 ${Math.min(5, evidenceCards.length)} 张为 ${evidenceCards.slice(0, 5).map((card) => `「${card.title}」`).join("、")}。` : "",
-      answer.confidence ? `置信度：${answer.confidence}` : "",
-      answer.missingContext.length ? `缺失上下文：${answer.missingContext.join("；")}` : "",
-      answer.suggestedActions.length ? `下一步：${answer.suggestedActions.join("；")}` : "",
+      `反证：${reviewableAnswer.missingContext.length ? `仍缺少 ${reviewableAnswer.missingContext.join("、")}。` : "请用证据卡过滤器复核相反方向和相邻节点。"} `,
+      reviewableAnswer.confidence ? `置信度：${reviewableAnswer.confidence}` : "",
+      reviewableAnswer.suggestedActions.length ? `下一步：${reviewableAnswer.suggestedActions.join("；")}` : "",
       "明细请在证据卡、当前查询和右侧执行轨迹中下钻。"
-    ].filter(Boolean).join("\n") : answer.answer;
+    ].filter(Boolean).join("\n") : reviewableAnswer.answer;
     return {
-      ...answer,
+      ...reviewableAnswer,
       answer: compactAnswer,
       thoughts: [
         `规划：${plan.intent}（${plan.confidence}）${plan.reason ? `，${plan.reason}` : ""}`,
         ...(plan.missingContext.length ? [`规划缺失上下文：${plan.missingContext.join("、")}`] : []),
-        ...(answer.thoughts || [])
+        ...(reviewableAnswer.thoughts || [])
       ]
     };
   }
@@ -319,6 +432,7 @@ export function createAgentAnswerService(input: {
     activeQueryRunAnswer,
     fallbackAgentAnswer,
     troubleshootingScopeAnswer,
+    diagnosticInterviewAnswer,
     reportAnswer,
     answerWithPlannerThought
   };

@@ -409,6 +409,9 @@ export const EvidenceCardSchema = z.object({
   frameNumber: z.number().int().optional(),
   displayFilter: z.string().optional(),
   packetDisplayFilter: z.string().optional(),
+  coverage: z.string().optional(),
+  reviewQuery: z.string().optional(),
+  reviewNotes: z.array(z.string()).optional(),
   conversationId: z.string().optional(),
   queryRunId: z.string().optional(),
   actions: z.array(z.enum(["open_wireshark", "select_conversation", "query_packets", "request_upload", "copy_filter"])).default([])

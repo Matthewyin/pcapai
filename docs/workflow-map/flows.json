@@ -1,0 +1,558 @@
+{
+  "meta": {
+    "title": "pcapAI 包和组件工作流程地图",
+    "version": "0.1.0",
+    "description": "记录应用中的包、组件、外部工具和典型流程。页面只负责展示，事实源以本 JSON 为准。",
+    "schemaNotes": [
+      "nodes 定义页面上所有包、组件和外部系统。",
+      "flows 定义可点击的业务或工程流程。",
+      "flows.steps 里的 from/to 必须引用 nodes.id。",
+      "status=example 表示占位示例，不代表当前仓库已实现。"
+    ]
+  },
+  "nodes": [
+    {
+      "id": "web",
+      "label": "apps/web",
+      "type": "package",
+      "group": "frontend",
+      "summary": "React 工作台：聊天、上传、SSE、证据页、设置、报告导出。"
+    },
+    {
+      "id": "web-config",
+      "label": "apps/web config",
+      "type": "component",
+      "group": "frontend",
+      "summary": "读取 Vite 注入的 Web 配置。"
+    },
+    {
+      "id": "api",
+      "label": "apps/api",
+      "type": "package",
+      "group": "backend",
+      "summary": "Express API、Agent runtime、case store 和 SSE 出口。"
+    },
+    {
+      "id": "routes",
+      "label": "routes.ts",
+      "type": "component",
+      "group": "backend",
+      "summary": "REST 与 SSE 入口，负责请求校验、加载 case、写响应。"
+    },
+    {
+      "id": "agent-runtime-service",
+      "label": "AgentRuntimeService",
+      "type": "component",
+      "group": "agent",
+      "summary": "Web/API 后面的统一 Agent 编排入口。"
+    },
+    {
+      "id": "planner-service",
+      "label": "plannerService",
+      "type": "component",
+      "group": "agent",
+      "summary": "生成分析链并执行 chain step。"
+    },
+    {
+      "id": "agent-tool-registry",
+      "label": "AgentToolRegistry",
+      "type": "component",
+      "group": "agent",
+      "summary": "统一注册可被 planner 和 agent 调用的 pcapAI 工具。"
+    },
+    {
+      "id": "agent-runtime",
+      "label": "Leader + Subagents",
+      "type": "component",
+      "group": "agent",
+      "summary": "OpenAI Agents SDK runtime，包含 Leader 和 5 个 handoff subagents。"
+    },
+    {
+      "id": "protocol-adapters",
+      "label": "Protocol Adapters",
+      "type": "component",
+      "group": "analysis",
+      "summary": "TCP/DNS/TLS/HTTP/ICMP/UDP 确定性 adapter。"
+    },
+    {
+      "id": "insight-engine",
+      "label": "Insight Engine",
+      "type": "component",
+      "group": "analysis",
+      "summary": "确定性洞察分析器，生成 PacketInsight。"
+    },
+    {
+      "id": "query-run-service",
+      "label": "QueryRun Service",
+      "type": "component",
+      "group": "analysis",
+      "summary": "创建 QueryRun、候选通信对、诊断项和证据卡。"
+    },
+    {
+      "id": "report-builder",
+      "label": "reportBuilder",
+      "type": "component",
+      "group": "analysis",
+      "summary": "从 case graph 生成 Markdown 报告。"
+    },
+    {
+      "id": "case-store",
+      "label": "caseStore",
+      "type": "component",
+      "group": "storage",
+      "summary": "持久化 data/cases/:caseId/case.json、captures 和 analysis-runs。"
+    },
+    {
+      "id": "shared",
+      "label": "packages/shared",
+      "type": "package",
+      "group": "schema",
+      "summary": "Zod schema 和 TypeScript 类型。"
+    },
+    {
+      "id": "config",
+      "label": "config/defaults.json",
+      "type": "config",
+      "group": "config",
+      "summary": "API、Web、MCP、LLM、tshark 等默认配置。"
+    },
+    {
+      "id": "mcp-case-graph",
+      "label": "mcp/case-graph",
+      "type": "mcp",
+      "group": "mcp",
+      "summary": "只读 case graph，供 Agent 查询案件上下文。"
+    },
+    {
+      "id": "mcp-tshark-query",
+      "label": "mcp/tshark-query",
+      "type": "mcp",
+      "group": "mcp",
+      "summary": "封装 tshark 查询、会话列表、packet detail 和统计。"
+    },
+    {
+      "id": "mcp-evidence-opener",
+      "label": "mcp/evidence-opener",
+      "type": "mcp",
+      "group": "mcp",
+      "summary": "打开本地 Wireshark 并带上 display filter。"
+    },
+    {
+      "id": "llm-provider",
+      "label": "LLM Provider",
+      "type": "external",
+      "group": "external",
+      "summary": "OpenAI 兼容 API，用于规划、综合解释和 pattern learning。"
+    },
+    {
+      "id": "tshark",
+      "label": "tshark",
+      "type": "external",
+      "group": "external",
+      "summary": "底层 packet 查询工具。"
+    },
+    {
+      "id": "wireshark",
+      "label": "Wireshark",
+      "type": "external",
+      "group": "external",
+      "summary": "工程师复核原始包的本地工具。"
+    },
+    {
+      "id": "env",
+      "label": ".env / PCAPAI_*",
+      "type": "config",
+      "group": "config",
+      "summary": "运行时环境变量和 LLM profile 存储。"
+    },
+    {
+      "id": "todesktop",
+      "label": "ToDesktop",
+      "type": "external",
+      "group": "example",
+      "summary": "示例节点：用于表达桌面构建流程，不代表当前仓库已集成。"
+    },
+    {
+      "id": "email-service",
+      "label": "Email Service",
+      "type": "external",
+      "group": "example",
+      "summary": "示例节点：用于表达邀请新用户流程，不代表当前仓库已集成。"
+    }
+  ],
+  "flows": [
+    {
+      "id": "agent-stream-analysis",
+      "label": "上传 pcap 后提问",
+      "category": "runtime",
+      "status": "implemented",
+      "summary": "聊天入口触发 Chain Planner、确定性工具、Agent fallback 和 SSE 流式输出。",
+      "steps": [
+        {
+          "from": "web",
+          "to": "routes",
+          "method": "HTTP + SSE",
+          "label": "POST /api/cases/:caseId/agent/stream",
+          "payload": "question, active profile, caseId"
+        },
+        {
+          "from": "routes",
+          "to": "case-store",
+          "method": "JSON file read",
+          "label": "loadGraphWithInsights",
+          "payload": "data/cases/:caseId/case.json"
+        },
+        {
+          "from": "routes",
+          "to": "insight-engine",
+          "method": "function call",
+          "label": "lazy deterministic insights",
+          "payload": "CaseGraph"
+        },
+        {
+          "from": "routes",
+          "to": "agent-runtime-service",
+          "method": "function call",
+          "label": "run/stream orchestration",
+          "payload": "graph, question, callbacks"
+        },
+        {
+          "from": "agent-runtime-service",
+          "to": "planner-service",
+          "method": "function call",
+          "label": "planChain",
+          "payload": "CaseGraph + user question"
+        },
+        {
+          "from": "planner-service",
+          "to": "llm-provider",
+          "method": "OpenAI-compatible API",
+          "label": "chain planning",
+          "payload": "planning prompt + case summary"
+        },
+        {
+          "from": "planner-service",
+          "to": "agent-tool-registry",
+          "method": "intent dispatch",
+          "label": "executeChainStep",
+          "payload": "intent + params"
+        },
+        {
+          "from": "agent-tool-registry",
+          "to": "protocol-adapters",
+          "method": "function call",
+          "label": "deterministic adapter route",
+          "payload": "question + filters"
+        },
+        {
+          "from": "protocol-adapters",
+          "to": "mcp-tshark-query",
+          "method": "stdio MCP",
+          "label": "packet query",
+          "payload": "display filter, pcap path"
+        },
+        {
+          "from": "mcp-tshark-query",
+          "to": "tshark",
+          "method": "CLI subprocess",
+          "label": "run tshark",
+          "payload": "capture path + display filter"
+        },
+        {
+          "from": "agent-tool-registry",
+          "to": "case-store",
+          "method": "JSON file write",
+          "label": "persist QueryRun",
+          "payload": "QueryRun, evidenceCards, checks"
+        },
+        {
+          "from": "agent-runtime-service",
+          "to": "agent-runtime",
+          "method": "Agents SDK",
+          "label": "LLM synthesis or fallback",
+          "payload": "case context + evidence"
+        },
+        {
+          "from": "agent-runtime",
+          "to": "mcp-case-graph",
+          "method": "stdio MCP",
+          "label": "read case graph",
+          "payload": "PCAPAI_CASE_GRAPH_PATH"
+        },
+        {
+          "from": "agent-runtime",
+          "to": "mcp-tshark-query",
+          "method": "stdio MCP",
+          "label": "direct packet lookup",
+          "payload": "tool call args"
+        },
+        {
+          "from": "agent-runtime-service",
+          "to": "routes",
+          "method": "callback",
+          "label": "stream chunks",
+          "payload": "plan, step, evidence, final answer"
+        },
+        {
+          "from": "routes",
+          "to": "web",
+          "method": "SSE events",
+          "label": "render assistant response",
+          "payload": "Chinese answer, evidence links, suggested queries"
+        }
+      ]
+    },
+    {
+      "id": "open-evidence-wireshark",
+      "label": "打开 Wireshark 证据",
+      "category": "runtime",
+      "status": "implemented",
+      "summary": "从证据卡跳转到本地 Wireshark，并带上可复核 display filter。",
+      "steps": [
+        {
+          "from": "web",
+          "to": "routes",
+          "method": "HTTP API",
+          "label": "POST /api/cases/:caseId/evidence/open",
+          "payload": "pcapPath, displayFilter, frameNumber"
+        },
+        {
+          "from": "routes",
+          "to": "mcp-evidence-opener",
+          "method": "stdio MCP",
+          "label": "open evidence",
+          "payload": "pcap file + filter"
+        },
+        {
+          "from": "mcp-evidence-opener",
+          "to": "wireshark",
+          "method": "local app launch",
+          "label": "open filtered capture",
+          "payload": "Wireshark args"
+        }
+      ]
+    },
+    {
+      "id": "create-query-run",
+      "label": "创建 QueryRun",
+      "category": "runtime",
+      "status": "implemented",
+      "summary": "结构化查询入口，生成候选通信对、诊断项和证据卡。",
+      "steps": [
+        {
+          "from": "web",
+          "to": "routes",
+          "method": "HTTP API",
+          "label": "POST /api/cases/:caseId/query-runs",
+          "payload": "question, filters"
+        },
+        {
+          "from": "routes",
+          "to": "query-run-service",
+          "method": "function call",
+          "label": "create query run",
+          "payload": "case graph + query"
+        },
+        {
+          "from": "query-run-service",
+          "to": "mcp-tshark-query",
+          "method": "stdio MCP",
+          "label": "build filter and query packets",
+          "payload": "addresses, ports, protocol"
+        },
+        {
+          "from": "mcp-tshark-query",
+          "to": "tshark",
+          "method": "CLI subprocess",
+          "label": "packet evidence",
+          "payload": "bounded packet query"
+        },
+        {
+          "from": "query-run-service",
+          "to": "case-store",
+          "method": "JSON file write",
+          "label": "store QueryRun",
+          "payload": "selected conversation, diagnosis, evidenceCards"
+        },
+        {
+          "from": "routes",
+          "to": "web",
+          "method": "JSON response",
+          "label": "render evidence cards",
+          "payload": "QueryRun"
+        }
+      ]
+    },
+    {
+      "id": "llm-profile-update",
+      "label": "更新 LLM 配置",
+      "category": "settings",
+      "status": "implemented",
+      "summary": "Web 设置页更新模型配置，写入环境 profile 并刷新运行时配置。",
+      "steps": [
+        {
+          "from": "web",
+          "to": "routes",
+          "method": "HTTP API",
+          "label": "POST /api/settings/llm",
+          "payload": "baseURL, model, apiKey"
+        },
+        {
+          "from": "routes",
+          "to": "env",
+          "method": ".env file write",
+          "label": "persist LLM settings",
+          "payload": "PCAPAI_LLM_*"
+        },
+        {
+          "from": "routes",
+          "to": "api",
+          "method": "function call",
+          "label": "updateLlmConfig",
+          "payload": "active profile"
+        },
+        {
+          "from": "api",
+          "to": "llm-provider",
+          "method": "OpenAI-compatible API",
+          "label": "connectivity test",
+          "payload": "test prompt"
+        }
+      ]
+    },
+    {
+      "id": "export-report",
+      "label": "导出报告",
+      "category": "runtime",
+      "status": "implemented",
+      "summary": "从 case graph 生成 Markdown 诊断报告。",
+      "steps": [
+        {
+          "from": "web",
+          "to": "routes",
+          "method": "HTTP API",
+          "label": "GET /api/cases/:caseId/report",
+          "payload": "caseId"
+        },
+        {
+          "from": "routes",
+          "to": "case-store",
+          "method": "JSON file read",
+          "label": "load case graph",
+          "payload": "case.json"
+        },
+        {
+          "from": "routes",
+          "to": "report-builder",
+          "method": "function call",
+          "label": "build Markdown",
+          "payload": "CaseGraph"
+        },
+        {
+          "from": "report-builder",
+          "to": "web",
+          "method": "HTTP response",
+          "label": "download report",
+          "payload": "Markdown"
+        }
+      ]
+    },
+    {
+      "id": "shared-schema-build",
+      "label": "构建 shared schema",
+      "category": "build",
+      "status": "implemented",
+      "summary": "packages/shared 编译后供 API、Web 和 MCP 使用类型契约。",
+      "steps": [
+        {
+          "from": "shared",
+          "to": "api",
+          "method": "TypeScript import",
+          "label": "@pcapai/shared schema",
+          "payload": "Zod schemas + types"
+        },
+        {
+          "from": "shared",
+          "to": "web",
+          "method": "TypeScript import",
+          "label": "shared domain types",
+          "payload": "CaseGraph, QueryRun, EvidenceCard"
+        },
+        {
+          "from": "shared",
+          "to": "mcp-case-graph",
+          "method": "TypeScript import",
+          "label": "CaseGraphSchema",
+          "payload": "runtime validation"
+        }
+      ]
+    },
+    {
+      "id": "invite-new-user",
+      "label": "邀请新用户",
+      "category": "example",
+      "status": "example",
+      "summary": "占位示例：说明此页面也能表达未来业务流程。当前 pcapAI 仓库未实现用户邀请。",
+      "steps": [
+        {
+          "from": "web",
+          "to": "routes",
+          "method": "HTTP API",
+          "label": "POST /api/invitations",
+          "payload": "email, role"
+        },
+        {
+          "from": "routes",
+          "to": "case-store",
+          "method": "database or JSON write",
+          "label": "store invitation",
+          "payload": "invitation token"
+        },
+        {
+          "from": "routes",
+          "to": "email-service",
+          "method": "external API",
+          "label": "send invite email",
+          "payload": "email + invitation link"
+        }
+      ]
+    },
+    {
+      "id": "todesktop-build",
+      "label": "todesktop build",
+      "category": "example",
+      "status": "example",
+      "summary": "占位示例：表达桌面构建/发布流程。当前 pcapAI 仓库未集成 ToDesktop。",
+      "steps": [
+        {
+          "from": "config",
+          "to": "web",
+          "method": "build-time config",
+          "label": "inject web defaults",
+          "payload": "web host, API URL"
+        },
+        {
+          "from": "web",
+          "to": "todesktop",
+          "method": "build artifact",
+          "label": "package web app",
+          "payload": "dist assets"
+        },
+        {
+          "from": "api",
+          "to": "todesktop",
+          "method": "bundled service",
+          "label": "package local API",
+          "payload": "Node runtime + API server"
+        },
+        {
+          "from": "todesktop",
+          "to": "wireshark",
+          "method": "local integration",
+          "label": "runtime dependency",
+          "payload": "open evidence workflow"
+        }
+      ]
+    }
+  ]
+}

@@ -319,6 +319,7 @@ export async function runIntentPlanner(input: IntentPlannerInput): Promise<Agent
       "- llm_explain：其他需要自然语言解释且没有明确工具动作的问题。",
       "如果用户的问题是泛化帮助，即使包含“这个”，也必须选 usage_help，不能选 active_query_explain。",
       "如果用户问“多少、几个、分布、排名、列出、有没有某类包”，优先选统计或协议事件工具类 intent。",
+      "如果用户只是说“帮我看看”“哪里有问题”“为什么失败”，但没有给出故障时间、源、目的、端口或明确协议，必须选 needs_clarification。",
       "如果不确定，选 needs_clarification，不要猜具体故障。"
     ].join("\n"),
     model: apiConfig.llm.model,
@@ -378,7 +379,8 @@ export async function runChainPlanner(input: ChainPlannerInput): Promise<Analysi
       "不要硬编码特定故障场景。根据 case graph 的实际数据决定步骤。",
       "如果不确定，输出 plan_kind=single，intent=needs_clarification。",
       "",
-      "重要：当用户问题是开放性分析问题（如\"分析异常\"、\"有什么问题\"、\"帮我看看\"）时，必须先安排确定性步骤收集证据，最后一步必须是 llm_explain 来综合解读证据并给出诊断结论。",
+      "重要：当用户问题是开放性分析问题（如\"分析异常\"、\"有什么问题\"、\"帮我看看\"），但没有故障时间、源、目的、端口、节点位置或明确协议时，必须输出 single + needs_clarification，先追问，不执行宽查询。",
+      "只有用户已经给出可验证范围，或当前已有可用 QueryRun/选中 session 时，才先安排确定性步骤收集证据，最后一步用 llm_explain 综合解读证据并给出诊断结论。",
       "llm_explain 步骤的 purpose 应描述为\"综合解读前序步骤的证据，给出诊断结论和建议\"。",
       "纯统计问题（如\"协议分布\"、\"端口排名\"）不需要 llm_explain。"
     ].join("\n"),

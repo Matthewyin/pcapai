@@ -44,6 +44,7 @@ type AgentRuntimeDependencies = {
   loadGraph: (caseId: string) => CaseGraph;
   buildAgentQuestion: (input: AgentChatRequest) => string;
   answerWithPlannerThought: (answer: AgentAnswer, plan: AgentIntentPlan) => AgentAnswer;
+  diagnosticInterviewAnswer: (graph: CaseGraph, question: string, missingContext?: string[]) => AgentAnswer;
   syncMemoryFromQueryRuns: (graph: CaseGraph) => CaseGraph;
   recordPlannerRun: (caseId: string, question: string, plan: AgentIntentPlan, durationMs: number) => void;
   recordAnswerRun: (caseId: string, question: string, plan: AgentIntentPlan, status: string, answer: AgentAnswer, durationMs: number) => void;
@@ -107,7 +108,26 @@ function llmKeyRequiredPlan(): AgentIntentPlan {
   };
 }
 
+function shouldInterviewBeforeExecution(graph: CaseGraph, chainPlan: AnalysisChainPlan) {
+  const intents = chainPlan.steps.map((step) => step.intent);
+  if (!chainPlan.missingContext.length) return false;
+  if (intents.every((intent) => intent === "usage_help" || intent === "network_statistics" || intent === "protocol_statistics" || intent === "report_request")) return false;
+  if (intents.includes("mapping_hint_update")) return false;
+  if (intents.includes("active_query_explain") || intents.includes("selected_session_diagnosis")) return false;
+  if (graph.queryRuns.length && intents.every((intent) => intent === "llm_explain")) return false;
+  return true;
+}
+
 export function createAgentRuntimeService(deps: AgentRuntimeDependencies) {
+  function executeInterview(graph: CaseGraph, request: AgentChatRequest, chainPlan: AnalysisChainPlan, durationMs: number, startedAt: number) {
+    const plan = singlePlanFromChain(chainPlan);
+    const answer = deps.answerWithPlannerThought(deps.diagnosticInterviewAnswer(graph, request.question, chainPlan.missingContext), plan);
+    deps.recordPlannerRun(graph.spec.caseId, request.question, plan, durationMs);
+    deps.recordAnswerRun(graph.spec.caseId, request.question, plan, "needs_clarification", answer, Date.now() - startedAt);
+    deps.updateRuntimeStatus(statusPatch(graph, "needs_clarification"));
+    return { status: "needs_clarification", answer };
+  }
+
   async function runLlmFallback(graph: CaseGraph, request: AgentChatRequest, plan: AgentIntentPlan, onTrace?: (message: string) => void) {
     if (!apiConfig.llm.apiKey) {
       onTrace?.("未配置 LLM API Key，Agent 分析未启动。");
@@ -229,6 +249,9 @@ export function createAgentRuntimeService(deps: AgentRuntimeDependencies) {
     const plannerStartedAt = Date.now();
     const chainPlan = await deps.planChain(graph, request.question, undefined, request.chatHistory);
     const durationMs = Date.now() - plannerStartedAt;
+    if (shouldInterviewBeforeExecution(graph, chainPlan)) {
+      return executeInterview(graph, request, chainPlan, durationMs, startedAt);
+    }
     if (chainPlan.planKind === "chain") return executeChainPlan(graph, request, chainPlan, durationMs, startedAt);
     return executeSingle(graph, request, singlePlanFromChain(chainPlan), durationMs, startedAt);
   }
@@ -250,6 +273,13 @@ export function createAgentRuntimeService(deps: AgentRuntimeDependencies) {
     const durationMs = Date.now() - plannerStartedAt;
     const stepSummary = chainPlan.steps.map((step) => `${step.intent}(${step.purpose})`).join(" → ");
     emit.thought(`规划完成：${chainPlan.planKind}（${chainPlan.confidence}）${stepSummary}${chainPlan.reason ? `，${chainPlan.reason}` : ""}`);
+    if (shouldInterviewBeforeExecution(graph, chainPlan)) {
+      emit.thought("上下文不足，先进入诊断访谈，不执行宽查询。");
+      const result = executeInterview(graph, request, chainPlan, durationMs, startedAt);
+      emitAnswerInChunks(emit, result.answer.answer);
+      emit.done(result.answer);
+      return;
+    }
     if (chainPlan.planKind === "chain") {
       const result = await executeChainPlan(graph, request, chainPlan, durationMs, startedAt, emit);
       emit.delta(result.answer.answer);

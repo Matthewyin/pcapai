@@ -149,6 +149,9 @@ type EvidenceCard = {
   frameNumber?: number;
   displayFilter?: string;
   packetDisplayFilter?: string;
+  coverage?: string;
+  reviewQuery?: string;
+  reviewNotes?: string[];
   conversationId?: string;
   queryRunId?: string;
   actions: Array<"open_wireshark" | "select_conversation" | "query_packets" | "request_upload" | "copy_filter">;
@@ -1635,14 +1638,26 @@ function App() {
     const stepEvidence = message.stepEvidence;
     const cards = stepIndex !== undefined && stepEvidence?.[stepIndex] ? stepEvidence[stepIndex].evidenceCards : allCards;
     const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-    const cardSections = cards.map((card) => `
+    const cardSections = cards.map((card) => {
+      const reviewQuery = card.reviewQuery || card.packetDisplayFilter || card.displayFilter || (card.frameNumber ? `frame.number == ${card.frameNumber}` : "");
+      const coverage = card.coverage || [
+        card.queryRunId ? `QueryRun ${card.queryRunId}` : "",
+        card.pcapFilename ? `文件 ${card.pcapFilename}` : "",
+        card.conversationId ? `会话 ${card.conversationId}` : "",
+        card.frameNumber ? `Frame ${card.frameNumber}` : ""
+      ].filter(Boolean).join("；") || "当前证据卡未声明覆盖范围。";
+      return `
       <div class="ev-card">
         <div class="ev-card-title">${esc(card.title)}</div>
         <div class="ev-card-summary">${esc(card.summary)}</div>
+        <div class="ev-meta">覆盖范围：${esc(coverage)}</div>
         ${card.pcapFilename ? `<div class="ev-meta">文件：${esc(card.pcapFilename)}${card.frameNumber ? ` / Frame ${card.frameNumber}` : ""}</div>` : ""}
         ${card.displayFilter ? `<div class="ev-filter"><code>${esc(card.displayFilter)}</code><button onclick="copyFilter(this)" title="复制过滤器">复制</button>${card.pcapFilename ? `<button onclick="openWireshark('${esc(card.pcapFilename)}','${esc(card.displayFilter)}')" title="在 Wireshark 中打开">Wireshark</button>` : ""}</div>` : ""}
         ${card.packetDisplayFilter && card.packetDisplayFilter !== card.displayFilter ? `<div class="ev-filter"><span>包级过滤器：</span><code>${esc(card.packetDisplayFilter)}</code><button onclick="copyFilter(this)">复制</button></div>` : ""}
-      </div>`).join("");
+        ${reviewQuery ? `<div class="ev-filter"><span>复核查询：</span><code>${esc(reviewQuery)}</code><button onclick="copyFilter(this)">复制</button></div>` : ""}
+        ${card.reviewNotes?.length ? `<div class="ev-reasons">${card.reviewNotes.map((note) => `<span>${esc(note)}</span>`).join("")}</div>` : ""}
+      </div>`;
+    }).join("");
     const corrSections = correlations.map((corr) => `
       <div class="ev-card">
         <div class="ev-card-title">${esc(corr.kind.replace(/_/g, " ").toUpperCase())}</div>
@@ -2487,8 +2502,8 @@ function openWireshark(pcap,filter){fetch("${window.location.origin}/api/cases/$
               ) : null}
               <textarea
                 rows={composerExpanded ? 6 : 1}
-                name="pcapai-chat-question"
-                autoComplete="off"
+                name="pcapai-message-body"
+                autoComplete="new-password"
                 autoCorrect="off"
                 autoCapitalize="off"
                 spellCheck={false}
@@ -2500,7 +2515,7 @@ function openWireshark(pcap,filter){fetch("${window.location.origin}/api/cases/$
                     void ask();
                   }
                 }}
-                placeholder="描述故障时间、源地址、目的地址、端口，或直接拖入 pcap"
+                placeholder="描述故障时间、源 IP、目标 IP、端口，或直接拖入 pcap"
               />
               <button
                 className="composerExpandButton"
