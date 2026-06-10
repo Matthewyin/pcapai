@@ -401,6 +401,17 @@ export function createAgentAnswerService(input: {
   }
 
   function answerWithPlannerThought(answer: AgentAnswer, plan: AgentIntentPlan): AgentAnswer {
+    // 帮助、报告和追问类回答是面向用户的完整文本，不套「判断/证据/反证」复核模板
+    if (plan.intent === "usage_help" || plan.intent === "report_request" || plan.intent === "needs_clarification") {
+      return {
+        ...answer,
+        thoughts: [
+          `规划：${plan.intent}（${plan.confidence}）${plan.reason ? `，${plan.reason}` : ""}`,
+          ...(plan.missingContext.length ? [`规划缺失上下文：${plan.missingContext.join("、")}`] : []),
+          ...(answer.thoughts || [])
+        ]
+      };
+    }
     const reviewableAnswer = formatReviewableAnswer(answer);
     const evidenceCards = reviewableAnswer.evidenceCards || [];
     const firstLine = reviewableAnswer.answer.split("\n").map((line) => line.trim()).find((line) => line && !["判断：", "证据：", "反证：", "置信度：", "下一步："].includes(line)) || "当前没有形成可解释的结论。";

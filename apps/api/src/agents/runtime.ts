@@ -123,7 +123,7 @@ function normalizeAgentObject(value: Record<string, unknown>): AgentAnswer {
 
 function parseAgentOutput(output: unknown): AgentAnswer {
   const text = typeof output === "string" ? output : JSON.stringify(output);
-  const jsonText = text.slice(text.indexOf("{"), text.lastIndexOf("}") + 1);
+  const jsonText = firstJsonObject(text);
   if (jsonText) {
     try {
       const parsed = JSON.parse(jsonText);

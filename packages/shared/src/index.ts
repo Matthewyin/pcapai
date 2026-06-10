@@ -701,6 +701,8 @@ export const ChainStepResultSchema = z.object({
   intent: AgentIntentEnum,
   status: z.string(),
   answer: AgentAnswerSchema,
+  // 本步骤产出的结构化事实（srcIp、dstIp、port、protocol 等），供后续步骤 paramsFrom 绑定
+  data: z.record(z.string(), z.unknown()).optional(),
   durationMs: z.number().optional()
 });
 export type ChainStepResult = z.infer<typeof ChainStepResultSchema>;

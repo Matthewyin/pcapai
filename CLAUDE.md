@@ -23,7 +23,7 @@ npm run dev -w apps/web    # web only (vite)
 npm run build -w packages/shared   # build shared schemas
 ```
 
-Tests live in `apps/api/test/` and cover protocol correlations, path correlation, report builder, insight engine (27 analyzers), and builder utilities. Run with `cd apps/api && NODE_ENV=test npx tsx --test test/*.test.ts`.
+Tests live in `apps/api/test/` and cover protocol correlations, path correlation, report builder, insight engine (30 analyzers), and builder utilities. Run with `cd apps/api && NODE_ENV=test npx tsx --test test/*.test.ts`.
 
 ## Architecture
 
@@ -67,14 +67,14 @@ All runtime defaults live here: API host/port (default `30022`), CORS origins, M
   - `icmp.ts` — ICMP unreachable/TTL exceeded/fragmentation events
   - `udp.ts` — UDP flow aggregation by endpoint pair
 - **`src/services/patternLearner.ts`** — self-improvement module: loads learned regex→adapterId pairs from `data/learned_patterns.json`; after agent fallback, uses LLM to generate regex and adapterId (no hardcoded mapping)
-- **`src/services/insightEngine.ts`** — 29 deterministic analyzers: TCP lifecycle/ACK gap/timing/window trend/RST direction/handshake retry/delayed ACK/connection flood/segment anomaly/keepalive/throughput/TCP options, ICMP echo pair, HTTP status chain/header anomaly/timing/advanced, TLS handshake/advanced, DNS anomaly/advanced, cross-protocol chain, UDP, ICMP advanced, QUIC, NTP, SSH, L7 proxy detection (Via/XFF/SSL offload/TCP split), NAT heuristic (multi-target/ISN/orphan SYN). Entry point: `runLevel1Insights(graph)` returns `PacketInsight[]`. No thresholds — reports all detected patterns.
+- **`src/services/insightEngine.ts`** — 30 deterministic analyzers: TCP lifecycle/ACK gap/timing/window trend/RST direction/handshake retry/delayed ACK/connection flood/segment anomaly/keepalive/throughput/TCP options, ICMP echo pair, HTTP status chain/header anomaly/timing/advanced, TLS handshake/advanced, DNS anomaly/advanced, cross-protocol chain, UDP, ICMP advanced, QUIC, NTP, SSH, L7 proxy detection (Via/XFF/SSL offload/TCP split), NAT heuristic (multi-target/ISN/orphan SYN). Entry point: `runLevel1Insights(graph)` returns `PacketInsight[]`. No thresholds — reports all detected patterns.
 - **`src/services/tcpPreprocessor.ts`** — TCP anomaly preprocessor: extracts only anomalous TCP packets (RST, retransmission, zero window, duplicate ACK, lost segment, failed handshakes) via targeted tshark queries. Uses mapping hints to focus on relevant flows. Runs before the insight engine to keep the analysis dataset small.
 - **`src/mcp/tsharkQueryClient.ts`** — stdio MCP client for tshark-query; wraps 18 tool calls (including `list_tcp_streams`, `follow_tcp_stream`, `get_expert_info`)
 - **`src/mcp/evidenceOpenerClient.ts`** — stdio MCP client for evidence-opener
 - **`src/agents/runtime.ts`** — OpenAI Agents SDK runtime with three phases:
   1. **Chain planner** (`runChainPlanner`) — plans single-step or multi-step analysis chains; outputs `AnalysisChainPlan` with ordered steps, each referencing one of 12 intents. Falls back to single-step `runIntentPlanner` when no LLM key.
   2. **Deterministic handlers** — protocol adapters and route-level handlers handle structured queries without LLM. The chain execution engine (`executeChain` in `plannerService.ts`) orchestrates multi-step plans with parameter binding between steps via `paramsFrom` JSON path expressions.
-  3. **Agent conversation** (`runPcapTroubleshootingAgent`) — creates temp file with case graph JSON, launches both `case-graph MCP` and `tshark-query MCP` via stdio. Leader agent with 5 handoff subagents (Triage, Evidence, Path, Protocol, Report), all sharing both MCP servers. Protocol agent can call tshark-query tools directly. Returns `AgentAnswerWithToolCalls` including tool call names for pattern learning. Uses `OpenAIProvider` with configurable base URL/model. `maxTurns: 8`.
+  3. **Agent conversation** (`runPcapTroubleshootingAgent`) — creates temp file with case graph JSON, launches both `case-graph MCP` and `tshark-query MCP` via stdio. Leader agent with 5 handoff subagents (Triage, Evidence, Path, Protocol, Report), all sharing both MCP servers. Protocol agent can call tshark-query tools directly. Returns `AgentAnswerWithToolCalls` including tool call names for pattern learning. Uses `OpenAIProvider` with configurable base URL/model. `maxTurns: 16`.
 - **`src/services/plannerService.ts`** — planner service factory: `planChain` calls the chain planner, `executeChainStep` routes a single step intent, `executeChain` runs multi-step plans with SSE callbacks. Falls back to local pattern matching when no LLM key.
 
 ### `apps/web` — React workbench (`@pcapai/web`)
@@ -133,12 +133,12 @@ The learning module has no hardcoded tool→adapter mapping. The LLM determines 
 - **No hardcoded business data or environment values in code** — defaults live in `config/defaults.json`, sample data lives in `data/fixtures`.
 - **Confidence levels**: `certain`, `high`, `low`, `needs_context`. No evidence = no confident conclusion. Missing observations must state coverage scope.
 - The chain planner classifies into single-step or multi-step plans (2-5 steps). Each step uses one of 12 intents. Steps can bind parameters from previous step results via `paramsFrom` JSON path expressions. No hard-coded scenarios — plans are dynamically generated from the case graph.
-- The leader agent hands off to exactly one subagent per question. `maxTurns: 8`.
+- The leader agent hands off to exactly one subagent per question. `maxTurns: 16`.
 - MCP servers communicate over stdio. API-to-MCP calls go through client wrappers under `apps/api/src/mcp`.
 - Case data persists as JSON files under `data/cases/:caseId/`. In-memory `Map<string, CaseGraph>` caches recently loaded graphs.
 - LLM profiles are stored as `PCAPAI_LLM_PROFILE_*` entries in `.env`. The active profile is tracked via `PCAPAI_LLM_ACTIVE_PROFILE`.
 - `QueryDiagnosis` runs deterministic checks (handshake completeness, RST, retransmission burst, zero window, bidirectional traffic, FIN close) with thresholds from `config/defaults.json` `api.diagnosis`.
-- **Insight engine reports all patterns without threshold filtering** — every detected pattern is reported; severity is a visual marker only. 29 analyzers including L7 proxy and NAT heuristic detection.
+- **Insight engine reports all patterns without threshold filtering** — every detected pattern is reported; severity is a visual marker only. 30 analyzers including L7 proxy and NAT heuristic detection.
 - Evidence cards are shown in a new browser tab via Blob URL, not in the chat bubble. Chat is for reading conclusions; the link page is for Wireshark operations.
 
 ## Skill routing

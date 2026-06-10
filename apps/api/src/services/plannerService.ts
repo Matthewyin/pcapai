@@ -24,7 +24,7 @@ export function createPlannerService(input: {
   shouldApplyCorrelationContext: (question: string, graph: CaseGraph) => boolean;
   shouldCorrelateCaptures: (question: string) => boolean;
   shouldCreateQueryRun: (question: string) => boolean;
-  executeToolIntent: (graph: CaseGraph, question: string, intent: AgentIntentPlan["intent"]) => Promise<PlannedResult>;
+  executeToolIntent: (graph: CaseGraph, question: string, intent: AgentIntentPlan["intent"], params?: Record<string, unknown>) => Promise<PlannedResult>;
 }) {
   const matchesUsageHelp = patternMatcher(input.fallbackPatterns.usageHelp);
   const matchesNetworkStatistics = patternMatcher(input.fallbackPatterns.networkStatistics);
@@ -99,7 +99,7 @@ export function createPlannerService(input: {
 
   async function executeChainStep(graph: CaseGraph, question: string, intent: string, params: Record<string, unknown>): Promise<PlannedResult> {
     const stepQuestion = typeof params.question === "string" ? params.question : (typeof params.purpose === "string" ? params.purpose : question);
-    return input.executeToolIntent(graph, stepQuestion, intent as AgentIntentPlan["intent"]);
+    return input.executeToolIntent(graph, stepQuestion, intent as AgentIntentPlan["intent"], params);
   }
 
   async function executeAgentIntentPlan(graph: CaseGraph, question: string, plan: AgentIntentPlan): Promise<PlannedResult> {
@@ -156,10 +156,28 @@ function resolveStepParams(
     const fieldPath = stepMatch[2];
     const sourceResult = previousResults[stepIndex];
     if (!sourceResult) continue;
-    const value = resolveValueFromPath(sourceResult, fieldPath);
+    // 优先在结构化 data 上解析（planner 的路径表达式形如 step-0.dstIp），再回退到完整结果对象
+    const value = sourceResult.data ? resolveValueFromPath(sourceResult.data, fieldPath) ?? resolveValueFromPath(sourceResult, fieldPath) : resolveValueFromPath(sourceResult, fieldPath);
     if (value !== undefined) resolved[key] = value;
   }
   return resolved;
+}
+
+// 从执行后的 case graph 提取本步骤的结构化事实，供后续步骤 paramsFrom 绑定
+function chainStepData(graph: CaseGraph): Record<string, unknown> | undefined {
+  const queryRun = graph.queryRuns.find((run) => run.queryRunId === graph.activeQueryRunId) || graph.queryRuns[graph.queryRuns.length - 1];
+  if (!queryRun) return undefined;
+  const conversation = queryRun.conversations.find((item) => item.conversationId === queryRun.selectedConversationId) || queryRun.conversations[0];
+  const entries = Object.entries({
+    srcIp: conversation?.srcIp,
+    dstIp: conversation?.dstIp,
+    srcPort: conversation?.srcPort,
+    dstPort: conversation?.dstPort,
+    port: conversation?.dstPort,
+    protocol: queryRun.protocol,
+    displayFilter: queryRun.displayFilter
+  }).filter(([, value]) => value !== undefined && value !== "");
+  return entries.length ? Object.fromEntries(entries) : undefined;
 }
 
 export async function executeChain(
@@ -186,6 +204,7 @@ export async function executeChain(
         intent: step.intent,
         status: result?.status || "skipped",
         answer: result?.answer || { answer: "此步骤未产生结果。", evidenceIds: [], packetIds: [], sessionLinkIds: [], findingIds: [], missingContext: [], suggestedActions: [] },
+        data: chainStepData(currentGraph),
         durationMs
       });
       results.push(stepResult);

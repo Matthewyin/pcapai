@@ -48,8 +48,16 @@ export function createAgentToolRegistryService(input: AgentToolRegistryInput) {
     { name: "pcapai_llm_explain", intent: "llm_explain", description: "调用 Leader Agent 做综合解读。" }
   ];
 
-  async function createTcpSessionQueryRun(graph: CaseGraph, question: string) {
-    const queryInput = QueryRunInputSchema.parse({ ...(input.inferQueryRunInput(question, graph) as object), question });
+  // 链式步骤通过 paramsFrom 绑定的结构化参数优先级高于自然语言推断
+  const bindableKeys = ["srcIp", "dstIp", "port", "protocol"] as const;
+
+  function boundParams(params?: Record<string, unknown>) {
+    if (!params) return {};
+    return Object.fromEntries(Object.entries(params).filter(([key, value]) => (bindableKeys as readonly string[]).includes(key) && value !== undefined && value !== ""));
+  }
+
+  async function createTcpSessionQueryRun(graph: CaseGraph, question: string, params?: Record<string, unknown>) {
+    const queryInput = QueryRunInputSchema.parse({ ...(input.inferQueryRunInput(question, graph) as object), ...boundParams(params), question });
     const nextGraph = await input.createQueryRun(graph, queryInput);
     return input.queryRunAnswer(nextGraph, nextGraph.activeQueryRunId || "");
   }
@@ -58,7 +66,7 @@ export function createAgentToolRegistryService(input: AgentToolRegistryInput) {
     return tools.find((candidate) => candidate.intent === intent);
   }
 
-  async function runIntent(graph: CaseGraph, question: string, intent: AgentToolIntent): Promise<PlannedResult> {
+  async function runIntent(graph: CaseGraph, question: string, intent: AgentToolIntent, params?: Record<string, unknown>): Promise<PlannedResult> {
     switch (intent) {
       case "usage_help":
         return { status: "usage_help", answer: input.usageHelpAnswer() };
@@ -75,7 +83,7 @@ export function createAgentToolRegistryService(input: AgentToolRegistryInput) {
       case "protocol_event_query":
         return input.runProtocolEventQuery(graph, question);
       case "tcp_session_query":
-        return { status: "query_run", answer: await createTcpSessionQueryRun(graph, question) };
+        return { status: "query_run", answer: await createTcpSessionQueryRun(graph, question, params) };
       case "selected_session_diagnosis":
         return graph.queryRuns.length ? { status: "selected_session_diagnosis", answer: input.selectedSessionProblemAnswer(graph) } : null;
       case "active_query_explain":
@@ -91,11 +99,11 @@ export function createAgentToolRegistryService(input: AgentToolRegistryInput) {
     }
   }
 
-  async function execute(graph: CaseGraph, question: string, intent: AgentToolIntent): Promise<PlannedResult> {
+  async function execute(graph: CaseGraph, question: string, intent: AgentToolIntent, params?: Record<string, unknown>): Promise<PlannedResult> {
     const descriptor = descriptorForIntent(intent);
     const startedAt = Date.now();
     try {
-      const result = await runIntent(graph, question, intent);
+      const result = await runIntent(graph, question, intent, params);
       if (!result) {
         input.recordToolRun(graph.spec.caseId, {
           kind: "tool",

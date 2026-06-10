@@ -205,8 +205,10 @@ export function createAgentRuntimeService(deps: AgentRuntimeDependencies) {
       () => deps.loadGraph(graph.spec.caseId)
     );
     const hasLlmStep = chainPlan.steps.some((step) => step.intent === "llm_explain");
+    // 纯统计/帮助/报告类的链不需要 LLM 综合解读，与 Chain Planner 的提示词约定保持一致
+    const deterministicOnly = chainPlan.steps.every((step) => step.intent === "protocol_statistics" || step.intent === "network_statistics" || step.intent === "usage_help" || step.intent === "report_request");
     let answer = finalAnswer;
-    if (!hasLlmStep && apiConfig.llm.apiKey) {
+    if (!hasLlmStep && !deterministicOnly && apiConfig.llm.apiKey) {
       emit?.thought("综合解读证据，生成诊断结论...");
       try {
         const freshGraph = deps.loadGraph(graph.spec.caseId);
