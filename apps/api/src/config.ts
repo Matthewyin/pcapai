@@ -48,6 +48,10 @@ const defaults = JSON.parse(readFileSync(configPath, "utf8")) as {
       conversationPacketLimit: number;
       retainedQueryRunLimit: number;
     };
+    preprocess: {
+      anomalyPacketLimit: number;
+    };
+    caseCacheLimit: number;
     diagnosis: {
       shortConversationPacketThreshold: number;
       retransmissionBurstThreshold: number;
@@ -127,6 +131,10 @@ export const apiConfig = {
     conversationPacketLimit: numberFromEnv(process.env.PCAPAI_CONVERSATION_PACKET_LIMIT, defaults.api.query.conversationPacketLimit),
     retainedQueryRunLimit: numberFromEnv(process.env.PCAPAI_RETAINED_QUERY_RUN_LIMIT, defaults.api.query.retainedQueryRunLimit)
   },
+  preprocess: {
+    anomalyPacketLimit: numberFromEnv(process.env.PCAPAI_PREPROCESS_ANOMALY_PACKET_LIMIT, defaults.api.preprocess.anomalyPacketLimit)
+  },
+  caseCacheLimit: numberFromEnv(process.env.PCAPAI_CASE_CACHE_LIMIT, defaults.api.caseCacheLimit),
   diagnosis: {
     shortConversationPacketThreshold: numberFromEnv(process.env.PCAPAI_SHORT_CONVERSATION_PACKET_THRESHOLD, defaults.api.diagnosis.shortConversationPacketThreshold),
     retransmissionBurstThreshold: numberFromEnv(process.env.PCAPAI_RETRANSMISSION_BURST_THRESHOLD, defaults.api.diagnosis.retransmissionBurstThreshold),

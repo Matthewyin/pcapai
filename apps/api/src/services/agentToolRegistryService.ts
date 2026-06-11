@@ -13,7 +13,7 @@ type AgentToolRegistryInput = {
   activeCorrelationNeedsContext: (graph: CaseGraph) => boolean;
   applyCorrelationContextAndRerun: (graph: CaseGraph, question: string) => Promise<AgentAnswer>;
   createCaptureCorrelationQueryRun: (graph: CaseGraph, question: string) => Promise<AgentAnswer>;
-  runProtocolEventQuery: (graph: CaseGraph, question: string) => Promise<PlannedResult>;
+  runProtocolEventQuery: (graph: CaseGraph, question: string, options?: { params?: Record<string, unknown>; allowAgentFallback?: boolean }) => Promise<PlannedResult>;
   inferQueryRunInput: (question: string, graph: CaseGraph) => unknown;
   createQueryRun: (graph: CaseGraph, input: z.infer<typeof QueryRunInputSchema>) => Promise<CaseGraph>;
   queryRunAnswer: (graph: CaseGraph, queryRunId: string) => AgentAnswer;
@@ -66,7 +66,7 @@ export function createAgentToolRegistryService(input: AgentToolRegistryInput) {
     return tools.find((candidate) => candidate.intent === intent);
   }
 
-  async function runIntent(graph: CaseGraph, question: string, intent: AgentToolIntent, params?: Record<string, unknown>): Promise<PlannedResult> {
+  async function runIntent(graph: CaseGraph, question: string, intent: AgentToolIntent, params?: Record<string, unknown>, options?: { allowAgentFallback?: boolean }): Promise<PlannedResult> {
     switch (intent) {
       case "usage_help":
         return { status: "usage_help", answer: input.usageHelpAnswer() };
@@ -81,7 +81,7 @@ export function createAgentToolRegistryService(input: AgentToolRegistryInput) {
       case "capture_correlation":
         return { status: "capture_correlation", answer: await input.createCaptureCorrelationQueryRun(graph, question) };
       case "protocol_event_query":
-        return input.runProtocolEventQuery(graph, question);
+        return input.runProtocolEventQuery(graph, question, { params, allowAgentFallback: options?.allowAgentFallback });
       case "tcp_session_query":
         return { status: "query_run", answer: await createTcpSessionQueryRun(graph, question, params) };
       case "selected_session_diagnosis":
@@ -99,11 +99,11 @@ export function createAgentToolRegistryService(input: AgentToolRegistryInput) {
     }
   }
 
-  async function execute(graph: CaseGraph, question: string, intent: AgentToolIntent, params?: Record<string, unknown>): Promise<PlannedResult> {
+  async function execute(graph: CaseGraph, question: string, intent: AgentToolIntent, params?: Record<string, unknown>, options?: { allowAgentFallback?: boolean }): Promise<PlannedResult> {
     const descriptor = descriptorForIntent(intent);
     const startedAt = Date.now();
     try {
-      const result = await runIntent(graph, question, intent, params);
+      const result = await runIntent(graph, question, intent, params, options);
       if (!result) {
         input.recordToolRun(graph.spec.caseId, {
           kind: "tool",
@@ -157,7 +157,8 @@ export function createAgentToolRegistryService(input: AgentToolRegistryInput) {
         execute: async ({ question }) => {
           const toolQuestion = question?.trim() || defaultQuestion || descriptor.description;
           const graph = input.loadGraph(caseId);
-          const result = await execute(graph, toolQuestion, descriptor.intent);
+          // Agent 工具内部不允许再触发 agent fallback，防止嵌套 LLM 调用
+          const result = await execute(graph, toolQuestion, descriptor.intent, undefined, { allowAgentFallback: false });
           if (!result) return JSON.stringify({ status: "no_result", message: "工具没有返回结果，需要补充条件或改用其他工具。" });
           return JSON.stringify({ status: result.status, answer: result.answer });
         }

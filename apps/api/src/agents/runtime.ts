@@ -1,4 +1,4 @@
-import { Agent, OpenAIProvider, run, setDefaultModelProvider, tool, withTrace, type Tool } from "@openai/agents";
+import { Agent, OpenAIProvider, Runner, tool, withTrace, type Tool } from "@openai/agents";
 import { z } from "zod";
 import { AgentIntentEnum, AnalysisChainPlanSchema, type AgentAnswer, type AnalysisChainPlan, type AnalysisChainStep, type CaseGraph } from "../../../../packages/shared/src/index.js";
 import { apiConfig } from "../config.js";
@@ -253,12 +253,21 @@ function intentPlannerContext(graph: CaseGraph, question: string, chatHistory?: 
   };
 }
 
-function modelSettings() {
-  return Object.keys(apiConfig.llm.providerData).length ? { providerData: apiConfig.llm.providerData } : {};
-}
-
 function modelSettingsFrom(providerData: Record<string, unknown>) {
   return Object.keys(providerData).length ? { providerData } : {};
+}
+
+// 每次运行入口快照 LLM 配置并构造局部 Runner，避免请求间通过全局 provider 互相覆盖
+function snapshotLlmRunner() {
+  const llm = { ...apiConfig.llm, providerData: { ...apiConfig.llm.providerData } };
+  const runner = new Runner({
+    modelProvider: new OpenAIProvider({
+      apiKey: llm.apiKey,
+      baseURL: llm.baseURL,
+      useResponses: llm.useResponses
+    })
+  });
+  return { llm, runner };
 }
 
 type ChainPlannerInput = {
@@ -269,12 +278,8 @@ type ChainPlannerInput = {
 };
 
 export async function runChainPlanner(input: ChainPlannerInput): Promise<AnalysisChainPlan> {
-  input.onTrace?.(`Chain Planner 使用模型：${apiConfig.llm.model}，端点：${apiConfig.llm.baseURL}`);
-  setDefaultModelProvider(new OpenAIProvider({
-    apiKey: apiConfig.llm.apiKey,
-    baseURL: apiConfig.llm.baseURL,
-    useResponses: apiConfig.llm.useResponses
-  }));
+  const { llm, runner } = snapshotLlmRunner();
+  input.onTrace?.(`Chain Planner 使用模型：${llm.model}，端点：${llm.baseURL}`);
 
   const chainPlannerAgent = new Agent({
     name: "PcapChainPlanner",
@@ -287,7 +292,7 @@ export async function runChainPlanner(input: ChainPlannerInput): Promise<Analysi
       "- 如果一个 intent 就能回答，输出 \"single\"，steps 只有 1 步。",
       "- 如果需要多步推理（先查 A，用 A 的结果再查 B），输出 \"chain\"，steps 包含 2-5 步。",
       "",
-      "steps 中每个 step 的字段：stepId（\"step-0\", \"step-1\"...）、intent、purpose（中文描述这一步要做什么）。",
+      "steps 中每个 step 的字段：stepId（\"step-0\", \"step-1\"...）、intent、purpose（中文描述这一步要做什么）、params（可选的结构化查询参数对象）。",
       "如果某个 step 的查询参数来自前序 step 的结果，用 paramsFrom 字段表达。",
       "paramsFrom 的 key 是查询参数名（srcIp, dstIp, port, protocol），value 是路径表达式如 \"step-0.dstIp\"。",
       "每个 step 执行后会暴露结构化结果：TCP 会话查询暴露 srcIp/dstIp/srcPort/dstPort/port，DNS 查询暴露解析出的地址（dstIp 和 resolvedIps）。",
@@ -297,7 +302,7 @@ export async function runChainPlanner(input: ChainPlannerInput): Promise<Analysi
       "- protocol_statistics：协议种类、数量、分布。",
       "- network_statistics：IP/端口/RST/重传/状态码等事实统计。",
       "- tcp_session_query：分析访问、TCP session、路径候选。",
-      "- protocol_event_query：列出 DNS/HTTP/TLS/ICMP/UDP/RST/重传/Zero Window 事件。每个 step 的 purpose 应只涉及一种协议或一种事件类型（如 \"查询 DNS 解析异常\" 或 \"查看 RST 通信对\"），不要在同一个 step 同时查询多种协议。如需查询多种协议，拆成多个 step。",
+      "- protocol_event_query：列出 DNS/HTTP/TLS/ICMP/UDP/RST/重传/Zero Window 事件。每个 step 的 purpose 应只涉及一种协议或一种事件类型，不要在同一个 step 同时查询多种协议。如需查询多种协议，拆成多个 step。该 intent 的 step 必须输出 params，至少包含 protocol 字段（tcp|dns|tls|http|icmp|udp）；protocol 为 tcp 时再加 eventKind 字段（rst|retransmission|zero_window|syn_no_synack|one_way|overview），用于确定性路由，不依赖 purpose 文本。",
       "- capture_correlation：多节点/多文件关联。",
       "- mapping_hint_update：补充 NAT/F5/LB/代理/地址转换/时间偏移。",
       "- selected_session_diagnosis：当前 session 诊断。",
@@ -314,11 +319,11 @@ export async function runChainPlanner(input: ChainPlannerInput): Promise<Analysi
       "llm_explain 步骤的 purpose 应描述为\"综合解读前序步骤的证据，给出诊断结论和建议\"。",
       "纯统计问题（如\"协议分布\"、\"端口排名\"）不需要 llm_explain。"
     ].join("\n"),
-    model: apiConfig.llm.model,
-    modelSettings: modelSettings()
+    model: llm.model,
+    modelSettings: modelSettingsFrom(llm.providerData)
   });
   input.onTrace?.("Chain Planner 正在规划分析步骤。");
-  const result = await run(chainPlannerAgent, JSON.stringify(intentPlannerContext(input.graph, input.question, input.chatHistory)), { maxTurns: 2 });
+  const result = await runner.run(chainPlannerAgent, JSON.stringify(intentPlannerContext(input.graph, input.question, input.chatHistory)), { maxTurns: 2 });
   const plan = parseChainPlanOutput(result.finalOutput, input.question);
   const stepSummary = plan.steps.map((step: AnalysisChainStep) => `${step.intent}(${step.purpose})`).join(" → ");
   input.onTrace?.(`Chain Planner 输出：${plan.planKind}（${plan.confidence}）${stepSummary}`);
@@ -326,11 +331,13 @@ export async function runChainPlanner(input: ChainPlannerInput): Promise<Analysi
 }
 
 export async function runAgentCompatibilityCheck(input: CompatibilityInput) {
-  setDefaultModelProvider(new OpenAIProvider({
-    apiKey: input.apiKey,
-    baseURL: input.baseURL,
-    useResponses: false
-  }));
+  const runner = new Runner({
+    modelProvider: new OpenAIProvider({
+      apiKey: input.apiKey,
+      baseURL: input.baseURL,
+      useResponses: false
+    })
+  });
 
   let toolCalled = false;
   const compatibilityTool = tool({
@@ -358,7 +365,7 @@ export async function runAgentCompatibilityCheck(input: CompatibilityInput) {
     modelSettings: settings
   });
 
-  const result = await run(leaderAgent, "执行 Agent 兼容性测试。", { maxTurns: 4 });
+  const result = await runner.run(leaderAgent, "执行 Agent 兼容性测试。", { maxTurns: 4 });
   if (!toolCalled) throw new Error("模型没有完成工具调用，Agent 兼容性测试未通过。");
   return { ok: true, output: String(result.finalOutput || "").slice(0, 500) };
 }
@@ -430,12 +437,17 @@ const hypothesisPlaybook: Array<{ hypothesis: string; prediction: string; insigh
 
 // 只注入当前 case 实际检测到的洞察类型与相关假设，控制提示词体积
 function hypothesisKnowledge(graph: CaseGraph) {
+  // 洞察基于异常包预提取，必须如实声明覆盖范围，避免 Agent 把"洞察里没有"当成"包里没有"
+  const coverageLines = graph.insightCoverage
+    ? ["", "## 洞察覆盖范围（重要）", graph.insightCoverage.note, "洞察未覆盖的协议或事件不代表不存在，需用 tshark-query 工具直接验证。"]
+    : ["", "注意：洞察仅基于异常包预提取，未覆盖的协议事件需用 tshark-query 工具直接验证。"];
   const counts = new Map<string, number>();
   for (const insight of graph.insights) counts.set(insight.type, (counts.get(insight.type) || 0) + 1);
   if (!counts.size) {
     return [
       "## 数据包洞察",
-      "本 case 暂无自动洞察结果；先调用 get_insights 确认，再用 tshark-query 工具直接查询证据。"
+      "本 case 暂无自动洞察结果；先调用 get_insights 确认，再用 tshark-query 工具直接查询证据。",
+      ...coverageLines
     ].join("\n");
   }
   const insightLines = [...counts.entries()].map(([type, count]) => `- ${type}（${count} 条）：${insightDescriptions[type] || "见 get_insights 明细"}`);
@@ -449,6 +461,7 @@ function hypothesisKnowledge(graph: CaseGraph) {
   return [
     "## 本 case 已检测到的数据包洞察（调用 get_insights 取明细，不要重复查询已有结论）",
     ...insightLines,
+    ...coverageLines,
     "",
     "## 与本 case 相关的假设与预测",
     ...tableLines
@@ -469,12 +482,8 @@ function extractToolCalls(result: any): string[] {
 }
 
 export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<AgentAnswerWithToolCalls> {
-  input.onTrace?.(`Agent 使用模型：${apiConfig.llm.model}，端点：${apiConfig.llm.baseURL}`);
-  setDefaultModelProvider(new OpenAIProvider({
-    apiKey: apiConfig.llm.apiKey,
-    baseURL: apiConfig.llm.baseURL,
-    useResponses: apiConfig.llm.useResponses
-  }));
+  const { llm, runner } = snapshotLlmRunner();
+  input.onTrace?.(`Agent 使用模型：${llm.model}，端点：${llm.baseURL}`);
 
   input.onTrace?.("正在获取常驻 tshark-query MCP 连接。");
   const tsharkQueryMcp = await getTsharkQueryMcp();
@@ -532,8 +541,8 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
       "- 调用 suggest_next_query 获取后续查询建议，放入 suggestedQueries。",
       jsonOutputInstruction
     ].join("\n"),
-    model: apiConfig.llm.model,
-    modelSettings: modelSettings(),
+    model: llm.model,
+    modelSettings: modelSettingsFrom(llm.providerData),
     mcpServers,
     tools: localTools
   });
@@ -552,8 +561,8 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
       "回答必须绑定 QueryRun、PathHop/PathEdge、packetIds、findingIds 或 sessionLinkIds；没有证据就追问缺失上下文。",
       jsonOutputInstruction
     ].join("\n"),
-    model: apiConfig.llm.model,
-    modelSettings: modelSettings(),
+    model: llm.model,
+    modelSettings: modelSettingsFrom(llm.providerData),
     mcpServers,
     tools: localTools
   });
@@ -575,8 +584,8 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
       "回答必须引用 QueryRun、protocolCorrelation、evidenceCards 或 packetIds；没有证据就追问缺失上下文。",
       jsonOutputInstruction
     ].join("\n"),
-    model: apiConfig.llm.model,
-    modelSettings: modelSettings(),
+    model: llm.model,
+    modelSettings: modelSettingsFrom(llm.providerData),
     mcpServers,
     tools: localTools
   });
@@ -632,19 +641,37 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
       jsonOutputInstruction
     ].join("\n"),
     handoffs: [evidenceAgent, pathAgent, protocolAgent],
-    model: apiConfig.llm.model,
-    modelSettings: modelSettings(),
+    model: llm.model,
+    modelSettings: modelSettingsFrom(llm.providerData),
     mcpServers,
     tools: localTools
   });
-  input.onTrace?.(`已创建 Leader Agent 和 3 个专家 Agent，模型=${apiConfig.llm.model}。`);
+  input.onTrace?.(`已创建 Leader Agent 和 3 个专家 Agent，模型=${llm.model}。`);
+
+  // 有 onTrace 时走 stream 模式，把工具调用与专家切换事件实时透传；最终 JSON 答案仍在完成后解析
+  async function runLeaderAgent(contextMessage: string) {
+    if (!input.onTrace) return runner.run(leaderAgent, contextMessage, { maxTurns: 16 });
+    const streamed = await runner.run(leaderAgent, contextMessage, { maxTurns: 16, stream: true });
+    for await (const event of streamed) {
+      if (event.type === "run_item_stream_event") {
+        const item = event.item as { type?: string; rawItem?: { name?: string } };
+        if (item.type === "tool_call_item" && item.rawItem?.name) input.onTrace(`正在调用工具：${item.rawItem.name}`);
+        else if (item.type === "handoff_call_item") input.onTrace("Leader 正在移交给专家 Agent。");
+      } else if (event.type === "agent_updated_stream_event") {
+        const agentName = (event as { agent?: { name?: string } }).agent?.name;
+        if (agentName) input.onTrace(`当前执行 Agent：${agentName}`);
+      }
+    }
+    await streamed.completed;
+    return streamed;
+  }
 
   try {
     input.onTrace?.("开始运行 OpenAI Agents SDK，等待模型选择专家并调用 case-graph 工具。");
     const contextMessage = input.chatHistory?.length
       ? `之前的对话上下文：\n${input.chatHistory.map((m) => `${m.role === "user" ? "用户" : "Agent"}：${m.content}`).join("\n")}\n\n用户最新回复：${input.question}`
       : input.question;
-    const result = await withTrace("pcapAI leader agent", () => run(leaderAgent, contextMessage, { maxTurns: 16 }), {
+    const result = await withTrace("pcapAI leader agent", () => runLeaderAgent(contextMessage), {
       groupId: input.graph.spec.caseId,
       metadata: {
         caseId: input.graph.spec.caseId,

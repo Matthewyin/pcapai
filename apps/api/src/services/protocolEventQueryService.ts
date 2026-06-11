@@ -25,6 +25,35 @@ const protocolHints: Record<string, RegExp> = {
   http: /\bhttp\b|状态码|status.?code/i
 };
 
+// 链式步骤的结构化参数直接映射到 adapter，不再依赖正则匹配 LLM 生成的 purpose 文本
+const protocolAdapterIdMap: Record<string, string> = {
+  dns: "dns_failures",
+  http: "http_transactions",
+  tls: "tls_events",
+  udp: "udp_flows",
+  icmp: "icmp_events"
+};
+
+const tcpEventAdapterIdMap: Record<string, string> = {
+  rst: "tcp_rst_pairs",
+  reset: "tcp_rst_pairs",
+  retransmission: "tcp_retransmission_pairs",
+  zero_window: "tcp_zero_window_pairs",
+  syn_no_synack: "tcp_syn_no_synack_pairs",
+  one_way: "tcp_one_way_pairs",
+  overview: "tcp_issues_overview"
+};
+
+function adapterIdFromParams(params?: Record<string, unknown>): string | undefined {
+  const protocol = typeof params?.protocol === "string" ? params.protocol.trim().toLowerCase() : "";
+  if (!protocol) return undefined;
+  if (protocol === "tcp") {
+    const eventKind = typeof params?.eventKind === "string" ? params.eventKind.trim().toLowerCase() : "";
+    return tcpEventAdapterIdMap[eventKind] || "tcp_issues_overview";
+  }
+  return protocolAdapterIdMap[protocol];
+}
+
 function prioritizeAdapters(adapters: ProtocolAdapter[], question: string) {
   if (adapters.length <= 1) return adapters;
   const prioritized = adapters.filter((adapter) => {
@@ -56,12 +85,23 @@ function combineProtocolAnswers(results: Array<{ adapter: ProtocolAdapter; answe
   };
 }
 
+export type ProtocolEventQueryOptions = {
+  params?: Record<string, unknown>;
+  // Agent 工具内部调用时禁用 fallback，防止 agent 工具调用里再起一个 agent 形成嵌套
+  allowAgentFallback?: boolean;
+};
+
 export function createProtocolEventQueryService(input: ProtocolEventQueryServiceInput) {
   function adapterIds() {
     return input.adapters.map((adapter) => adapter.id);
   }
 
-  async function run(graph: CaseGraph, question: string): Promise<PlannedResult> {
+  async function run(graph: CaseGraph, question: string, options?: ProtocolEventQueryOptions): Promise<PlannedResult> {
+    const structuredAdapterId = adapterIdFromParams(options?.params);
+    if (structuredAdapterId) {
+      const adapter = input.adapters.find((candidate) => candidate.id === structuredAdapterId);
+      if (adapter) return { status: adapter.status, answer: await adapter.run(graph, question) };
+    }
     const matching = prioritizeAdapters(input.adapters.filter((adapter) => adapter.match(question)), question);
     if (!matching.length) {
       const adapterResult = await runProtocolAdapter(input.adapters, graph, question, input.loadLearnedPatterns());
@@ -76,10 +116,14 @@ export function createProtocolEventQueryService(input: ProtocolEventQueryService
         }
         return { status: adapterResult.adapter.status, answer: adapterResult.answer };
       }
+      if (options?.allowAgentFallback === false) return null;
       if (!input.hasLlmApiKey()) return null;
       try {
         const agentAnswer = await runPcapTroubleshootingAgent({ graph, question, tools: input.createCaseGraphTools(graph.spec.caseId) });
-        input.learnFromAgentRun(question, agentAnswer.toolCalls || [], adapterIds());
+        // 只学习有据可依的高置信回答，避免低质量回答固化成错误路由
+        if ((agentAnswer.confidence === "high" || agentAnswer.confidence === "certain") && (agentAnswer.evidenceCards?.length || agentAnswer.packetIds.length)) {
+          input.learnFromAgentRun(question, agentAnswer.toolCalls || [], adapterIds());
+        }
         return { status: "agent_fallback", answer: agentAnswer };
       } catch {
         return null;

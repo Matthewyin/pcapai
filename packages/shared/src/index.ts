@@ -618,6 +618,11 @@ export const CaseGraphSchema = z.object({
   toolRuns: z.array(ToolRunSchema).default([]),
   networkTopology: NetworkTopologySchema.optional(),
   insights: z.array(PacketInsightSchema).default([]),
+  insightCoverage: z.object({
+    extractedPacketCount: z.number().int(),
+    truncated: z.boolean(),
+    note: z.string()
+  }).optional(),
   connectionLinks: z.array(ConnectionLinkSchema).default([]),
   memory: CaseMemorySchema.default(() => ({ topology: "", findings: [], userNotes: [] }))
 });

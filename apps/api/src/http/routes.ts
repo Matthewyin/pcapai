@@ -32,7 +32,7 @@ import { buildCaseReportMarkdown } from "./reportBuilder.js";
 import { createAgentAnswerService } from "../services/agentAnswerService.js";
 import { createEvidenceOpenService } from "../services/evidenceOpenService.js";
 import { runLevel1Insights } from "../services/insightEngine.js";
-import { extractTcpAnomalies } from "../services/tcpPreprocessor.js";
+import { extractProtocolAnomalies } from "../services/tcpPreprocessor.js";
 import { createAgentToolRegistryService } from "../services/agentToolRegistryService.js";
 import { createPlannerService } from "../services/plannerService.js";
 import { createAgentRuntimeService } from "../services/agentRuntimeService.js";
@@ -43,6 +43,17 @@ import { createStatisticsQueryService } from "../services/statisticsQueryService
 import { createToolRunService } from "../services/toolRunService.js";
 
 const cases = new Map<string, CaseGraph>();
+
+// 简化 LRU：重新插入刷新热度，超过上限淘汰最久未写入的 case，防止长期运行内存无限增长
+function cacheCase(caseId: string, graph: CaseGraph) {
+  cases.delete(caseId);
+  cases.set(caseId, graph);
+  if (cases.size > apiConfig.caseCacheLimit) {
+    const oldest = cases.keys().next().value;
+    if (oldest !== undefined) cases.delete(oldest);
+  }
+}
+
 const agentRuntimeStatus = {
   lastRunAt: "",
   lastStatus: "not_run",
@@ -113,20 +124,20 @@ function loadGraph(caseId: string) {
   const cached = cases.get(caseId);
   if (cached) return cached;
   const graph = readCaseGraph(caseId);
-  cases.set(caseId, graph);
+  cacheCase(caseId, graph);
   return graph;
 }
 
 const toolRunService = createToolRunService({
   readGraph: loadGraph,
   writeGraph: writeCaseGraph,
-  setGraph: (caseId, graph) => cases.set(caseId, graph)
+  setGraph: (caseId, graph) => cacheCase(caseId, graph)
 });
 const { recordToolRun, recordPlannerRun, recordAnswerRun, recordErrorRun, recordMcpRun, recordQueryRunMcp } = toolRunService;
 const evidenceOpenService = createEvidenceOpenService({
   capturesDirectory,
   writeGraph: writeCaseGraph,
-  setGraph: (caseId, graph) => cases.set(caseId, graph),
+  setGraph: (caseId, graph) => cacheCase(caseId, graph),
   recordMcpRun
 });
 const agentAnswerService = createAgentAnswerService({
@@ -157,7 +168,7 @@ const queryRunService = createQueryRunService({
   fallbackPatterns: apiConfig.planner.fallbackPatterns,
   capturesDirectory,
   writeCaseGraph,
-  setGraph: (caseId, graph) => cases.set(caseId, graph),
+  setGraph: (caseId, graph) => cacheCase(caseId, graph),
   recordQueryRunMcp,
   recordMcpRun,
   formatBeijingTime
@@ -182,7 +193,7 @@ const {
 const queryRunApiService = createQueryRunApiService({
   loadGraph,
   writeCaseGraph,
-  setGraph: (caseId, graph) => cases.set(caseId, graph),
+  setGraph: (caseId, graph) => cacheCase(caseId, graph),
   capturesDirectory,
   conversationPacketLimit: apiConfig.query.conversationPacketLimit,
   inferQueryRunInput,
@@ -195,7 +206,7 @@ const statisticsQueryService = createStatisticsQueryService({
   retainedQueryRunLimit: apiConfig.query.retainedQueryRunLimit,
   captureQueryInputs,
   writeCaseGraph,
-  setGraph: (caseId, graph) => cases.set(caseId, graph),
+  setGraph: (caseId, graph) => cacheCase(caseId, graph),
   recordMcpRun,
   recordQueryRunMcp,
   formatBeijingTime
@@ -282,6 +293,8 @@ function resetAnalysis(graph: CaseGraph) {
     findings: [],
     queryRuns: [],
     activeQueryRunId: undefined,
+    insights: [],
+    insightCoverage: undefined,
     path: {
       nodes: graph.path.nodes.map((node) => ({ ...node, status: "unknown" as const })),
       edges: []
@@ -293,21 +306,26 @@ async function loadGraphWithInsights(caseId: string): Promise<CaseGraph> {
   const graph = loadGraph(caseId);
   if (graph.insights?.length) return graph;
 
-  // 如果 graph 没有 packets 但有 captures，先跑 TCP 预处理抽取异常包
+  // 如果 graph 没有 packets 但有 captures，先跑多协议异常预提取
   if (!graph.packets.length && graph.captures.length) {
     try {
       const inputs = captureQueryInputs(graph);
       if (inputs.length) {
-        const packets = await extractTcpAnomalies(inputs, graph.mappingHints);
-        if (packets.length) {
-          const enriched = { ...graph, packets };
+        const extraction = await extractProtocolAnomalies(inputs, graph.mappingHints);
+        if (extraction.packets.length) {
+          const insightCoverage = {
+            extractedPacketCount: extraction.packets.length,
+            truncated: extraction.truncated,
+            note: extraction.note
+          };
+          const enriched = { ...graph, packets: extraction.packets, insightCoverage };
           writeCaseGraph(enriched);
-          cases.set(caseId, enriched);
+          cacheCase(caseId, enriched);
           const insights = runLevel1Insights(enriched);
           if (insights.length) {
             const nextGraph = { ...enriched, insights };
             writeCaseGraph(nextGraph);
-            cases.set(caseId, nextGraph);
+            cacheCase(caseId, nextGraph);
             return nextGraph;
           }
           return enriched;
@@ -321,14 +339,14 @@ async function loadGraphWithInsights(caseId: string): Promise<CaseGraph> {
     if (insights.length) {
       const nextGraph = { ...graph, insights };
       writeCaseGraph(nextGraph);
-      cases.set(caseId, nextGraph);
+      cacheCase(caseId, nextGraph);
       return nextGraph;
     }
   }
   return graph;
 }
 
-const setCaseGraph = (caseId: string, graph: CaseGraph) => cases.set(caseId, graph);
+const setCaseGraph = (caseId: string, graph: CaseGraph) => cacheCase(caseId, graph);
 
 // case graph 进程内工具：读内存 graph，写操作直接持久化到 caseStore
 function createCaseGraphToolsFor(caseId: string) {
@@ -336,7 +354,7 @@ function createCaseGraphToolsFor(caseId: string) {
     loadGraph: () => loadGraph(caseId),
     saveGraph: (graph) => {
       writeCaseGraph(graph);
-      cases.set(graph.spec.caseId, graph);
+      cacheCase(graph.spec.caseId, graph);
     }
   });
 }
@@ -355,7 +373,7 @@ function syncMemoryFromQueryRuns(graph: CaseGraph): CaseGraph {
   const memory = { ...graph.memory, findings: [...(graph.memory?.findings || []), ...newFindings].slice(-20) };
   const nextGraph = { ...graph, memory };
   writeCaseGraph(nextGraph);
-  cases.set(graph.spec.caseId, nextGraph);
+  cacheCase(graph.spec.caseId, nextGraph);
   return nextGraph;
 }
 
@@ -367,7 +385,7 @@ function updateMemory(graph: CaseGraph, patch: Partial<{ topology: string; userN
   };
   const nextGraph = { ...graph, memory };
   writeCaseGraph(nextGraph);
-  cases.set(graph.spec.caseId, nextGraph);
+  cacheCase(graph.spec.caseId, nextGraph);
   return nextGraph;
 }
 const packetPairAnswer = createPacketPairAnswer({
@@ -649,7 +667,7 @@ export function createAgentRouter() {
 
     const caseId = parsed.data.caseId || safePathPart(`${parsed.data.title}-${Date.now()}`);
     const graph = createEmptyCase(CaseSpecSchema.parse({ ...parsed.data, caseId }));
-    cases.set(caseId, graph);
+    cacheCase(caseId, graph);
     return res.status(201).json(graph);
   });
 
@@ -672,7 +690,7 @@ export function createAgentRouter() {
       const graph = loadGraph(req.params.caseId);
       const nextGraph: CaseGraph = { ...graph, spec: { ...graph.spec, title: parsed.data.title } };
       writeCaseGraph(nextGraph);
-      cases.set(nextGraph.spec.caseId, nextGraph);
+      cacheCase(nextGraph.spec.caseId, nextGraph);
       return res.json(nextGraph);
     } catch {
       return res.status(404).json({ error: "case not found" });
@@ -686,7 +704,7 @@ export function createAgentRouter() {
       title: "新建数据包分析会话",
       protocol: "tcp"
     }));
-    cases.set(caseId, graph);
+    cacheCase(caseId, graph);
     return res.status(201).json(graph);
   });
 
@@ -720,7 +738,7 @@ export function createAgentRouter() {
       const ranges = await readCaptureTimeRanges(graph, addedCaptures);
       graph = graphWithCaptureTimeRanges(resetAnalysis(graph), ranges);
       writeCaseGraph(graph);
-      cases.set(caseId, graph);
+      cacheCase(caseId, graph);
       return res.status(201).json(graph);
     } catch (error) {
       return res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
@@ -753,7 +771,7 @@ export function createAgentRouter() {
       graph = graphWithCaptureTimeRanges(resetAnalysis(graph), ranges);
       const evidenceCards = captureEvidenceCardsFromRanges(ranges);
       writeCaseGraph(graph);
-      cases.set(caseId, graph);
+      cacheCase(caseId, graph);
       return res.status(201).json({
         graph,
         evidenceCards,
@@ -782,7 +800,7 @@ export function createAgentRouter() {
       const graph = loadGraph(String(req.params.caseId));
       const nextGraph: CaseGraph = { ...graph, mappingHints: parsed.data };
       writeCaseGraph(nextGraph);
-      cases.set(graph.spec.caseId, nextGraph);
+      cacheCase(graph.spec.caseId, nextGraph);
       return res.json(nextGraph);
     } catch (error) {
       return res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
@@ -796,7 +814,7 @@ export function createAgentRouter() {
       const graph = loadGraph(String(req.params.caseId));
       const nextGraph: CaseGraph = { ...graph, timeOffsetHints: parsed.data };
       writeCaseGraph(nextGraph);
-      cases.set(graph.spec.caseId, nextGraph);
+      cacheCase(graph.spec.caseId, nextGraph);
       return res.json(nextGraph);
     } catch (error) {
       return res.status(500).json({ error: error instanceof Error ? error.message : String(error) });

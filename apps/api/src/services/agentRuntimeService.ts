@@ -140,7 +140,10 @@ export function createAgentRuntimeService(deps: AgentRuntimeDependencies) {
       onTrace,
       tools: deps.createAgentTools(graph.spec.caseId, request.question)
     });
-    deps.learnFromAgentRun(request.question, answer.toolCalls || [], deps.adapterIds());
+    // 只学习有据可依的高置信回答，避免低质量回答固化成错误路由
+    if ((answer.confidence === "high" || answer.confidence === "certain") && (answer.evidenceCards?.length || answer.packetIds.length)) {
+      deps.learnFromAgentRun(request.question, answer.toolCalls || [], deps.adapterIds());
+    }
     return { status: plan.intent === "llm_explain" ? "success" : "agent_fallback", answer: deps.answerWithPlannerThought(answer, plan) };
   }
 

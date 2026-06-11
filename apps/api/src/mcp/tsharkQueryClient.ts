@@ -14,9 +14,10 @@ const CaptureTimeRangeResultSchema = z.object({
 });
 const ListConversationsResultSchema = z.object({
   conversations: z.array(ConversationSchema),
-  packetCount: z.number().int()
+  packetCount: z.number().int(),
+  truncated: z.boolean().optional()
 });
-const QueryPacketsResultSchema = z.object({ packets: z.array(PacketSummarySchema) });
+const QueryPacketsResultSchema = z.object({ packets: z.array(PacketSummarySchema), truncated: z.boolean().optional() });
 const ListProtocolsResultSchema = z.object({
   protocolCount: z.number().int(),
   packetCount: z.number().int(),
@@ -90,7 +91,8 @@ const PacketEvidenceResultSchema = z.object({
     tcpFlags: z.array(z.string()).default([]),
     summary: z.string(),
     displayFilter: z.string()
-  }))
+  })),
+  truncated: z.boolean().optional()
 });
 const PacketDetailResultSchema = z.object({
   frameNumber: z.number().int(),
@@ -115,28 +117,52 @@ function firstTextContent(result: unknown) {
   return firstText.text;
 }
 
+// 常驻 MCP 连接单例：确定性查询路径复用同一个子进程，传输层故障时重置重连
+let clientPromise: Promise<Client> | null = null;
+
+function getClient(): Promise<Client> {
+  if (!clientPromise) {
+    clientPromise = (async () => {
+      const client = new Client({ name: "pcapai-api", version: "0.1.0" });
+      const transport = new StdioClientTransport({
+        command: apiConfig.tsharkQueryMcp.command,
+        args: apiConfig.tsharkQueryMcp.args,
+        cwd: apiConfig.tsharkQueryMcp.cwd,
+        stderr: "pipe"
+      });
+      await client.connect(transport);
+      return client;
+    })();
+    clientPromise.catch(() => {
+      clientPromise = null;
+    });
+  }
+  return clientPromise;
+}
+
+function resetClient() {
+  const previous = clientPromise;
+  clientPromise = null;
+  previous?.then((client) => client.close()).catch(() => {});
+}
+
 async function callTsharkQueryTool<T>(toolName: string, args: Record<string, unknown>, schema: z.ZodType<T>) {
-  const client = new Client({ name: "pcapai-api", version: "0.1.0" });
-  const transport = new StdioClientTransport({
-    command: apiConfig.tsharkQueryMcp.command,
-    args: apiConfig.tsharkQueryMcp.args,
-    cwd: apiConfig.tsharkQueryMcp.cwd,
-    stderr: "pipe"
-  });
+  const client = await getClient();
+  let result: Awaited<ReturnType<Client["callTool"]>>;
   try {
-    await client.connect(transport);
-    const result = await client.callTool({ name: toolName, arguments: args });
-    const text = firstTextContent(result);
-    try {
-      return schema.parse(JSON.parse(text));
-    } catch (error) {
-      if (!text.trim().startsWith("{") && !text.trim().startsWith("[")) {
-        throw new Error(`tshark-query MCP ${toolName} failed: ${text.slice(0, 1000)}`);
-      }
-      throw new Error(`tshark-query MCP ${toolName} returned invalid JSON: ${text.slice(0, 1000)}${error instanceof Error ? `; ${error.message}` : ""}`);
+    result = await client.callTool({ name: toolName, arguments: args });
+  } catch (error) {
+    resetClient();
+    throw error;
+  }
+  const text = firstTextContent(result);
+  try {
+    return schema.parse(JSON.parse(text));
+  } catch (error) {
+    if (!text.trim().startsWith("{") && !text.trim().startsWith("[")) {
+      throw new Error(`tshark-query MCP ${toolName} failed: ${text.slice(0, 1000)}`);
     }
-  } finally {
-    await transport.close();
+    throw new Error(`tshark-query MCP ${toolName} returned invalid JSON: ${text.slice(0, 1000)}${error instanceof Error ? `; ${error.message}` : ""}`);
   }
 }
 

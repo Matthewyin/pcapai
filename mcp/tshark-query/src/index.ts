@@ -603,9 +603,11 @@ export function parseNetworkStatisticsRows(output: string, capture: CaptureInput
 }
 
 async function queryCapturePackets(capture: CaptureInput, displayFilter = "tcp", limit?: number) {
-  if (!capture.pcapPath) return [];
+  if (!capture.pcapPath) return { rows: [], truncated: false };
   let selectedFields = [...tsharkFields];
   let stdout: string;
+  // 输出超过 maxBuffer 时只能拿到部分 stdout，必须把截断状态如实上报，不能当完整结果
+  let partialOutput = false;
   for (;;) {
     const args = [
       "-r",
@@ -630,6 +632,7 @@ async function queryCapturePackets(capture: CaptureInput, displayFilter = "tcp",
       const e = err as { stdout?: string; stderr?: string; message?: string };
       if (e.stdout && e.stdout.trim().length > 0) {
         stdout = e.stdout;
+        partialOutput = true;
         break;
       }
       const unsupportedFields = parseUnsupportedTsharkFields(`${e.stderr || ""}\n${e.message || ""}`);
@@ -641,7 +644,8 @@ async function queryCapturePackets(capture: CaptureInput, displayFilter = "tcp",
     }
   }
   const rows = parseTsharkRows(expandTsharkRowsToFullFields(stdout, selectedFields), capture);
-  return limit ? rows.slice(0, limit) : rows;
+  const limited = limit ? rows.slice(0, limit) : rows;
+  return { rows: limited, truncated: partialOutput || limited.length < rows.length };
 }
 
 async function getCaptureTimeRange(capture: CaptureInput) {
@@ -819,7 +823,10 @@ const DEFAULT_PACKET_LIMIT = 100;
 async function queryCaptures(capturesJson: string, displayFilter: string, limit?: number) {
   const captures = JSON.parse(capturesJson) as CaptureInput[];
   const effectiveLimit = limit || DEFAULT_PACKET_LIMIT;
-  return (await Promise.all(captures.map((capture) => queryCapturePackets(capture, displayFilter, effectiveLimit)))).flat().slice(0, effectiveLimit);
+  const results = await Promise.all(captures.map((capture) => queryCapturePackets(capture, displayFilter, effectiveLimit)));
+  const merged = results.flatMap((result) => result.rows);
+  const limited = merged.slice(0, effectiveLimit);
+  return { packets: limited, truncated: results.some((result) => result.truncated) || limited.length < merged.length };
 }
 
 function packetEvidence(packets: Array<z.infer<typeof PacketSchema>>) {
@@ -919,8 +926,8 @@ server.registerTool(
     }
   },
   async ({ capturesJson, displayFilter }) => {
-    const packets = await queryCaptures(capturesJson, displayFilter);
-    return { content: [{ type: "text", text: JSON.stringify({ conversations: summarizeConversations(packets, displayFilter), packetCount: packets.length }) }] };
+    const { packets, truncated } = await queryCaptures(capturesJson, displayFilter);
+    return { content: [{ type: "text", text: JSON.stringify({ conversations: summarizeConversations(packets, displayFilter), packetCount: packets.length, truncated }) }] };
   }
 );
 
@@ -936,8 +943,8 @@ server.registerTool(
     }
   },
   async ({ capturesJson, displayFilter, limit }) => {
-    const packets = await queryCaptures(capturesJson, displayFilter, limit);
-    return { content: [{ type: "text", text: JSON.stringify({ packets }) }] };
+    const { packets, truncated } = await queryCaptures(capturesJson, displayFilter, limit);
+    return { content: [{ type: "text", text: JSON.stringify({ packets, truncated }) }] };
   }
 );
 
@@ -954,7 +961,8 @@ server.registerTool(
   },
   async ({ captureJson, displayFilter, limit }) => {
     const capture = JSON.parse(captureJson) as CaptureInput;
-    return { content: [{ type: "text", text: JSON.stringify({ packets: await queryCapturePackets(capture, displayFilter, limit) }) }] };
+    const { rows, truncated } = await queryCapturePackets(capture, displayFilter, limit);
+    return { content: [{ type: "text", text: JSON.stringify({ packets: rows, truncated }) }] };
   }
 );
 
@@ -982,8 +990,8 @@ server.registerTool(
     inputSchema: { capturesJson: z.string(), displayFilter: z.string(), limit: z.number().int().optional() }
   },
   async ({ capturesJson, displayFilter, limit }) => {
-    const packets = await queryCaptures(capturesJson, `${displayFilter} && tcp.flags.reset == 1`, limit);
-    return { content: [{ type: "text", text: JSON.stringify({ packets: packetEvidence(packets) }) }] };
+    const { packets, truncated } = await queryCaptures(capturesJson, `${displayFilter} && tcp.flags.reset == 1`, limit);
+    return { content: [{ type: "text", text: JSON.stringify({ packets: packetEvidence(packets), truncated }) }] };
   }
 );
 
@@ -995,8 +1003,8 @@ server.registerTool(
     inputSchema: { capturesJson: z.string(), displayFilter: z.string(), limit: z.number().int().optional() }
   },
   async ({ capturesJson, displayFilter, limit }) => {
-    const packets = await queryCaptures(capturesJson, `${displayFilter} && (tcp.analysis.retransmission || tcp.analysis.fast_retransmission)`, limit);
-    return { content: [{ type: "text", text: JSON.stringify({ packets: packetEvidence(packets) }) }] };
+    const { packets, truncated } = await queryCaptures(capturesJson, `${displayFilter} && (tcp.analysis.retransmission || tcp.analysis.fast_retransmission)`, limit);
+    return { content: [{ type: "text", text: JSON.stringify({ packets: packetEvidence(packets), truncated }) }] };
   }
 );
 
@@ -1008,8 +1016,8 @@ server.registerTool(
     inputSchema: { capturesJson: z.string(), displayFilter: z.string(), limit: z.number().int().optional() }
   },
   async ({ capturesJson, displayFilter, limit }) => {
-    const packets = await queryCaptures(capturesJson, `${displayFilter} && tcp.analysis.zero_window`, limit);
-    return { content: [{ type: "text", text: JSON.stringify({ packets: packetEvidence(packets) }) }] };
+    const { packets, truncated } = await queryCaptures(capturesJson, `${displayFilter} && tcp.analysis.zero_window`, limit);
+    return { content: [{ type: "text", text: JSON.stringify({ packets: packetEvidence(packets), truncated }) }] };
   }
 );
 
@@ -1021,8 +1029,8 @@ server.registerTool(
     inputSchema: { capturesJson: z.string(), displayFilter: z.string(), limit: z.number().int().optional() }
   },
   async ({ capturesJson, displayFilter, limit }) => {
-    const packets = await queryCaptures(capturesJson, `${displayFilter} && (icmp || icmpv6)`, limit);
-    return { content: [{ type: "text", text: JSON.stringify({ packets }) }] };
+    const { packets, truncated } = await queryCaptures(capturesJson, `${displayFilter} && (icmp || icmpv6)`, limit);
+    return { content: [{ type: "text", text: JSON.stringify({ packets, truncated }) }] };
   }
 );
 
@@ -1034,8 +1042,8 @@ server.registerTool(
     inputSchema: { capturesJson: z.string(), displayFilter: z.string(), limit: z.number().int().optional() }
   },
   async ({ capturesJson, displayFilter, limit }) => {
-    const packets = await queryCaptures(capturesJson, `${displayFilter} && dns`, limit);
-    return { content: [{ type: "text", text: JSON.stringify({ packets }) }] };
+    const { packets, truncated } = await queryCaptures(capturesJson, `${displayFilter} && dns`, limit);
+    return { content: [{ type: "text", text: JSON.stringify({ packets, truncated }) }] };
   }
 );
 
@@ -1047,8 +1055,8 @@ server.registerTool(
     inputSchema: { capturesJson: z.string(), displayFilter: z.string(), limit: z.number().int().optional() }
   },
   async ({ capturesJson, displayFilter, limit }) => {
-    const packets = await queryCaptures(capturesJson, `${displayFilter} && udp`, limit);
-    return { content: [{ type: "text", text: JSON.stringify({ packets }) }] };
+    const { packets, truncated } = await queryCaptures(capturesJson, `${displayFilter} && udp`, limit);
+    return { content: [{ type: "text", text: JSON.stringify({ packets, truncated }) }] };
   }
 );
 
@@ -1060,8 +1068,8 @@ server.registerTool(
     inputSchema: { capturesJson: z.string(), displayFilter: z.string(), limit: z.number().int().optional() }
   },
   async ({ capturesJson, displayFilter, limit }) => {
-    const packets = await queryCaptures(capturesJson, `${displayFilter} && tls`, limit);
-    return { content: [{ type: "text", text: JSON.stringify({ packets }) }] };
+    const { packets, truncated } = await queryCaptures(capturesJson, `${displayFilter} && tls`, limit);
+    return { content: [{ type: "text", text: JSON.stringify({ packets, truncated }) }] };
   }
 );
 
@@ -1073,8 +1081,8 @@ server.registerTool(
     inputSchema: { capturesJson: z.string(), displayFilter: z.string(), limit: z.number().int().optional() }
   },
   async ({ capturesJson, displayFilter, limit }) => {
-    const packets = await queryCaptures(capturesJson, `${displayFilter} && http`, limit);
-    return { content: [{ type: "text", text: JSON.stringify({ packets }) }] };
+    const { packets, truncated } = await queryCaptures(capturesJson, `${displayFilter} && http`, limit);
+    return { content: [{ type: "text", text: JSON.stringify({ packets, truncated }) }] };
   }
 );
 

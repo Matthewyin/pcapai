@@ -66,11 +66,14 @@ function resolveStepParams(
   const resolved: Record<string, unknown> = { ...step.params };
   if (!step.paramsFrom) return resolved;
   for (const [key, path] of Object.entries(step.paramsFrom)) {
-    const stepMatch = path.match(/^step-(\d+)\.(.+)$/);
-    if (!stepMatch) continue;
-    const stepIndex = Number(stepMatch[1]);
-    const fieldPath = stepMatch[2];
-    const sourceResult = previousResults[stepIndex];
+    const dotIndex = path.indexOf(".");
+    if (dotIndex <= 0) continue;
+    const stepRef = path.slice(0, dotIndex);
+    const fieldPath = path.slice(dotIndex + 1);
+    // 优先按 stepId 精确匹配，避免 stepId 命名与数组下标错位；找不到再退回数字下标
+    const indexMatch = stepRef.match(/^step-(\d+)$/);
+    const sourceResult = previousResults.find((result) => result.stepId === stepRef)
+      || (indexMatch ? previousResults[Number(indexMatch[1])] : undefined);
     if (!sourceResult) continue;
     // 优先在结构化 data 上解析（planner 的路径表达式形如 step-0.dstIp），再回退到完整结果对象
     const value = sourceResult.data ? resolveValueFromPath(sourceResult.data, fieldPath) ?? resolveValueFromPath(sourceResult, fieldPath) : resolveValueFromPath(sourceResult, fieldPath);
@@ -118,15 +121,19 @@ export async function executeChain(
     try {
       const params = resolveStepParams(step, results);
       if (!params.question && !params.purpose) params.purpose = step.purpose;
+      const prevActiveQueryRunId = currentGraph.activeQueryRunId;
+      const prevQueryRunCount = currentGraph.queryRuns.length;
       const result = await executeStep(currentGraph, step.intent, params);
       if (reloadGraph) currentGraph = reloadGraph();
+      // 只有本步骤实际产生了新 QueryRun 才暴露结构化数据，避免把上一步的结果错绑给 paramsFrom
+      const producedQueryRun = currentGraph.activeQueryRunId !== prevActiveQueryRunId || currentGraph.queryRuns.length > prevQueryRunCount;
       const durationMs = Date.now() - startedAt;
       const stepResult = ChainStepResultSchema.parse({
         stepId: step.stepId,
         intent: step.intent,
         status: result?.status || "skipped",
         answer: result?.answer || { answer: "此步骤未产生结果。", evidenceIds: [], packetIds: [], sessionLinkIds: [], findingIds: [], missingContext: [], suggestedActions: [] },
-        data: chainStepData(currentGraph),
+        data: producedQueryRun ? chainStepData(currentGraph) : undefined,
         durationMs
       });
       results.push(stepResult);

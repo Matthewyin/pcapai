@@ -24,6 +24,10 @@
       "conversationPacketLimit": 400,
       "retainedQueryRunLimit": 30
     },
+    "preprocess": {
+      "anomalyPacketLimit": 2000
+    },
+    "caseCacheLimit": 50,
     "diagnosis": {
       "shortConversationPacketThreshold": 2,
       "retransmissionBurstThreshold": 3,

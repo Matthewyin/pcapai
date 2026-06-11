@@ -16,6 +16,15 @@ interface PatternStore {
 
 const PATTERNS_FILE = join(process.cwd(), "data", "learned_patterns.json");
 
+// 学习是 fire-and-forget 的异步任务，串行化读改写避免并发互相覆盖
+let writeLock: Promise<void> = Promise.resolve();
+
+function withWriteLock(task: () => void | Promise<void>): Promise<void> {
+  const next = writeLock.then(task);
+  writeLock = next.catch(() => {});
+  return next;
+}
+
 function readStore(): PatternStore {
   try {
     return JSON.parse(readFileSync(PATTERNS_FILE, "utf-8"));
@@ -55,12 +64,14 @@ export function deleteLearnedPattern(regex: string, adapterId: string): boolean 
 }
 
 export function incrementHitCount(adapterId: string, regexSource: string) {
-  const store = readStore();
-  const pattern = store.patterns.find((p) => p.adapterId === adapterId && p.regex === regexSource);
-  if (pattern) {
-    pattern.hitCount += 1;
-    writeStore(store);
-  }
+  void withWriteLock(() => {
+    const store = readStore();
+    const pattern = store.patterns.find((p) => p.adapterId === adapterId && p.regex === regexSource);
+    if (pattern) {
+      pattern.hitCount += 1;
+      writeStore(store);
+    }
+  });
 }
 
 export async function learnFromAgentRun(
@@ -119,14 +130,18 @@ ${existingPatterns ? `5. 已有的 learned patterns（不要重复或冲突）�
     const regex = new RegExp(parsed.regex, "i");
     if (!regex.test(question)) return;
 
-    store.patterns.push({
-      regex: parsed.regex,
-      adapterId: parsed.adapterId,
-      createdAt: new Date().toISOString(),
-      exampleQuestions: [question],
-      hitCount: 0
+    await withWriteLock(() => {
+      const freshStore = readStore();
+      if (freshStore.patterns.some((p) => p.regex === parsed.regex && p.adapterId === parsed.adapterId)) return;
+      freshStore.patterns.push({
+        regex: parsed.regex,
+        adapterId: parsed.adapterId,
+        createdAt: new Date().toISOString(),
+        exampleQuestions: [question],
+        hitCount: 0
+      });
+      writeStore(freshStore);
     });
-    writeStore(store);
   } catch {
     // 学习失败不影响主流程
   }
