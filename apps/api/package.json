@@ -8,12 +8,15 @@
     "build": "tsc -p tsconfig.json",
     "check": "tsc -p tsconfig.json --noEmit",
     "test": "NODE_ENV=test tsx --test test/*.test.ts",
+    "rag:build": "tsx scripts/buildRfcIndex.ts",
     "start": "node dist/apps/api/src/index.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.22.0",
     "@openai/agents": "^0.11.5",
+    "@types/better-sqlite3": "^7.6.13",
     "@types/multer": "^2.1.0",
+    "better-sqlite3": "^12.10.0",
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",
     "express": "^5.1.0",

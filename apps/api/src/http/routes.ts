@@ -14,6 +14,8 @@ import {
 } from "../../../../packages/shared/src/index.js";
 import { runAgentCompatibilityCheck, runPcapTroubleshootingAgent } from "../agents/runtime.js";
 import { createCaseGraphTools } from "../agents/caseGraphTools.js";
+import { createRfcTools } from "../agents/rfcTools.js";
+import { rfcIndexStatus, searchRfc } from "../services/rfcRagService.js";
 import { deleteLearnedPattern, incrementHitCount, learnFromAgentRun, listLearnedPatterns, loadLearnedPatterns } from "../services/patternLearner.js";
 import { apiConfig } from "../config.js";
 import { getCaptureTimeRangeWithMcp, getConversationPacketsWithMcp, listDnsPacketsWithMcp, listHttpPacketsWithMcp, listIcmpEventsWithMcp, listTcpResetsWithMcp, listTcpRetransmissionsWithMcp, listTcpStreamsWithMcp, followTcpStreamWithMcp, listTcpZeroWindowWithMcp, listTlsPacketsWithMcp, listUdpPacketsWithMcp, queryPacketsWithMcp } from "../mcp/tsharkQueryClient.js";
@@ -446,7 +448,7 @@ const protocolEventQueryService = createProtocolEventQueryService({
     learnFromAgentRun(question, toolCalls, adapterIds).catch(() => {});
   },
   incrementHitCount,
-  createCaseGraphTools: createCaseGraphToolsFor
+  createCaseGraphTools: (caseId) => [...createCaseGraphToolsFor(caseId), ...createRfcTools()]
 });
 const agentToolRegistryService = createAgentToolRegistryService({
   usageHelpAnswer,
@@ -466,7 +468,7 @@ const agentToolRegistryService = createAgentToolRegistryService({
   recordToolRun,
   runLlmExplain: async (graph, question) => {
     // leader 提示词依赖 get_case_memory/load_case_graph 等 case graph 工具，必须随调用注入
-    const answer = await runPcapTroubleshootingAgent({ graph, question, chatHistory: undefined, tools: createCaseGraphToolsFor(graph.spec.caseId) });
+    const answer = await runPcapTroubleshootingAgent({ graph, question, chatHistory: undefined, tools: [...createCaseGraphToolsFor(graph.spec.caseId), ...createRfcTools()] });
     return answer;
   }
 });
@@ -494,7 +496,7 @@ const agentRuntimeService = createAgentRuntimeService({
   recordErrorRun,
   updateRuntimeStatus: (patch) => Object.assign(agentRuntimeStatus, patch),
   adapterIds: protocolEventQueryService.adapterIds,
-  createAgentTools: (caseId, question) => [...createCaseGraphToolsFor(caseId), ...agentToolRegistryService.createSdkTools(caseId, question)],
+  createAgentTools: (caseId, question) => [...createCaseGraphToolsFor(caseId), ...createRfcTools(), ...agentToolRegistryService.createSdkTools(caseId, question)],
   learnFromAgentRun: (question, toolCalls, adapterIds) => {
     learnFromAgentRun(question, toolCalls, adapterIds).catch(() => {});
   }
@@ -629,6 +631,26 @@ export function createAgentRouter() {
     const parsed = DeleteLlmProfilesRequestSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
     return res.json(deleteLlmProfiles(parsed.data.profileIds));
+  });
+
+  // RFC 知识库：只读检索与状态查询（调试/前端用；Agent 走进程内工具）
+  router.get("/rag/search", (req, res) => {
+    const query = String(req.query.q || "").trim();
+    if (!query) return res.status(400).json({ error: "q 参数不能为空" });
+    const topK = Number(req.query.topK) || undefined;
+    try {
+      return res.json({ hits: searchRfc(query, topK) });
+    } catch (error) {
+      return res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  router.get("/rag/status", (_req, res) => {
+    try {
+      return res.json(rfcIndexStatus());
+    } catch (error) {
+      return res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+    }
   });
 
   router.get("/settings/learned-patterns", (_req, res) => {

@@ -42,6 +42,7 @@ type CompatibilityInput = {
 
 const jsonOutputInstruction = [
   "最终只能输出一个 JSON 对象，不要使用 Markdown。",
+  "禁止把 <think> 思考内容当作最终输出；思考结束后必须继续调用工具或直接输出最终 JSON。",
   "JSON 字段固定为 answer、evidenceIds、packetIds、sessionLinkIds、findingIds、missingContext、confidence、suggestedActions、suggestedQueries、handoffAgent。",
   "suggestedQueries 是一个数组，每项包含 question（可执行的问题文本）、reason（为什么建议这个查询）、intent（推荐 intent）。",
   "如果调用过 suggest_next_query，把返回的建议放入 suggestedQueries。",
@@ -113,7 +114,10 @@ function normalizeAgentObject(value: Record<string, unknown>): AgentAnswer {
 }
 
 function parseAgentOutput(output: unknown): AgentAnswer {
-  const text = typeof output === "string" ? output : JSON.stringify(output);
+  const rawText = typeof output === "string" ? output : JSON.stringify(output);
+  // 部分模型会把 <think> 推理块留在最终消息里，剥离后再解析，避免内部推理泄漏给用户；
+  // 剥离后为空则交给 formatAgentAnswer 落到默认结论文案
+  const text = rawText.replace(/<think>[\s\S]*?<\/think>/g, "").trim();
   const jsonText = firstJsonObject(text);
   if (jsonText) {
     try {
@@ -407,32 +411,33 @@ const insightDescriptions: Record<string, string> = {
   tcp_connection_split: "TCP 连接被中间设备拆分"
 };
 
-const hypothesisPlaybook: Array<{ hypothesis: string; prediction: string; insightTypes: string[]; fallbackTool: string }> = [
-  { hypothesis: "服务端瓶颈", prediction: "Zero Window、慢响应、无响应", insightTypes: ["ack_gap", "http_timing", "tcp_window_trend"], fallbackTool: "list_tcp_zero_window + list_http_packets" },
-  { hypothesis: "网络丢包", prediction: "重传、RTT 波动", insightTypes: ["ack_gap", "tcp_timing", "icmp_echo_pair", "tcp_throughput"], fallbackTool: "list_tcp_retransmissions" },
-  { hypothesis: "中间设备 RST", prediction: "来自非端点的 RST", insightTypes: ["tcp_rst_direction", "connection_lifecycle"], fallbackTool: "list_tcp_resets（分析方向）" },
-  { hypothesis: "SSL/TLS 问题", prediction: "Alert、握手失败、弱加密", insightTypes: ["tls_handshake", "cross_protocol_chain"], fallbackTool: "list_tls_packets" },
-  { hypothesis: "证书问题", prediction: "SAN 不匹配、证书过期", insightTypes: ["tls_handshake"], fallbackTool: "list_tls_packets" },
-  { hypothesis: "DNS 问题", prediction: "NXDOMAIN、SERVFAIL、无响应", insightTypes: ["dns_anomaly"], fallbackTool: "list_dns_packets" },
-  { hypothesis: "应用层慢", prediction: "HTTP 响应延迟", insightTypes: ["http_timing", "cross_protocol_chain"], fallbackTool: "list_http_packets" },
-  { hypothesis: "连接挂起", prediction: "ACK 缺失、重传后 RST", insightTypes: ["ack_gap", "tcp_keepalive"], fallbackTool: "query_packets" },
-  { hypothesis: "重定向异常", prediction: "3xx 循环、多次重定向", insightTypes: ["http_status_chain"], fallbackTool: "list_http_packets" },
-  { hypothesis: "认证失败", prediction: "401/403、Cookie 缺失", insightTypes: ["http_header_anomaly"], fallbackTool: "list_http_packets" },
-  { hypothesis: "路径匹配失败", prediction: "URI 变体、大小写/编码差异", insightTypes: ["http_uri_anomaly", "http_status_chain"], fallbackTool: "list_http_packets" },
-  { hypothesis: "性能问题", prediction: "高延迟、低吞吐", insightTypes: ["tcp_throughput", "tcp_delayed_ack", "tcp_timing"], fallbackTool: "get_network_statistics" },
-  { hypothesis: "SYN Flood", prediction: "大量 SYN 无响应", insightTypes: ["tcp_connection_flood"], fallbackTool: "query_packets(SYN)" },
-  { hypothesis: "连接超时", prediction: "Keep-Alive 失败、空闲断开", insightTypes: ["tcp_keepalive", "tcp_window_trend"], fallbackTool: "query_packets" },
-  { hypothesis: "压缩/缓存问题", prediction: "未压缩大响应、无缓存头", insightTypes: ["http_header_anomaly"], fallbackTool: "list_http_packets" },
-  { hypothesis: "UDP 端口扫描", prediction: "大量不同目标端口的 UDP 包", insightTypes: ["udp_anomaly"], fallbackTool: "list_udp_packets" },
-  { hypothesis: "UDP Flood", prediction: "单端口高频 UDP 突发", insightTypes: ["udp_anomaly"], fallbackTool: "list_udp_packets" },
-  { hypothesis: "QUIC 连接异常", prediction: "QUIC 版本不匹配、连接失败、Initial 无 Handshake 响应", insightTypes: ["udp_anomaly", "quic_anomaly"], fallbackTool: "list_udp_packets" },
-  { hypothesis: "ICMP/PMTU 黑洞", prediction: "Fragmentation Needed 被丢弃 + TCP 重传", insightTypes: ["icmp_mtu", "icmp_unreachable", "ack_gap"], fallbackTool: "list_icmp_events" },
-  { hypothesis: "Traceroute 问题", prediction: "TTL Exceeded 不完整、路径不对称", insightTypes: ["icmp_unreachable"], fallbackTool: "list_icmp_events" },
-  { hypothesis: "DNS 攻击/劫持/隧道", prediction: "查询突发、同域名多服务器不同结果、异常域名模式", insightTypes: ["dns_anomaly"], fallbackTool: "list_dns_packets" },
-  { hypothesis: "时间同步问题", prediction: "NTP Stratum 高、延迟大", insightTypes: ["ntp_anomaly"], fallbackTool: "get_expert_info" },
-  { hypothesis: "SSH 连接异常", prediction: "认证重试、断开消息", insightTypes: ["ssh_anomaly"], fallbackTool: "get_expert_info" },
-  { hypothesis: "L7 代理/SSL 卸载", prediction: "Via/XFF 头、前后端连接拆分", insightTypes: ["l7_proxy_detected", "tcp_connection_split"], fallbackTool: "list_http_packets" },
-  { hypothesis: "NAT 转换", prediction: "多目标映射、ISN 关联、孤儿 SYN", insightTypes: ["nat_heuristic"], fallbackTool: "query_packets" }
+// rfcRefs 是规范锚点：知识卡只指路不作证，结论引用必须经 get_rfc_section 回读原文
+const hypothesisPlaybook: Array<{ hypothesis: string; prediction: string; insightTypes: string[]; fallbackTool: string; rfcRefs: string[] }> = [
+  { hypothesis: "服务端瓶颈", prediction: "Zero Window、慢响应、无响应", insightTypes: ["ack_gap", "http_timing", "tcp_window_trend"], fallbackTool: "list_tcp_zero_window + list_http_packets", rfcRefs: ["RFC 9293（window management / zero-window probing）"] },
+  { hypothesis: "网络丢包", prediction: "重传、RTT 波动", insightTypes: ["ack_gap", "tcp_timing", "icmp_echo_pair", "tcp_throughput"], fallbackTool: "list_tcp_retransmissions", rfcRefs: ["RFC 6298（RTO 计算）", "RFC 9293（retransmission）"] },
+  { hypothesis: "中间设备 RST", prediction: "来自非端点的 RST", insightTypes: ["tcp_rst_direction", "connection_lifecycle"], fallbackTool: "list_tcp_resets（分析方向）", rfcRefs: ["RFC 9293（reset generation / reset processing）"] },
+  { hypothesis: "SSL/TLS 问题", prediction: "Alert、握手失败、弱加密", insightTypes: ["tls_handshake", "cross_protocol_chain"], fallbackTool: "list_tls_packets", rfcRefs: ["RFC 8446（TLS 1.3 alert protocol）", "RFC 5246（TLS 1.2，已被 8446 取代）"] },
+  { hypothesis: "证书问题", prediction: "SAN 不匹配、证书过期", insightTypes: ["tls_handshake"], fallbackTool: "list_tls_packets", rfcRefs: ["RFC 5280（证书与 SAN 校验）"] },
+  { hypothesis: "DNS 问题", prediction: "NXDOMAIN、SERVFAIL、无响应", insightTypes: ["dns_anomaly"], fallbackTool: "list_dns_packets", rfcRefs: ["RFC 1035（rcode 语义）", "RFC 8914（Extended DNS Errors）", "RFC 2308（负缓存）"] },
+  { hypothesis: "应用层慢", prediction: "HTTP 响应延迟", insightTypes: ["http_timing", "cross_protocol_chain"], fallbackTool: "list_http_packets", rfcRefs: ["RFC 9110（HTTP 语义）"] },
+  { hypothesis: "连接挂起", prediction: "ACK 缺失、重传后 RST", insightTypes: ["ack_gap", "tcp_keepalive"], fallbackTool: "query_packets", rfcRefs: ["RFC 1122（TCP keep-alive §4.2.3.6）", "RFC 9293"] },
+  { hypothesis: "重定向异常", prediction: "3xx 循环、多次重定向", insightTypes: ["http_status_chain"], fallbackTool: "list_http_packets", rfcRefs: ["RFC 9110（3xx redirection）"] },
+  { hypothesis: "认证失败", prediction: "401/403、Cookie 缺失", insightTypes: ["http_header_anomaly"], fallbackTool: "list_http_packets", rfcRefs: ["RFC 9110（401/403 语义）", "RFC 6265（Cookie）"] },
+  { hypothesis: "路径匹配失败", prediction: "URI 变体、大小写/编码差异", insightTypes: ["http_uri_anomaly", "http_status_chain"], fallbackTool: "list_http_packets", rfcRefs: ["RFC 3986（URI 规范化与等价性）"] },
+  { hypothesis: "性能问题", prediction: "高延迟、低吞吐", insightTypes: ["tcp_throughput", "tcp_delayed_ack", "tcp_timing"], fallbackTool: "get_network_statistics", rfcRefs: ["RFC 7323（window scale / timestamps）", "RFC 5681（拥塞控制）"] },
+  { hypothesis: "SYN Flood", prediction: "大量 SYN 无响应", insightTypes: ["tcp_connection_flood"], fallbackTool: "query_packets(SYN)", rfcRefs: ["RFC 4987（SYN Flood 缓解）"] },
+  { hypothesis: "连接超时", prediction: "Keep-Alive 失败、空闲断开", insightTypes: ["tcp_keepalive", "tcp_window_trend"], fallbackTool: "query_packets", rfcRefs: ["RFC 1122（keep-alive §4.2.3.6）"] },
+  { hypothesis: "压缩/缓存问题", prediction: "未压缩大响应、无缓存头", insightTypes: ["http_header_anomaly"], fallbackTool: "list_http_packets", rfcRefs: ["RFC 9110（content coding）", "RFC 9111（HTTP 缓存）"] },
+  { hypothesis: "UDP 端口扫描", prediction: "大量不同目标端口的 UDP 包", insightTypes: ["udp_anomaly"], fallbackTool: "list_udp_packets", rfcRefs: ["RFC 768（UDP）"] },
+  { hypothesis: "UDP Flood", prediction: "单端口高频 UDP 突发", insightTypes: ["udp_anomaly"], fallbackTool: "list_udp_packets", rfcRefs: ["RFC 768（UDP）", "RFC 2827（BCP 38 源地址过滤）"] },
+  { hypothesis: "QUIC 连接异常", prediction: "QUIC 版本不匹配、连接失败、Initial 无 Handshake 响应", insightTypes: ["udp_anomaly", "quic_anomaly"], fallbackTool: "list_udp_packets", rfcRefs: ["RFC 9000（QUIC 传输）"] },
+  { hypothesis: "ICMP/PMTU 黑洞", prediction: "Fragmentation Needed 被丢弃 + TCP 重传", insightTypes: ["icmp_mtu", "icmp_unreachable", "ack_gap"], fallbackTool: "list_icmp_events", rfcRefs: ["RFC 1191（PMTUD）", "RFC 4821（PLPMTUD）", "RFC 792（ICMP）"] },
+  { hypothesis: "Traceroute 问题", prediction: "TTL Exceeded 不完整、路径不对称", insightTypes: ["icmp_unreachable"], fallbackTool: "list_icmp_events", rfcRefs: ["RFC 792（TTL exceeded）"] },
+  { hypothesis: "DNS 攻击/劫持/隧道", prediction: "查询突发、同域名多服务器不同结果、异常域名模式", insightTypes: ["dns_anomaly"], fallbackTool: "list_dns_packets", rfcRefs: ["RFC 5358（开放解析器风险）", "RFC 7873（DNS Cookies）"] },
+  { hypothesis: "时间同步问题", prediction: "NTP Stratum 高、延迟大", insightTypes: ["ntp_anomaly"], fallbackTool: "get_expert_info", rfcRefs: ["RFC 5905（NTPv4）"] },
+  { hypothesis: "SSH 连接异常", prediction: "认证重试、断开消息", insightTypes: ["ssh_anomaly"], fallbackTool: "get_expert_info", rfcRefs: ["RFC 4253（SSH 传输层）", "RFC 4252（SSH 认证）"] },
+  { hypothesis: "L7 代理/SSL 卸载", prediction: "Via/XFF 头、前后端连接拆分", insightTypes: ["l7_proxy_detected", "tcp_connection_split"], fallbackTool: "list_http_packets", rfcRefs: ["RFC 9110（Via 头）", "RFC 7239（Forwarded / XFF）"] },
+  { hypothesis: "NAT 转换", prediction: "多目标映射、ISN 关联、孤儿 SYN", insightTypes: ["nat_heuristic"], fallbackTool: "query_packets", rfcRefs: ["RFC 2663（NAT 术语）", "RFC 4787（NAT UDP 行为）"] }
 ];
 
 // 只注入当前 case 实际检测到的洞察类型与相关假设，控制提示词体积
@@ -454,8 +459,8 @@ function hypothesisKnowledge(graph: CaseGraph) {
   const rows = hypothesisPlaybook.filter((row) => row.insightTypes.some((type) => counts.has(type)));
   const tableLines = rows.length
     ? [
-      "| 假设 | 预测在包数据中看到 | 优先检查 insight 类型 | 备用查询工具 |",
-      ...rows.map((row) => `| ${row.hypothesis} | ${row.prediction} | ${row.insightTypes.join(", ")} | ${row.fallbackTool} |`)
+      "| 假设 | 预测在包数据中看到 | 优先检查 insight 类型 | 备用查询工具 | 规范锚点（用 search_rfc/get_rfc_section 回读原文） |",
+      ...rows.map((row) => `| ${row.hypothesis} | ${row.prediction} | ${row.insightTypes.join(", ")} | ${row.fallbackTool} | ${row.rfcRefs.join("；")} |`)
     ]
     : ["当前洞察类型没有匹配的预置假设；根据症状自行形成假设，用 get_insights 和 tshark-query 验证。"];
   return [
@@ -526,6 +531,10 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
       "- get_network_statistics：网络统计",
       "capturesJson 参数从 case graph 的 captures 字段获取。",
       "",
+      "## RFC 规范知识库",
+      "- search_rfc：按英文关键词检索本地 RFC 全文（如 \"TCP zero window probe\"）；get_rfc_section：精读指定 RFC 章节原文。",
+      "- 假设表中的规范锚点先用 get_rfc_section 直接精读；没有锚点时用 search_rfc 定位。",
+      "- 结论中的规范依据必须经 get_rfc_section 回读原文，引用带 RFC 编号和 §section，不凭记忆引用；命中已废弃文档时改引取代它的新 RFC。",
       "",
       "## 输出格式",
       "- hypotheses 数组：每个假设的 id、description、status、evidenceFor、evidenceAgainst",
@@ -576,6 +585,7 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
       "然后调用 get_active_query_run、get_protocol_correlations、get_evidence_cards 和 get_query_diagnosis。",
       "当需要查询原始协议数据（如 TCP RST、重传、Zero Window、DNS、TLS、HTTP、ICMP、UDP 包）时，直接调用 tshark-query MCP 的工具。调用时 capturesJson 参数从 case graph 的 captures 字段获取（JSON 字符串化的 [{nodeId, pcapFilename}] 数组）。",
       "可用的 tshark-query 工具包括：list_tcp_resets、list_tcp_retransmissions、list_tcp_zero_window、list_dns_packets、list_tls_packets、list_http_packets、list_icmp_events、list_udp_packets、query_packets、build_display_filter、get_network_statistics。",
+      "需要协议规范依据时：先用 search_rfc（英文关键词）定位条文，再用 get_rfc_section 精读原文；结论引用必须带 RFC 编号和 §section，不凭记忆引用 RFC。",
       "解释完协议关联后，调用 suggest_next_query 获取后续查询建议，将结果放入 suggestedQueries 字段。",
       "用户询问 DNS、TLS、SSL、SNI、HTTP、Host、URI、状态码、ICMP、UDP 或 L7 与 TCP 的关系时，优先使用 protocolCorrelations。",
       "只解释 DNS-to-TCP、TLS-SNI-to-TCP、HTTP-Host-to-TCP 的确定性关联，不自动推断 SSL 卸载、Cookie 会话保持或后端连接池。",
@@ -636,6 +646,7 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
       "## 关键规则",
       "- 不要翻译 tshark 输出。要解释证据与故障的关系。",
       "- 不允许编造包、节点或结论。没有证据支持的假设不要当成结论。",
+      "- 协议行为合规性判断优先用 search_rfc 取得条文依据，引用必须经 get_rfc_section 回读原文并带 RFC 编号与 §section，不凭记忆引用 RFC。",
       "- 当信息不足时，返回 followUpQuestions，不要猜测。",
       "- 输出必须绑定 QueryRun、evidenceIds、packetIds 等可回溯 ID。",
       jsonOutputInstruction
@@ -650,8 +661,8 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
 
   // 有 onTrace 时走 stream 模式，把工具调用与专家切换事件实时透传；最终 JSON 答案仍在完成后解析
   async function runLeaderAgent(contextMessage: string) {
-    if (!input.onTrace) return runner.run(leaderAgent, contextMessage, { maxTurns: 16 });
-    const streamed = await runner.run(leaderAgent, contextMessage, { maxTurns: 16, stream: true });
+    if (!input.onTrace) return runner.run(leaderAgent, contextMessage, { maxTurns: llm.maxTurns });
+    const streamed = await runner.run(leaderAgent, contextMessage, { maxTurns: llm.maxTurns, stream: true });
     for await (const event of streamed) {
       if (event.type === "run_item_stream_event") {
         const item = event.item as { type?: string; rawItem?: { name?: string } };
@@ -671,7 +682,7 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
     const contextMessage = input.chatHistory?.length
       ? `之前的对话上下文：\n${input.chatHistory.map((m) => `${m.role === "user" ? "用户" : "Agent"}：${m.content}`).join("\n")}\n\n用户最新回复：${input.question}`
       : input.question;
-    const result = await withTrace("pcapAI leader agent", () => runLeaderAgent(contextMessage), {
+    let result = await withTrace("pcapAI leader agent", () => runLeaderAgent(contextMessage), {
       groupId: input.graph.spec.caseId,
       metadata: {
         caseId: input.graph.spec.caseId,
@@ -680,9 +691,19 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
         queryRunCount: String(input.graph.queryRuns.length)
       }
     });
+    const toolCalls = extractToolCalls(result);
+    // 部分模型会以"纯 <think> 无正文"的消息中途收尾；带上下文追加一轮催收最终 JSON
+    const strippedFinal = String(result.finalOutput ?? "").replace(/<think>[\s\S]*?<\/think>/g, "").trim();
+    if (!strippedFinal && toolCalls.length) {
+      input.onTrace?.("模型以思考块收尾且没有正文，追加一轮要求输出最终结论。");
+      result = await runner.run(
+        leaderAgent,
+        result.history.concat({ role: "user", content: "继续：基于已获取的工具结果直接输出最终 JSON 结论，不要再调用工具，不要输出 <think>。" }),
+        { maxTurns: 4 }
+      );
+    }
     input.onTrace?.("Agents SDK 运行完成，正在归一化模型输出为 AgentAnswer。");
     const answer = parseAgentOutput(result.finalOutput);
-    const toolCalls = extractToolCalls(result);
     return { ...answer, toolCalls };
   } catch (error) {
     // 会话失败可能源于 MCP 连接断开，重置单例让下一次请求重新拉起

@@ -52,6 +52,12 @@ const defaults = JSON.parse(readFileSync(configPath, "utf8")) as {
       anomalyPacketLimit: number;
     };
     caseCacheLimit: number;
+    rag: {
+      rfcDir: string;
+      indexPath: string;
+      topK: number;
+      sectionCharLimit: number;
+    };
     diagnosis: {
       shortConversationPacketThreshold: number;
       retransmissionBurstThreshold: number;
@@ -91,6 +97,7 @@ const defaults = JSON.parse(readFileSync(configPath, "utf8")) as {
     model: string;
     providerData: Record<string, unknown>;
     useResponses: boolean;
+    maxTurns: number;
     traceIncludeSensitiveData: boolean;
   };
 };
@@ -135,6 +142,16 @@ export const apiConfig = {
     anomalyPacketLimit: numberFromEnv(process.env.PCAPAI_PREPROCESS_ANOMALY_PACKET_LIMIT, defaults.api.preprocess.anomalyPacketLimit)
   },
   caseCacheLimit: numberFromEnv(process.env.PCAPAI_CASE_CACHE_LIMIT, defaults.api.caseCacheLimit),
+  rag: {
+    rfcDir: process.env.PCAPAI_RAG_RFC_DIR
+      ? path.resolve(process.env.PCAPAI_RAG_RFC_DIR)
+      : path.resolve(workspaceRoot, defaults.api.rag.rfcDir),
+    indexPath: process.env.PCAPAI_RAG_INDEX_PATH
+      ? path.resolve(process.env.PCAPAI_RAG_INDEX_PATH)
+      : path.resolve(workspaceRoot, defaults.api.rag.indexPath),
+    topK: numberFromEnv(process.env.PCAPAI_RAG_TOP_K, defaults.api.rag.topK),
+    sectionCharLimit: numberFromEnv(process.env.PCAPAI_RAG_SECTION_CHAR_LIMIT, defaults.api.rag.sectionCharLimit)
+  },
   diagnosis: {
     shortConversationPacketThreshold: numberFromEnv(process.env.PCAPAI_SHORT_CONVERSATION_PACKET_THRESHOLD, defaults.api.diagnosis.shortConversationPacketThreshold),
     retransmissionBurstThreshold: numberFromEnv(process.env.PCAPAI_RETRANSMISSION_BURST_THRESHOLD, defaults.api.diagnosis.retransmissionBurstThreshold),
@@ -174,6 +191,7 @@ export const apiConfig = {
     useResponses: process.env.PCAPAI_LLM_USE_RESPONSES
       ? process.env.PCAPAI_LLM_USE_RESPONSES === "true"
       : defaults.llm.useResponses,
+    maxTurns: numberFromEnv(process.env.PCAPAI_LLM_MAX_TURNS, defaults.llm.maxTurns),
     traceIncludeSensitiveData: process.env.PCAPAI_TRACE_INCLUDE_SENSITIVE_DATA
       ? process.env.PCAPAI_TRACE_INCLUDE_SENSITIVE_DATA === "true"
       : defaults.llm.traceIncludeSensitiveData

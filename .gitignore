@@ -15,5 +15,7 @@ dist/
 data/cases/*
 data/reports/*
 data/fixtures/*
+data/rfc-index/
+RFC/
 !data/cases/.gitkeep
 !data/reports/.gitkeep

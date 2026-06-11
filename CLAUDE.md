@@ -14,6 +14,7 @@ npm run dev                # start API + web using config/defaults.json
 npm run build              # build all workspaces
 npm run check              # type-check all workspaces
 npm run test               # run tests across workspaces (if present)
+npm run rag:build          # build RFC full-text index (SQLite FTS5) from RFC/ txt corpus
 ```
 
 Individual workspace commands:
@@ -67,6 +68,7 @@ All runtime defaults live here: API host/port (default `30022`), CORS origins, M
   - `icmp.ts` — ICMP unreachable/TTL exceeded/fragmentation events
   - `udp.ts` — UDP flow aggregation by endpoint pair
 - **`src/services/patternLearner.ts`** — self-improvement module: loads learned regex→adapterId pairs from `data/learned_patterns.json`; after agent fallback, uses LLM to generate regex and adapterId (no hardcoded mapping)
+- **`src/services/rfcCorpus.ts` / `rfcRagService.ts` / `src/agents/rfcTools.ts`** — RFC 规范知识库（无嵌入的词法方案）：`scripts/buildRfcIndex.ts`（npm run rag:build）把 `RFC/` 下 9700+ 篇官方 txt 按章节切分入 SQLite FTS5（`data/rfc-index/rfc.db`，全量构建约 10 秒）；检索服务做 BM25 + HISTORIC/被废弃降权 + 同篇去重；Agent 侧两个进程内工具：`search_rfc`（英文关键词定位条文）与 `get_rfc_section`（精读章节原文，结论引用必须经此回读，带 RFC 编号与 §section）。hypothesisPlaybook 每行带 rfcRefs 规范锚点。REST 调试入口：`GET /api/rag/search?q=`、`GET /api/rag/status`
 - **`src/services/insightEngine.ts`** — 30 deterministic analyzers: TCP lifecycle/ACK gap/timing/window trend/RST direction/handshake retry/delayed ACK/connection flood/segment anomaly/keepalive/throughput/TCP options, ICMP echo pair, HTTP status chain/header anomaly/timing/advanced, TLS handshake/advanced, DNS anomaly/advanced, cross-protocol chain, UDP, ICMP advanced, QUIC, NTP, SSH, L7 proxy detection (Via/XFF/SSL offload/TCP split), NAT heuristic (multi-target/ISN/orphan SYN). Entry point: `runLevel1Insights(graph)` returns `PacketInsight[]`. No thresholds — reports all detected patterns.
 - **`src/services/tcpPreprocessor.ts`** — TCP anomaly preprocessor: extracts only anomalous TCP packets (RST, retransmission, zero window, duplicate ACK, lost segment, failed handshakes) via targeted tshark queries. Uses mapping hints to focus on relevant flows. Runs before the insight engine to keep the analysis dataset small.
 - **`src/mcp/tsharkQueryClient.ts`** — stdio MCP client for tshark-query; wraps 18 tool calls (including `list_tcp_streams`, `follow_tcp_stream`, `get_expert_info`)
@@ -74,7 +76,7 @@ All runtime defaults live here: API host/port (default `30022`), CORS origins, M
 - **`src/agents/runtime.ts`** — OpenAI Agents SDK runtime with three phases:
   1. **Chain planner** (`runChainPlanner`) — plans single-step or multi-step analysis chains; outputs `AnalysisChainPlan` with ordered steps, each referencing one of 12 intents. Requires an LLM key (requests fail fast with `llm_key_required` otherwise).
   2. **Deterministic handlers** — protocol adapters and route-level handlers handle structured queries without LLM. The chain execution engine (`executeChain` in `plannerService.ts`) orchestrates multi-step plans with parameter binding between steps via `paramsFrom` JSON path expressions.
-  3. **Agent conversation** (`runPcapTroubleshootingAgent`) — uses in-process case graph tools (`src/agents/caseGraphTools.ts`, reads live graph from caseStore; memory/topology writes persist) plus a persistent `tshark-query MCP` singleton (`src/mcp/tsharkQueryMcpRuntime.ts`, reused across requests, reset on failure). Leader agent with 3 handoff subagents (Hypothesis, Path, Protocol); the leader handles interview follow-ups and report formatting itself. HypothesisAgent's diagnostic knowledge (insight catalog + hypothesis playbook) is injected dynamically based on insight types actually present in the case. Returns `AgentAnswerWithToolCalls` including tool call names for pattern learning. Uses `OpenAIProvider` with configurable base URL/model. `maxTurns: 16`.
+  3. **Agent conversation** (`runPcapTroubleshootingAgent`) — uses in-process case graph tools (`src/agents/caseGraphTools.ts`, reads live graph from caseStore; memory/topology writes persist) plus a persistent `tshark-query MCP` singleton (`src/mcp/tsharkQueryMcpRuntime.ts`, reused across requests, reset on failure). Leader agent with 3 handoff subagents (Hypothesis, Path, Protocol); the leader handles interview follow-ups and report formatting itself. HypothesisAgent's diagnostic knowledge (insight catalog + hypothesis playbook) is injected dynamically based on insight types actually present in the case. Returns `AgentAnswerWithToolCalls` including tool call names for pattern learning. Uses `OpenAIProvider` with configurable base URL/model. `maxTurns` 走 config（默认 24）.
 - **`src/services/plannerService.ts`** — planner service factory: `planChain` calls the chain planner, `executeChainStep` routes a single step intent, `executeChain` runs multi-step plans with SSE callbacks and exposes per-step structured facts (`ChainStepResult.data`) for `paramsFrom` binding.
 
 ### `apps/web` — React workbench (`@pcapai/web`)
@@ -132,7 +134,7 @@ The learning module has no hardcoded tool→adapter mapping. The LLM determines 
 - **No hardcoded business data or environment values in code** — defaults live in `config/defaults.json`, sample data lives in `data/fixtures`.
 - **Confidence levels**: `certain`, `high`, `low`, `needs_context`. No evidence = no confident conclusion. Missing observations must state coverage scope.
 - The chain planner classifies into single-step or multi-step plans (2-5 steps). Each step uses one of 12 intents. Steps can bind parameters from previous step results via `paramsFrom` JSON path expressions. No hard-coded scenarios — plans are dynamically generated from the case graph.
-- The leader agent hands off to exactly one subagent per question. `maxTurns: 16`.
+- The leader agent hands off to exactly one subagent per question. `maxTurns` 走 config（默认 24）.
 - MCP servers communicate over stdio. API-to-MCP calls go through client wrappers under `apps/api/src/mcp`.
 - Case data persists as JSON files under `data/cases/:caseId/`. In-memory `Map<string, CaseGraph>` caches recently loaded graphs.
 - LLM profiles are stored as `PCAPAI_LLM_PROFILE_*` entries in `.env`. The active profile is tracked via `PCAPAI_LLM_ACTIVE_PROFILE`.

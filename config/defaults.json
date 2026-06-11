@@ -28,6 +28,12 @@
       "anomalyPacketLimit": 2000
     },
     "caseCacheLimit": 50,
+    "rag": {
+      "rfcDir": "RFC",
+      "indexPath": "data/rfc-index/rfc.db",
+      "topK": 6,
+      "sectionCharLimit": 12000
+    },
     "diagnosis": {
       "shortConversationPacketThreshold": 2,
       "retransmissionBurstThreshold": 3,
@@ -70,6 +76,7 @@
     "baseURL": "https://api.minimaxi.com/v1",
     "model": "MiniMax-M2.7-highspeed",
     "useResponses": false,
+    "maxTurns": 24,
     "traceIncludeSensitiveData": false
   },
   "mcp": {
