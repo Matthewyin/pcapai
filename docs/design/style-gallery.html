@@ -1,0 +1,405 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>PCAP·AI — 风格对照廊</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&family=Archivo:wght@400;500;600;700&family=Archivo+Black&family=Manrope:wght@400;500;600;700;800&family=Oswald:wght@500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: #18181b; color: #fafafa; font-family: "IBM Plex Sans", sans-serif; }
+
+/* 对照廊框架 */
+.galleryNav {
+  position: sticky; top: 0; z-index: 100; display: flex; gap: 4px;
+  background: #09090b; padding: 10px 16px; border-bottom: 1px solid #27272a;
+  overflow-x: auto;
+}
+.galleryNav a {
+  color: #a1a1aa; text-decoration: none; font-size: 13px; padding: 6px 14px;
+  border-radius: 99px; white-space: nowrap; border: 1px solid transparent;
+}
+.galleryNav a:hover { color: #fff; border-color: #3f3f46; }
+.galleryNav a b { color: #fff; }
+.specimen { border-bottom: 8px solid #09090b; }
+.specimenLabel {
+  display: flex; align-items: baseline; gap: 14px; padding: 14px 24px;
+  background: #09090b; font-size: 13px; color: #a1a1aa;
+}
+.specimenLabel .num { font-family: "JetBrains Mono", monospace; color: #71717a; }
+.specimenLabel .name { font-size: 16px; font-weight: 700; color: #fff; }
+.frame { padding: 0; }
+
+/* ============================================================
+   方案一：暗舱控制台 · MISSION CONTROL
+   深空蓝黑 + 青色数据光，等宽科技感，监控/示波器气质
+============================================================ */
+.s1 { background: #070b14; color: #cdd9e5; font-family: "IBM Plex Mono", monospace; padding: 0 0 36px;
+  background-image: linear-gradient(rgba(34,211,238,.04) 1px, transparent 1px), linear-gradient(90deg, rgba(34,211,238,.04) 1px, transparent 1px);
+  background-size: 28px 28px; }
+.s1 .hd { display: flex; align-items: center; gap: 18px; padding: 14px 28px; border-bottom: 1px solid #16202e; background: rgba(7,11,20,.9); }
+.s1 .logo { font-family: "Chakra Petch", sans-serif; font-weight: 700; font-size: 20px; color: #fff; letter-spacing: 2px; }
+.s1 .logo i { color: #22d3ee; font-style: normal; text-shadow: 0 0 14px rgba(34,211,238,.7); }
+.s1 .sysline { font-size: 10.5px; color: #4d6378; letter-spacing: 1.5px; display: flex; gap: 16px; margin-left: auto; }
+.s1 .sysline b { color: #22d3ee; font-weight: 500; }
+.s1 .sysline .alert { color: #fb7185; }
+.s1 .main { max-width: 980px; margin: 0 auto; padding: 26px 28px; }
+.s1 .q { display: flex; gap: 12px; margin-bottom: 18px; font-size: 13.5px; }
+.s1 .q .p { color: #22d3ee; }
+.s1 .trace { border: 1px solid #16202e; background: rgba(10,16,28,.7); border-radius: 4px; padding: 12px 16px; margin-bottom: 16px; font-size: 11.5px; }
+.s1 .trace .t { color: #4d6378; letter-spacing: 1.5px; font-size: 10px; margin-bottom: 8px; }
+.s1 .trace .r { display: flex; gap: 12px; padding: 2px 0; }
+.s1 .trace .r .ts { color: #3b4f63; }
+.s1 .trace .r .tool { color: #67e8f9; }
+.s1 .card { border: 1px solid #1d2c3e; background: linear-gradient(180deg, rgba(13,21,35,.95), rgba(9,14,24,.95)); border-radius: 6px; padding: 20px 24px; box-shadow: 0 0 0 1px rgba(34,211,238,.06), 0 24px 60px rgba(0,0,0,.5); position: relative; overflow: hidden; }
+.s1 .card::before { content: ""; position: absolute; top: 0; left: 0; right: 0; height: 2px; background: linear-gradient(90deg, transparent, #22d3ee, transparent); animation: s1scan 3s linear infinite; }
+@keyframes s1scan { 0% { transform: translateX(-100%);} 100% { transform: translateX(100%);} }
+.s1 .verdictK { font-size: 10px; letter-spacing: 2.5px; color: #22d3ee; margin-bottom: 10px; }
+.s1 .verdict { font-family: "Chakra Petch", sans-serif; font-size: 21px; font-weight: 600; color: #fff; line-height: 1.4; }
+.s1 .verdict em { color: #22d3ee; font-style: normal; text-shadow: 0 0 18px rgba(34,211,238,.5); }
+.s1 .gauges { display: flex; gap: 12px; margin: 18px 0; }
+.s1 .g { flex: 1; border: 1px solid #16202e; border-radius: 4px; padding: 10px 12px; background: rgba(7,11,20,.6); }
+.s1 .g .k { font-size: 9.5px; color: #4d6378; letter-spacing: 1.5px; }
+.s1 .g .v { font-family: "Chakra Petch", sans-serif; font-size: 22px; font-weight: 700; color: #fff; margin-top: 2px; }
+.s1 .g .v.bad { color: #fb7185; text-shadow: 0 0 14px rgba(251,113,133,.45); }
+.s1 .g .v.ok { color: #34d399; }
+.s1 .g .bar { height: 3px; background: #16202e; margin-top: 8px; border-radius: 2px; overflow: hidden; }
+.s1 .g .bar i { display: block; height: 100%; background: #22d3ee; }
+.s1 .exs { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 4px; }
+.s1 .ex { border: 1px solid #16202e; border-left: 2px solid #22d3ee; background: rgba(10,16,28,.8); padding: 10px 14px; font-size: 11.5px; cursor: pointer; transition: all .2s; }
+.s1 .ex:hover { border-color: #22d3ee; background: rgba(34,211,238,.06); }
+.s1 .ex .et { color: #fff; font-weight: 600; margin-bottom: 4px; font-size: 12.5px; }
+.s1 .ex .ef { color: #4d6378; }
+.s1 .ex .ef b { color: #67e8f9; font-weight: 500; }
+.s1 .input { display: flex; gap: 10px; margin-top: 20px; border: 1px solid #1d2c3e; border-radius: 6px; background: rgba(10,16,28,.9); padding: 12px 16px; align-items: center; }
+.s1 .input .ps { color: #22d3ee; }
+.s1 .input .ph { color: #3b4f63; font-size: 13px; flex: 1; }
+.s1 .input .send { background: #22d3ee; color: #04141a; border: none; font-family: inherit; font-weight: 600; font-size: 12px; padding: 8px 18px; border-radius: 3px; cursor: pointer; letter-spacing: 1px; }
+
+/* ============================================================
+   方案二：瑞士网格 · SWISS GRID
+   纸白 + 纯黑 + 信号红，超大字重，严格栅格，冷静专业
+============================================================ */
+.s2 { background: #f4f4f0; color: #0a0a0a; font-family: "Archivo", sans-serif; padding-bottom: 40px; }
+.s2 .hd { display: grid; grid-template-columns: 1fr auto 1fr; align-items: baseline; padding: 22px 32px 16px; border-bottom: 2px solid #0a0a0a; }
+.s2 .logo { font-family: "Archivo Black", sans-serif; font-size: 26px; letter-spacing: -1px; }
+.s2 .logo i { color: #e5482b; font-style: normal; }
+.s2 .hd .mid { font-family: "JetBrains Mono", monospace; font-size: 10.5px; letter-spacing: 2px; color: #666; text-transform: uppercase; }
+.s2 .hd .r { text-align: right; font-family: "JetBrains Mono", monospace; font-size: 10.5px; color: #666; }
+.s2 .stats { display: grid; grid-template-columns: repeat(4, 1fr); border-bottom: 1px solid #0a0a0a; }
+.s2 .st { padding: 14px 32px; border-right: 1px solid #ccc; }
+.s2 .st:last-child { border-right: 0; }
+.s2 .st .k { font-family: "JetBrains Mono", monospace; font-size: 9.5px; letter-spacing: 1.5px; text-transform: uppercase; color: #888; }
+.s2 .st .v { font-family: "Archivo Black", sans-serif; font-size: 30px; letter-spacing: -1px; margin-top: 2px; }
+.s2 .st .v.bad { color: #e5482b; }
+.s2 .main { max-width: 980px; margin: 0 auto; padding: 30px 32px; }
+.s2 .q { font-size: 16px; font-weight: 600; padding: 14px 0; border-bottom: 1px solid #0a0a0a; display: flex; gap: 16px; align-items: baseline; }
+.s2 .q .tag { font-family: "JetBrains Mono", monospace; font-size: 10px; background: #0a0a0a; color: #f4f4f0; padding: 3px 8px; letter-spacing: 1px; }
+.s2 .verdict { font-family: "Archivo Black", sans-serif; font-size: 34px; line-height: 1.08; letter-spacing: -1.2px; margin: 26px 0 8px; max-width: 24ch; }
+.s2 .verdict em { font-style: normal; color: #e5482b; }
+.s2 .lede { font-size: 15px; color: #333; line-height: 1.6; max-width: 64ch; margin-bottom: 22px; }
+.s2 .lede code { font-family: "JetBrains Mono", monospace; font-size: 13px; background: #e8e8e2; padding: 1px 5px; }
+.s2 .grid { display: grid; grid-template-columns: repeat(3, 1fr); border-top: 2px solid #0a0a0a; }
+.s2 .cell { padding: 16px 18px 18px; border-right: 1px solid #ccc; border-bottom: 1px solid #ccc; cursor: pointer; transition: background .15s; }
+.s2 .cell:hover { background: #fff; }
+.s2 .cell:nth-child(3n) { border-right: 0; }
+.s2 .cell .ek { font-family: "JetBrains Mono", monospace; font-size: 9.5px; letter-spacing: 1.5px; text-transform: uppercase; color: #e5482b; }
+.s2 .cell .et { font-weight: 700; font-size: 15px; margin: 4px 0 8px; }
+.s2 .cell .ef { font-family: "JetBrains Mono", monospace; font-size: 11px; color: #666; }
+.s2 .cell .arr { font-size: 18px; margin-top: 10px; transition: transform .15s; }
+.s2 .cell:hover .arr { transform: translateX(6px); color: #e5482b; }
+.s2 .input { display: flex; margin-top: 26px; border: 2px solid #0a0a0a; background: #fff; }
+.s2 .input .ph { flex: 1; padding: 16px 18px; color: #999; font-size: 15px; }
+.s2 .input .send { font-family: "Archivo Black", sans-serif; background: #0a0a0a; color: #fff; border: 0; padding: 0 30px; font-size: 14px; letter-spacing: 1px; cursor: pointer; }
+.s2 .input .send:hover { background: #e5482b; }
+
+/* ============================================================
+   方案三：终端工程 · 精修版 REFINED TERMINAL
+   现有深色+橙的演进：层级更清、密度更克制、细节更利
+============================================================ */
+.s3 { background: #0d1117; color: #e6edf3; font-family: "IBM Plex Sans", sans-serif; padding-bottom: 40px; }
+.s3 .hd { display: flex; align-items: center; padding: 14px 28px; border-bottom: 1px solid #1f2935; gap: 20px; }
+.s3 .logo { font-family: "IBM Plex Mono", monospace; font-weight: 600; font-size: 17px; }
+.s3 .logo i { color: #ff8a1f; font-style: normal; }
+.s3 .crumbs { font-family: "IBM Plex Mono", monospace; font-size: 11.5px; color: #768390; }
+.s3 .crumbs b { color: #e6edf3; font-weight: 500; }
+.s3 .badges { margin-left: auto; display: flex; gap: 8px; font-family: "IBM Plex Mono", monospace; font-size: 11px; }
+.s3 .badge { padding: 4px 10px; border-radius: 99px; border: 1px solid #2a3a4c; color: #9fb0c0; }
+.s3 .badge.hot { border-color: rgba(255,138,31,.5); color: #ff8a1f; background: rgba(255,138,31,.08); }
+.s3 .main { max-width: 940px; margin: 0 auto; padding: 28px; }
+.s3 .q { background: #161d27; border: 1px solid #232f3d; border-radius: 10px; padding: 14px 18px; font-size: 15px; margin-bottom: 14px; }
+.s3 .q .meta { font-family: "IBM Plex Mono", monospace; font-size: 10.5px; color: #66788a; margin-top: 6px; }
+.s3 .steps { display: flex; gap: 8px; margin: 0 0 14px; font-family: "IBM Plex Mono", monospace; font-size: 11px; }
+.s3 .step { display: flex; align-items: center; gap: 7px; padding: 6px 12px; border-radius: 6px; background: #121922; border: 1px solid #1f2935; color: #9fb0c0; }
+.s3 .step .ok { color: #ff9f3d; }
+.s3 .card { background: linear-gradient(180deg, #141c26, #10161e); border: 1px solid #243140; border-radius: 12px; padding: 22px 26px; box-shadow: 0 18px 44px rgba(0,0,0,.35); }
+.s3 .vk { font-family: "IBM Plex Mono", monospace; font-size: 10.5px; letter-spacing: 2px; color: #ff8a1f; margin-bottom: 10px; }
+.s3 .verdict { font-size: 19px; font-weight: 600; line-height: 1.5; color: #f1f6fb; }
+.s3 .verdict em { font-style: normal; color: #ff9f3d; }
+.s3 .verdict code { font-family: "IBM Plex Mono", monospace; font-size: 14.5px; background: rgba(255,138,31,.1); color: #ffb066; border-radius: 5px; padding: 1px 6px; }
+.s3 .chainline { display: flex; align-items: center; gap: 8px; margin: 16px 0 4px; font-family: "IBM Plex Mono", monospace; font-size: 11.5px; flex-wrap: wrap; }
+.s3 .cn { border: 1px solid #2a3a4c; border-radius: 6px; padding: 5px 10px; color: #c6d4e1; background: #121922; }
+.s3 .cn.root { border-color: rgba(224,95,95,.6); color: #ff8d8d; background: rgba(224,95,95,.08); }
+.s3 .ca { color: #ff8a1f; }
+.s3 .exs { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 18px; }
+.s3 .ex { background: #121922; border: 1px solid #1f2935; border-radius: 10px; padding: 12px 16px; cursor: pointer; transition: all .18s; }
+.s3 .ex:hover { border-color: rgba(255,138,31,.55); transform: translateY(-2px); }
+.s3 .ex .et { font-size: 13.5px; font-weight: 600; }
+.s3 .ex .ef { font-family: "IBM Plex Mono", monospace; font-size: 11px; color: #768390; margin-top: 5px; }
+.s3 .ex .ef b { color: #ffb066; font-weight: 500; }
+.s3 .input { margin-top: 20px; background: #121922; border: 1px solid #243140; border-radius: 12px; display: flex; align-items: center; padding: 6px 6px 6px 18px; }
+.s3 .input .ph { flex: 1; color: #66788a; font-size: 14px; }
+.s3 .input .send { background: #ff8a1f; color: #1a0e00; border: 0; border-radius: 8px; padding: 10px 20px; font-weight: 600; font-size: 13.5px; cursor: pointer; }
+.s3 .input .send:hover { background: #ff9f3d; }
+
+/* ============================================================
+   方案四：玻璃曜石 · OBSIDIAN GLASS
+   近黑底 + 翡翠绿光晕 + 玻璃面板，现代 SaaS 质感（Linear 系）
+============================================================ */
+.s4 { background: #0a0c10; color: #e7ecf2; font-family: "Manrope", sans-serif; padding-bottom: 44px; position: relative; overflow: hidden; }
+.s4::before { content: ""; position: absolute; top: -180px; left: 50%; transform: translateX(-50%); width: 720px; height: 420px; background: radial-gradient(ellipse, rgba(16,185,129,.16), transparent 65%); pointer-events: none; }
+.s4 .hd { display: flex; align-items: center; gap: 18px; padding: 16px 30px; border-bottom: 1px solid rgba(255,255,255,.06); position: relative; }
+.s4 .logo { font-weight: 800; font-size: 17px; letter-spacing: -.3px; }
+.s4 .logo i { font-style: normal; background: linear-gradient(90deg, #34d399, #a7f3d0); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.s4 .tabs { display: flex; gap: 2px; margin-left: 20px; font-size: 13px; color: #8b95a5; }
+.s4 .tab { padding: 6px 12px; border-radius: 8px; cursor: pointer; }
+.s4 .tab.on { background: rgba(255,255,255,.07); color: #fff; }
+.s4 .pill { margin-left: auto; font-size: 11.5px; font-weight: 600; color: #34d399; background: rgba(52,211,153,.1); border: 1px solid rgba(52,211,153,.25); padding: 5px 12px; border-radius: 99px; }
+.s4 .main { max-width: 880px; margin: 0 auto; padding: 30px; position: relative; }
+.s4 .q { font-size: 15px; font-weight: 600; background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.08); padding: 14px 18px; border-radius: 14px; margin-bottom: 16px; backdrop-filter: blur(8px); }
+.s4 .think { font-size: 12.5px; color: #8b95a5; display: flex; align-items: center; gap: 10px; margin: 0 4px 14px; }
+.s4 .think .dotline { display: flex; gap: 4px; }
+.s4 .think .dotline i { width: 4px; height: 4px; border-radius: 99px; background: #34d399; animation: s4p 1.2s ease-in-out infinite; }
+.s4 .think .dotline i:nth-child(2) { animation-delay: .2s; } .s4 .think .dotline i:nth-child(3) { animation-delay: .4s; }
+@keyframes s4p { 50% { opacity: .25; transform: translateY(-2px); } }
+.s4 .card { background: linear-gradient(180deg, rgba(255,255,255,.055), rgba(255,255,255,.02)); border: 1px solid rgba(255,255,255,.09); border-radius: 18px; padding: 24px 28px; backdrop-filter: blur(14px); box-shadow: 0 30px 80px rgba(0,0,0,.5); }
+.s4 .vk { font-size: 11px; font-weight: 700; letter-spacing: 1.5px; color: #34d399; text-transform: uppercase; margin-bottom: 10px; }
+.s4 .verdict { font-size: 21px; font-weight: 800; letter-spacing: -.4px; line-height: 1.42; }
+.s4 .verdict em { font-style: normal; background: linear-gradient(90deg, #34d399, #6ee7b7); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.s4 .meterRow { display: flex; gap: 10px; margin: 18px 0 6px; }
+.s4 .meter { flex: 1; background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.07); border-radius: 12px; padding: 12px 14px; }
+.s4 .meter .k { font-size: 10.5px; color: #8b95a5; font-weight: 600; }
+.s4 .meter .v { font-size: 20px; font-weight: 800; margin-top: 2px; }
+.s4 .meter .v.bad { color: #f87171; } .s4 .meter .v.ok { color: #34d399; }
+.s4 .exs { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 14px; }
+.s4 .ex { background: rgba(255,255,255,.035); border: 1px solid rgba(255,255,255,.08); border-radius: 12px; padding: 13px 16px; cursor: pointer; transition: all .2s; }
+.s4 .ex:hover { border-color: rgba(52,211,153,.5); box-shadow: 0 0 0 3px rgba(52,211,153,.1); transform: translateY(-2px); }
+.s4 .ex .et { font-size: 13.5px; font-weight: 700; }
+.s4 .ex .ef { font-family: "JetBrains Mono", monospace; font-size: 10.5px; color: #8b95a5; margin-top: 5px; }
+.s4 .ex .ef b { color: #6ee7b7; font-weight: 500; }
+.s4 .input { margin-top: 22px; display: flex; align-items: center; background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.1); border-radius: 16px; padding: 6px 6px 6px 18px; backdrop-filter: blur(10px); }
+.s4 .input:hover { border-color: rgba(52,211,153,.4); }
+.s4 .input .ph { flex: 1; color: #8b95a5; font-size: 14px; }
+.s4 .input .send { background: linear-gradient(135deg, #10b981, #34d399); color: #03130c; font-weight: 800; border: 0; border-radius: 11px; padding: 10px 20px; font-size: 13.5px; cursor: pointer; }
+
+/* ============================================================
+   方案五：工业警示 · INDUSTRIAL HAZARD
+   炭黑 + 警示黄 + 斜纹胶带，粗野直接，车间手册气质
+============================================================ */
+.s5 { background: #141414; color: #eee; font-family: "Archivo", sans-serif; padding-bottom: 44px; }
+.s5 .tape { height: 14px; background: repeating-linear-gradient(-45deg, #ffd400 0 16px, #141414 16px 32px); }
+.s5 .hd { display: flex; align-items: center; gap: 18px; padding: 16px 28px; border-bottom: 3px solid #ffd400; }
+.s5 .logo { font-family: "Oswald", sans-serif; font-weight: 700; font-size: 24px; letter-spacing: 1px; text-transform: uppercase; }
+.s5 .logo i { font-style: normal; color: #ffd400; }
+.s5 .unit { font-family: "JetBrains Mono", monospace; font-size: 10.5px; color: #888; letter-spacing: 2px; }
+.s5 .alarm { margin-left: auto; font-family: "Oswald", sans-serif; background: #ffd400; color: #141414; font-size: 13px; font-weight: 700; padding: 6px 14px; letter-spacing: 1.5px; text-transform: uppercase; }
+.s5 .main { max-width: 940px; margin: 0 auto; padding: 28px; }
+.s5 .q { border: 2px solid #333; padding: 14px 18px; font-size: 15px; font-weight: 600; margin-bottom: 16px; position: relative; }
+.s5 .q::before { content: "工单 W-37"; position: absolute; top: -10px; left: 14px; background: #141414; color: #ffd400; font-family: "JetBrains Mono", monospace; font-size: 10px; padding: 0 8px; letter-spacing: 1.5px; }
+.s5 .card { border: 2px solid #ffd400; padding: 22px 26px; position: relative; background: #1a1a1a; }
+.s5 .card::before { content: "诊断结论 · VERDICT"; position: absolute; top: -12px; left: 18px; background: #ffd400; color: #141414; font-family: "Oswald", sans-serif; font-size: 12px; font-weight: 700; padding: 2px 12px; letter-spacing: 2px; }
+.s5 .verdict { font-family: "Oswald", sans-serif; font-size: 27px; font-weight: 600; line-height: 1.25; text-transform: none; letter-spacing: .3px; }
+.s5 .verdict em { font-style: normal; color: #ffd400; }
+.s5 .specs { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0; margin-top: 18px; border: 1px solid #333; }
+.s5 .spec { padding: 10px 14px; border-right: 1px solid #333; font-family: "JetBrains Mono", monospace; }
+.s5 .spec:last-child { border-right: 0; }
+.s5 .spec .k { font-size: 9px; letter-spacing: 1.5px; color: #777; text-transform: uppercase; }
+.s5 .spec .v { font-size: 18px; font-weight: 700; color: #fff; margin-top: 2px; }
+.s5 .spec .v.bad { color: #ff5757; }
+.s5 .spec .v.warn { color: #ffd400; }
+.s5 .exs { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 18px; }
+.s5 .ex { border: 1px solid #3a3a3a; border-left: 6px solid #ffd400; background: #1c1c1c; padding: 12px 16px; cursor: pointer; transition: all .15s; }
+.s5 .ex:hover { background: #222; border-left-width: 12px; }
+.s5 .ex .ek { font-family: "JetBrains Mono", monospace; font-size: 9.5px; color: #ffd400; letter-spacing: 1.5px; }
+.s5 .ex .et { font-weight: 700; font-size: 14.5px; margin: 3px 0 6px; }
+.s5 .ex .ef { font-family: "JetBrains Mono", monospace; font-size: 11px; color: #888; }
+.s5 .input { margin-top: 22px; display: flex; border: 2px solid #444; }
+.s5 .input .ph { flex: 1; padding: 14px 18px; color: #777; font-size: 14px; }
+.s5 .input .send { font-family: "Oswald", sans-serif; background: #ffd400; color: #141414; border: 0; padding: 0 28px; font-size: 15px; font-weight: 700; letter-spacing: 2px; cursor: pointer; text-transform: uppercase; }
+.s5 .input .send:hover { background: #ffe23d; }
+</style>
+</head>
+<body>
+
+<nav class="galleryNav">
+  <a href="#s1"><b>壹</b> 暗舱控制台</a>
+  <a href="#s2"><b>贰</b> 瑞士网格</a>
+  <a href="#s3"><b>叁</b> 终端工程·精修</a>
+  <a href="#s4"><b>肆</b> 玻璃曜石</a>
+  <a href="#s5"><b>伍</b> 工业警示</a>
+</nav>
+
+<!-- ════════════ 方案一 ════════════ -->
+<section class="specimen" id="s1">
+  <div class="specimenLabel"><span class="num">01</span><span class="name">暗舱控制台 · Mission Control</span><span>深空蓝黑 + 青色数据光 · 等宽科技感 · 像航天任务监控室</span></div>
+  <div class="frame s1">
+    <div class="hd">
+      <div class="logo">PCAP<i>·AI</i></div>
+      <div class="sysline"><span>NODE <b>node-1</b></span><span>PKTS <b>60</b></span><span>RST <b class="alert">12</b></span><span>DNS-FAIL <b class="alert">2</b></span><span>COVERAGE <b>FULL</b></span></div>
+    </div>
+    <div class="main">
+      <div class="q"><span class="p">»</span><span>先查询 DNS 解析失败事件，再查询 HTTP 的 4xx/5xx 错误事务，综合判断根因。</span></div>
+      <div class="trace">
+        <div class="t">EXECUTION TRACE ── 11 EVENTS</div>
+        <div class="r"><span class="ts">22:14:08</span><span class="tool">protocol_event_query{dns}</span><span>→ deterministic_dns · 2 hits</span></div>
+        <div class="r"><span class="ts">22:14:10</span><span class="tool">protocol_event_query{http}</span><span>→ deterministic_http · 12 hits</span></div>
+        <div class="r"><span class="ts">22:14:15</span><span class="tool">list_tcp_zero_window · get_query_diagnosis</span><span>→ 假设验证</span></div>
+      </div>
+      <div class="card">
+        <div class="verdictK">VERDICT ── CONFIDENCE: HIGH</div>
+        <div class="verdict">根因：<em>DNS SERVFAIL</em> 引发级联中断。应用退化至陈旧缓存 IP，握手后 RST ×12，HTTP 503 ×9。</div>
+        <div class="gauges">
+          <div class="g"><div class="k">DNS RCODE-2</div><div class="v bad">2</div><div class="bar"><i style="width:90%"></i></div></div>
+          <div class="g"><div class="k">RST AFTER SYN</div><div class="v bad">12</div><div class="bar"><i style="width:75%"></i></div></div>
+          <div class="g"><div class="k">HTTP 5XX</div><div class="v bad">9</div><div class="bar"><i style="width:60%"></i></div></div>
+          <div class="g"><div class="k">RTT AVG</div><div class="v ok">1.2ms</div><div class="bar"><i style="width:14%"></i></div></div>
+        </div>
+        <div class="exs">
+          <div class="ex"><div class="et">EXHIBIT-A · DNS SERVFAIL</div><div class="ef">frame <b>14</b> · <b>dns.flags.rcode == 2</b></div></div>
+          <div class="ex"><div class="et">EXHIBIT-B · RST 复位首例</div><div class="ef">frame <b>31</b> · <b>tcp.flags.reset == 1</b></div></div>
+        </div>
+      </div>
+      <div class="input"><span class="ps">querier@case-37 $</span><span class="ph">输入下一条勘验指令…</span><button class="send">EXEC ↵</button></div>
+    </div>
+  </div>
+</section>
+
+<!-- ════════════ 方案二 ════════════ -->
+<section class="specimen" id="s2">
+  <div class="specimenLabel"><span class="num">02</span><span class="name">瑞士网格 · Swiss Grid</span><span>纸白 + 纯黑 + 信号红 · 超大字重严格栅格 · 冷静的工程刊物</span></div>
+  <div class="frame s2">
+    <div class="hd">
+      <div class="logo">PCAP<i>·</i>AI</div>
+      <div class="mid">Packet Analysis Workbench</div>
+      <div class="r">CASE 37 / NODE-1 / 60 PKTS</div>
+    </div>
+    <div class="stats">
+      <div class="st"><div class="k">DNS Fail</div><div class="v bad">2</div></div>
+      <div class="st"><div class="k">TCP RST</div><div class="v bad">12</div></div>
+      <div class="st"><div class="k">HTTP 5xx</div><div class="v bad">9</div></div>
+      <div class="st"><div class="k">Coverage</div><div class="v">100%</div></div>
+    </div>
+    <div class="main">
+      <div class="q"><span class="tag">Q-01</span>先查询 DNS 解析失败事件，再查询 HTTP 的 4xx/5xx 错误事务，综合判断根因。</div>
+      <h2 class="verdict">DNS 解析故障引发<em>级联服务中断</em>。</h2>
+      <p class="lede">解析 <code>api.saas-portal.io</code> 返回 SERVFAIL，应用退化至陈旧缓存地址 <code>10.0.8.1</code>；该地址不再承载服务，TCP 握手完成后 0.3 秒内被复位 12 次，HTTP 集中返回 503。已排除网络丢包与服务端瓶颈假设。置信度：高。</p>
+      <div class="grid">
+        <div class="cell"><div class="ek">Exhibit A</div><div class="et">DNS SERVFAIL 响应</div><div class="ef">frame 14 · dns.flags.rcode == 2</div><div class="arr">→</div></div>
+        <div class="cell"><div class="ek">Exhibit B</div><div class="et">握手后 RST 首例</div><div class="ef">frame 31 · tcp.flags.reset == 1</div><div class="arr">→</div></div>
+        <div class="cell"><div class="ek">Exhibit C</div><div class="et">HTTP 503 事务</div><div class="ef">frame 38 · http.response.code == 503</div><div class="arr">→</div></div>
+      </div>
+      <div class="input"><div class="ph">续问，或补充抓包位置……</div><button class="send">发送</button></div>
+    </div>
+  </div>
+</section>
+
+<!-- ════════════ 方案三 ════════════ -->
+<section class="specimen" id="s3">
+  <div class="specimenLabel"><span class="num">03</span><span class="name">终端工程 · 精修 Refined Terminal</span><span>现有深色+橙的演进 · 不换气质只升级层级、密度与细节</span></div>
+  <div class="frame s3">
+    <div class="hd">
+      <div class="logo">pcap<i>·ai</i></div>
+      <div class="crumbs">cases / <b>saas-级联中断</b> / chat</div>
+      <div class="badges"><span class="badge hot">RST 12</span><span class="badge hot">DNS-FAIL 2</span><span class="badge">60 pkts</span><span class="badge">覆盖完整</span></div>
+    </div>
+    <div class="main">
+      <div class="q">先查询 DNS 解析失败事件，再查询 HTTP 的 4xx/5xx 错误事务，综合判断根因。<div class="meta">22:14:07 · 分析链 2 步 · MiniMax-M2.7</div></div>
+      <div class="steps">
+        <span class="step"><span class="ok">✓</span> step-0 dns · 2 hits</span>
+        <span class="step"><span class="ok">✓</span> step-1 http · 12 hits</span>
+        <span class="step"><span class="ok">✓</span> 综合解读 · 8 tools</span>
+      </div>
+      <div class="card">
+        <div class="vk">判断 · CONFIDENCE HIGH</div>
+        <div class="verdict">根因是 <em>DNS 解析故障引发的级联服务降级</em>：解析 <code>api.saas-portal.io</code> 返回 SERVFAIL，应用退化到陈旧缓存 <code>10.0.8.1</code>，握手后 RST ×12，HTTP 503 ×9。</div>
+        <div class="chainline">
+          <span class="cn root">DNS SERVFAIL</span><span class="ca">→</span>
+          <span class="cn">陈旧缓存 IP</span><span class="ca">→</span>
+          <span class="cn">RST ×12</span><span class="ca">→</span>
+          <span class="cn">HTTP 503 ×9</span>
+        </div>
+        <div class="exs">
+          <div class="ex"><div class="et">DNS SERVFAIL 响应</div><div class="ef">frame <b>14</b> · <b>dns.flags.rcode == 2</b> · 打开 Wireshark →</div></div>
+          <div class="ex"><div class="et">握手后 RST 首例</div><div class="ef">frame <b>31</b> · <b>tcp.flags.reset == 1</b> · 打开 Wireshark →</div></div>
+        </div>
+      </div>
+      <div class="input"><span class="ph">续问、补充抓包位置，或上传新的 pcap……</span><button class="send">发送 ↵</button></div>
+    </div>
+  </div>
+</section>
+
+<!-- ════════════ 方案四 ════════════ -->
+<section class="specimen" id="s4">
+  <div class="specimenLabel"><span class="num">04</span><span class="name">玻璃曜石 · Obsidian Glass</span><span>近黑底 + 翡翠光晕 + 玻璃面板 · 现代 SaaS 质感（Linear 一系）</span></div>
+  <div class="frame s4">
+    <div class="hd">
+      <div class="logo">pcap<i>ai</i></div>
+      <div class="tabs"><span class="tab on">对话</span><span class="tab">证据</span><span class="tab">拓扑</span><span class="tab">报告</span></div>
+      <div class="pill">● 覆盖完整 · 未截断</div>
+    </div>
+    <div class="main">
+      <div class="q">先查询 DNS 解析失败事件，再查询 HTTP 的 4xx/5xx 错误事务，综合判断根因。</div>
+      <div class="think"><span class="dotline"><i></i><i></i><i></i></span> 已执行 protocol_event_query{dns} → {http} → 假设验证 · 8 次工具调用</div>
+      <div class="card">
+        <div class="vk">Verdict · High Confidence</div>
+        <div class="verdict">根因是 <em>DNS 解析故障引发的级联降级</em>——SERVFAIL 后应用退化至陈旧缓存 IP，握手后被复位 12 次，HTTP 集中 503。</div>
+        <div class="meterRow">
+          <div class="meter"><div class="k">DNS 失败</div><div class="v bad">2</div></div>
+          <div class="meter"><div class="k">RST 复位</div><div class="v bad">12</div></div>
+          <div class="meter"><div class="k">HTTP 5xx</div><div class="v bad">9</div></div>
+          <div class="meter"><div class="k">RTT 均值</div><div class="v ok">1.2ms</div></div>
+        </div>
+        <div class="exs">
+          <div class="ex"><div class="et">DNS SERVFAIL 响应</div><div class="ef">frame <b>14</b> · <b>dns.flags.rcode == 2</b></div></div>
+          <div class="ex"><div class="et">握手后 RST 首例</div><div class="ef">frame <b>31</b> · <b>tcp.flags.reset == 1</b></div></div>
+        </div>
+      </div>
+      <div class="input"><span class="ph">续问，或拖入新的 pcap……</span><button class="send">发送</button></div>
+    </div>
+  </div>
+</section>
+
+<!-- ════════════ 方案五 ════════════ -->
+<section class="specimen" id="s5">
+  <div class="specimenLabel"><span class="num">05</span><span class="name">工业警示 · Industrial Hazard</span><span>炭黑 + 警示黄 + 斜纹胶带 · 粗野直接 · 像车间检修手册</span></div>
+  <div class="frame s5">
+    <div class="tape"></div>
+    <div class="hd">
+      <div class="logo">PCAP<i>·AI</i></div>
+      <div class="unit">PACKET DIAGNOSTICS UNIT</div>
+      <div class="alarm">⚠ 12 RST DETECTED</div>
+    </div>
+    <div class="main">
+      <div class="q">先查询 DNS 解析失败事件，再查询 HTTP 的 4xx/5xx 错误事务，综合判断根因。</div>
+      <div class="card">
+        <div class="verdict">DNS 解析故障引发<em>级联服务中断</em>——SERVFAIL 后退化至陈旧 IP，握手即被复位。</div>
+        <div class="specs">
+          <div class="spec"><div class="k">DNS Fail</div><div class="v bad">2</div></div>
+          <div class="spec"><div class="k">TCP RST</div><div class="v bad">12</div></div>
+          <div class="spec"><div class="k">HTTP 5xx</div><div class="v warn">9</div></div>
+          <div class="spec"><div class="k">置信度</div><div class="v">HIGH</div></div>
+        </div>
+        <div class="exs">
+          <div class="ex"><div class="ek">EXHIBIT A</div><div class="et">DNS SERVFAIL 响应</div><div class="ef">frame 14 · dns.flags.rcode == 2</div></div>
+          <div class="ex"><div class="ek">EXHIBIT B</div><div class="et">握手后 RST 首例</div><div class="ef">frame 31 · tcp.flags.reset == 1</div></div>
+        </div>
+      </div>
+      <div class="input"><div class="ph">下达检修指令……</div><button class="send">执行</button></div>
+    </div>
+  </div>
+</section>
+
+</body>
+</html>

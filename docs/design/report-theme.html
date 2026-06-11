@@ -1,0 +1,835 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>PCAP·AI — Packet Forensics Journal</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;0,9..144,900;1,9..144,400;1,9..144,600&family=Spectral:ital,wght@0,300;0,400;0,500;0,600;1,400;1,500&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root {
+  /* 暖纸档案 · 亮色为主 */
+  --paper: #f4ece0;
+  --paper-2: #efe6d6;
+  --paper-3: #e9dec9;
+  --paper-edge: #e3d6bd;
+  --ink: #1a1410;
+  --ink-2: #3d3328;
+  --ink-3: #6b5d4a;
+  --ink-faint: #9a8b72;
+  --rule: #cdbb9c;
+  --rule-strong: #1a1410;
+  --terra: #a8481f;          /* 赤陶/铁锈 强调 */
+  --terra-soft: #b5642a;
+  --terra-wash: rgba(168, 72, 31, 0.08);
+  --terra-line: rgba(168, 72, 31, 0.28);
+  --ok: #5a7a3e;             /* 苔绿 */
+  --ok-wash: rgba(90, 122, 62, 0.1);
+  --warn: #b5642a;
+  --danger: #a8312a;
+  --danger-wash: rgba(168, 49, 42, 0.08);
+  --card: #fbf6ec;
+  --card-edge: #e0d2b8;
+  --shadow-sm: 0 1px 2px rgba(64, 44, 20, 0.06);
+  --shadow: 0 14px 38px rgba(74, 50, 18, 0.12);
+  --shadow-lift: 0 22px 50px rgba(74, 50, 18, 0.18);
+  --serif-display: "Fraunces", Georgia, "Songti SC", serif;
+  --serif-body: "Spectral", Georgia, "Songti SC", serif;
+  --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+}
+
+[data-theme="dark"] {
+  --paper: #14110c;
+  --paper-2: #1a160f;
+  --paper-3: #100d09;
+  --paper-edge: #221c13;
+  --ink: #f0e8d8;
+  --ink-2: #d8cbb3;
+  --ink-3: #a8997d;
+  --ink-faint: #7a6c54;
+  --rule: #2e2618;
+  --rule-strong: #f0e8d8;
+  --terra: #e0853f;
+  --terra-soft: #d4742e;
+  --terra-wash: rgba(224, 133, 63, 0.1);
+  --terra-line: rgba(224, 133, 63, 0.3);
+  --ok: #9ab36e;
+  --ok-wash: rgba(154, 179, 110, 0.12);
+  --warn: #e0853f;
+  --danger: #e07a6a;
+  --danger-wash: rgba(224, 122, 106, 0.12);
+  --card: #1c1810;
+  --card-edge: #2c2518;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow: 0 14px 38px rgba(0, 0, 0, 0.5);
+  --shadow-lift: 0 22px 50px rgba(0, 0, 0, 0.6);
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html { scroll-behavior: smooth; }
+
+body {
+  font-family: var(--serif-body);
+  background: var(--paper);
+  color: var(--ink);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  /* 纸张：极淡赭色渐变 + 噪点纹理 */
+  background-image:
+    radial-gradient(circle at 12% 8%, rgba(168, 72, 31, 0.04), transparent 45%),
+    radial-gradient(circle at 88% 92%, rgba(120, 90, 50, 0.05), transparent 50%),
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.035'/%3E%3C/svg%3E");
+  min-height: 100vh;
+}
+
+::selection { background: var(--terra-wash); color: var(--terra); }
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--rule); border-radius: 0; border: 3px solid var(--paper); }
+::-webkit-scrollbar-thumb:hover { background: var(--ink-faint); }
+
+/* ===================== 刊头 ===================== */
+.masthead {
+  border-bottom: 3px double var(--rule-strong);
+  padding: 18px 32px 0;
+  background: var(--paper);
+  position: sticky; top: 0; z-index: 40;
+  backdrop-filter: blur(2px);
+}
+.mastheadTop {
+  display: flex; align-items: baseline; justify-content: space-between;
+  gap: 24px; padding-bottom: 12px;
+}
+.mastheadMeta {
+  font-family: var(--mono);
+  font-size: 10.5px; letter-spacing: 1.5px; text-transform: uppercase;
+  color: var(--ink-3); white-space: nowrap;
+}
+.mastheadMeta b { color: var(--terra); font-weight: 600; }
+.wordmark {
+  font-family: var(--serif-display);
+  font-weight: 900; font-size: 40px; letter-spacing: -2px;
+  line-height: 0.9; color: var(--ink);
+  font-optical-sizing: auto;
+  display: flex; align-items: center; gap: 2px;
+}
+.wordmark .dot { color: var(--terra); }
+.wordmark .sub {
+  font-size: 11px; font-weight: 500; letter-spacing: 4px;
+  text-transform: uppercase; color: var(--ink-3);
+  margin-left: 14px; align-self: center;
+  font-family: var(--mono);
+}
+.mastheadTools { display: flex; align-items: center; gap: 6px; }
+.iconBtn {
+  font-family: var(--mono); font-size: 11px;
+  background: transparent; border: 1px solid var(--rule);
+  color: var(--ink-2); padding: 7px 12px; cursor: pointer;
+  border-radius: 2px; transition: all .18s ease;
+  letter-spacing: .5px; display: inline-flex; align-items: center; gap: 6px;
+}
+.iconBtn:hover { border-color: var(--ink); background: var(--terra-wash); color: var(--terra); }
+
+/* 刊头指标条（天气栏式） */
+.indexBar {
+  display: flex; gap: 0; border-top: 1px solid var(--rule);
+  font-family: var(--mono);
+}
+.indexItem {
+  flex: 1; padding: 7px 14px; border-right: 1px solid var(--rule);
+  display: flex; align-items: baseline; gap: 8px;
+}
+.indexItem:last-child { border-right: none; }
+.indexItem .k { font-size: 9.5px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--ink-faint); }
+.indexItem .v { font-size: 14px; font-weight: 600; color: var(--ink); margin-left: auto; }
+.indexItem .v.alert { color: var(--danger); }
+.indexItem .v.good { color: var(--ok); }
+
+/* ===================== 主三栏 ===================== */
+.shell {
+  display: grid;
+  grid-template-columns: 268px minmax(0, 1fr) 360px;
+  gap: 0; max-width: 1680px; margin: 0 auto;
+  align-items: start;
+}
+
+/* ----------- 左栏：案卷目录 ----------- */
+.ledger {
+  border-right: 1px solid var(--rule);
+  padding: 26px 22px; position: sticky; top: 132px;
+  height: calc(100vh - 132px); overflow-y: auto;
+}
+.ledgerHead {
+  font-family: var(--serif-display); font-weight: 600; font-style: italic;
+  font-size: 19px; color: var(--ink); margin-bottom: 4px;
+}
+.ledgerSub {
+  font-family: var(--mono); font-size: 9.5px; letter-spacing: 1.5px;
+  text-transform: uppercase; color: var(--ink-faint);
+  padding-bottom: 16px; border-bottom: 1px solid var(--rule); margin-bottom: 14px;
+}
+.newCase {
+  width: 100%; font-family: var(--serif-body); font-size: 14px;
+  background: var(--ink); color: var(--paper); border: none;
+  padding: 11px; cursor: pointer; border-radius: 2px; margin-bottom: 20px;
+  letter-spacing: .5px; transition: all .2s ease;
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+}
+.newCase:hover { background: var(--terra); transform: translateY(-1px); box-shadow: var(--shadow-sm); }
+.caseItem {
+  padding: 12px 12px 12px 14px; cursor: pointer; border-left: 2px solid transparent;
+  margin-bottom: 2px; transition: all .18s ease; position: relative;
+}
+.caseItem:hover { background: var(--terra-wash); border-left-color: var(--terra-line); }
+.caseItem.active { background: var(--card); border-left-color: var(--terra); box-shadow: var(--shadow-sm); }
+.caseNo {
+  font-family: var(--mono); font-size: 9.5px; letter-spacing: 1px;
+  color: var(--terra); font-weight: 600;
+}
+.caseTitle {
+  font-family: var(--serif-body); font-size: 14px; font-weight: 500;
+  color: var(--ink); margin: 2px 0 3px; line-height: 1.3;
+}
+.caseDate { font-family: var(--mono); font-size: 10px; color: var(--ink-faint); }
+.caseItem.active .caseTitle { font-weight: 600; }
+.ledgerDivider {
+  font-family: var(--mono); font-size: 9px; letter-spacing: 2px;
+  text-transform: uppercase; color: var(--ink-faint);
+  margin: 22px 0 10px; display: flex; align-items: center; gap: 8px;
+}
+.ledgerDivider::after { content: ""; flex: 1; height: 1px; background: var(--rule); }
+
+/* ----------- 中栏：报告正文 ----------- */
+.report {
+  padding: 34px 46px 140px; min-height: calc(100vh - 132px);
+  position: relative;
+}
+/* 卷宗页眉 */
+.fileHeader { margin-bottom: 34px; }
+.fileKicker {
+  font-family: var(--mono); font-size: 10.5px; letter-spacing: 2.5px;
+  text-transform: uppercase; color: var(--terra); margin-bottom: 8px;
+}
+.fileTitle {
+  font-family: var(--serif-display); font-weight: 600; font-size: 38px;
+  letter-spacing: -1px; line-height: 1.04; color: var(--ink);
+  font-optical-sizing: auto; max-width: 22ch;
+}
+.fileByline {
+  font-family: var(--mono); font-size: 11px; color: var(--ink-3);
+  margin-top: 12px; display: flex; gap: 18px; flex-wrap: wrap;
+  padding-top: 12px; border-top: 1px solid var(--rule);
+}
+.fileByline span b { color: var(--ink); font-weight: 600; }
+
+/* 对话条目 */
+.turn { margin-bottom: 38px; }
+.reveal { opacity: 0; transform: translateY(14px); animation: rise .7s cubic-bezier(.2,.7,.3,1) forwards; }
+@keyframes rise { to { opacity: 1; transform: none; } }
+
+/* 用户提问 — 像编辑的批注/质询 */
+.query {
+  display: flex; gap: 14px; align-items: flex-start;
+  padding: 16px 20px; background: var(--paper-2);
+  border: 1px solid var(--rule); border-radius: 3px; position: relative;
+}
+.query::before {
+  content: "Q"; font-family: var(--serif-display); font-weight: 900;
+  font-size: 22px; color: var(--terra); line-height: 1; font-style: italic;
+}
+.queryBody { flex: 1; }
+.queryText { font-family: var(--serif-body); font-size: 16.5px; color: var(--ink); font-weight: 500; }
+.queryMeta { font-family: var(--mono); font-size: 10px; color: var(--ink-faint); margin-top: 6px; letter-spacing: .5px; }
+
+/* 调查日志时间线 */
+.log {
+  margin: 18px 0 22px; padding: 14px 18px;
+  border-left: 2px solid var(--rule); background: transparent;
+}
+.logHead {
+  font-family: var(--mono); font-size: 10px; letter-spacing: 1.5px;
+  text-transform: uppercase; color: var(--ink-faint); margin-bottom: 10px;
+  cursor: pointer; display: flex; align-items: center; gap: 8px; user-select: none;
+}
+.logHead .chev { transition: transform .2s ease; }
+.log.collapsed .chev { transform: rotate(-90deg); }
+.log.collapsed .logList { display: none; }
+.logList { display: flex; flex-direction: column; gap: 7px; }
+.logRow {
+  display: grid; grid-template-columns: 64px 18px 1fr; gap: 10px;
+  font-family: var(--mono); font-size: 11.5px; align-items: baseline;
+}
+.logTime { color: var(--ink-faint); }
+.logDot { color: var(--terra); text-align: center; }
+.logMsg { color: var(--ink-2); }
+.logMsg b { color: var(--ink); font-weight: 600; }
+.logMsg.tool { color: var(--terra-soft); }
+
+/* 五段式报告卡 */
+.dossier {
+  background: var(--card); border: 1px solid var(--card-edge);
+  border-radius: 4px; box-shadow: var(--shadow); overflow: hidden;
+  position: relative;
+}
+.dossier::before {
+  content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px;
+  background: linear-gradient(var(--terra), var(--terra-soft));
+}
+.dossierHead {
+  padding: 16px 26px 14px; border-bottom: 1px solid var(--rule);
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  background: linear-gradient(180deg, var(--paper-2), transparent);
+}
+.dossierHead .agent {
+  font-family: var(--serif-display); font-weight: 600; font-style: italic;
+  font-size: 17px; color: var(--ink);
+}
+.dossierHead .agentSub {
+  font-family: var(--mono); font-size: 9.5px; letter-spacing: 1.5px;
+  text-transform: uppercase; color: var(--ink-faint); margin-top: 2px;
+}
+.phaseTag {
+  font-family: var(--mono); font-size: 9.5px; letter-spacing: 1px;
+  text-transform: uppercase; padding: 4px 10px; border-radius: 2px;
+  background: var(--ok-wash); color: var(--ok); border: 1px solid rgba(90,122,62,.3);
+}
+.dossierBody { padding: 8px 26px 22px; }
+
+.section { padding: 18px 0; border-bottom: 1px solid var(--rule); }
+.section:last-child { border-bottom: none; }
+.sectionLabel {
+  font-family: var(--mono); font-size: 10px; letter-spacing: 2px;
+  text-transform: uppercase; color: var(--terra); margin-bottom: 9px;
+  display: flex; align-items: center; gap: 9px;
+}
+.sectionLabel .no {
+  font-family: var(--serif-display); font-style: italic; font-weight: 600;
+  font-size: 13px; color: var(--ink-faint);
+}
+.sectionBody { font-family: var(--serif-body); font-size: 15.5px; color: var(--ink-2); line-height: 1.68; }
+.sectionBody strong { color: var(--ink); font-weight: 600; }
+.sectionBody .ip, .sectionBody .mono { font-family: var(--mono); font-size: 13.5px; color: var(--terra-soft); background: var(--terra-wash); padding: 1px 5px; border-radius: 2px; }
+
+/* 因果链 */
+.chain { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
+.chainNode {
+  font-family: var(--mono); font-size: 11.5px; padding: 6px 11px;
+  border: 1px solid var(--rule); border-radius: 2px; background: var(--paper);
+  color: var(--ink); white-space: nowrap;
+}
+.chainNode.root { border-color: var(--danger); color: var(--danger); background: var(--danger-wash); font-weight: 600; }
+.chainArrow { color: var(--terra); font-family: var(--mono); font-size: 14px; }
+
+/* 置信度印章 */
+.stamp {
+  display: inline-flex; align-items: center; gap: 10px;
+  font-family: var(--serif-display); font-style: italic; font-weight: 600;
+}
+.stampSeal {
+  width: 58px; height: 58px; border-radius: 50%;
+  border: 2px solid var(--ok); color: var(--ok);
+  display: grid; place-items: center; transform: rotate(-9deg);
+  font-family: var(--mono); font-size: 10px; font-weight: 600; font-style: normal;
+  letter-spacing: 1px; text-transform: uppercase; position: relative;
+  box-shadow: inset 0 0 0 1px var(--ok-wash);
+}
+.stampSeal::before {
+  content: ""; position: absolute; inset: 4px; border-radius: 50%;
+  border: 1px dashed var(--ok); opacity: .5;
+}
+.stampText { font-size: 19px; color: var(--ink); }
+.stampText small { display: block; font-family: var(--mono); font-size: 10px; font-style: normal; color: var(--ink-faint); letter-spacing: 1px; text-transform: uppercase; font-weight: 400; margin-top: 2px; }
+
+/* 下一步清单 */
+.steps { list-style: none; counter-reset: s; }
+.steps li {
+  counter-increment: s; font-family: var(--serif-body); font-size: 15px;
+  color: var(--ink-2); padding: 8px 0 8px 38px; position: relative; line-height: 1.5;
+  border-bottom: 1px dotted var(--rule);
+}
+.steps li:last-child { border-bottom: none; }
+.steps li::before {
+  content: counter(s, decimal-leading-zero); position: absolute; left: 0; top: 8px;
+  font-family: var(--mono); font-size: 12px; color: var(--terra); font-weight: 600;
+  border: 1px solid var(--terra-line); border-radius: 50%; width: 24px; height: 24px;
+  display: grid; place-items: center;
+}
+
+/* 证物卡 Exhibit */
+.exhibits { margin-top: 22px; }
+.exhibitsHead {
+  font-family: var(--serif-display); font-weight: 600; font-style: italic;
+  font-size: 18px; color: var(--ink); margin-bottom: 4px;
+}
+.exhibitsSub {
+  font-family: var(--mono); font-size: 10px; letter-spacing: 1.5px;
+  text-transform: uppercase; color: var(--ink-faint); margin-bottom: 14px;
+  padding-bottom: 12px; border-bottom: 1px solid var(--rule);
+}
+.exhibitGrid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+.exhibit {
+  background: var(--card); border: 1px solid var(--card-edge); border-radius: 3px;
+  padding: 14px 16px; transition: all .2s ease; cursor: pointer; position: relative;
+  box-shadow: var(--shadow-sm);
+}
+.exhibit:hover { transform: translateY(-3px); box-shadow: var(--shadow-lift); border-color: var(--terra-line); }
+.exhibitTag {
+  font-family: var(--serif-display); font-style: italic; font-weight: 600;
+  font-size: 13px; color: var(--terra); margin-bottom: 6px;
+}
+.exhibitTitle { font-family: var(--serif-body); font-size: 14.5px; font-weight: 600; color: var(--ink); margin-bottom: 8px; line-height: 1.3; }
+.exhibitData { font-family: var(--mono); font-size: 11px; color: var(--ink-3); display: flex; flex-direction: column; gap: 4px; }
+.exhibitData .row { display: flex; gap: 8px; }
+.exhibitData .row .lbl { color: var(--ink-faint); min-width: 52px; }
+.exhibitData .row .val { color: var(--ink-2); }
+.exhibitOpen {
+  margin-top: 10px; font-family: var(--mono); font-size: 10.5px; letter-spacing: .5px;
+  color: var(--terra); display: inline-flex; align-items: center; gap: 5px;
+  border-top: 1px dotted var(--rule); padding-top: 9px; width: 100%;
+}
+.exhibitOpen .arr { transition: transform .2s ease; }
+.exhibit:hover .exhibitOpen .arr { transform: translateX(3px); }
+
+/* ----------- 右栏：可视化 / 页边 ----------- */
+.margin {
+  border-left: 1px solid var(--rule); padding: 26px 22px;
+  position: sticky; top: 132px; height: calc(100vh - 132px); overflow-y: auto;
+}
+.marginBlock { margin-bottom: 30px; }
+.marginLabel {
+  font-family: var(--mono); font-size: 9.5px; letter-spacing: 2px;
+  text-transform: uppercase; color: var(--ink-faint); margin-bottom: 12px;
+  display: flex; align-items: center; gap: 8px;
+}
+.marginLabel::before { content: "§"; color: var(--terra); font-family: var(--serif-display); font-style: italic; font-size: 14px; }
+
+/* 时序瀑布图 */
+.waterfall { background: var(--card); border: 1px solid var(--card-edge); border-radius: 3px; padding: 14px; box-shadow: var(--shadow-sm); }
+.wfTitle { font-family: var(--serif-display); font-style: italic; font-weight: 600; font-size: 14px; color: var(--ink); margin-bottom: 2px; }
+.wfSub { font-family: var(--mono); font-size: 9.5px; color: var(--ink-faint); margin-bottom: 14px; letter-spacing: .5px; }
+.wfRow { display: grid; grid-template-columns: 52px 1fr; gap: 8px; align-items: center; margin-bottom: 9px; font-family: var(--mono); font-size: 10px; }
+.wfProto { color: var(--ink-3); text-transform: uppercase; letter-spacing: .5px; text-align: right; }
+.wfTrack { height: 16px; background: var(--paper-3); border-radius: 2px; position: relative; overflow: hidden; }
+.wfBar { position: absolute; height: 100%; border-radius: 2px; display: flex; align-items: center; padding: 0 5px; color: var(--paper); font-size: 8.5px; white-space: nowrap; }
+.wfBar.dns { background: #5a7a3e; }
+.wfBar.tcp { background: #6b5d4a; }
+.wfBar.tls { background: #8a6d3b; }
+.wfBar.http { background: var(--terra); }
+.wfBar.err { background: var(--danger); animation: blink 1.6s ease-in-out infinite; }
+@keyframes blink { 50% { opacity: .55; } }
+.wfAxis { display: flex; justify-content: space-between; font-family: var(--mono); font-size: 9px; color: var(--ink-faint); margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--rule); }
+
+/* 覆盖范围声明 */
+.coverage {
+  background: var(--terra-wash); border: 1px solid var(--terra-line);
+  border-radius: 3px; padding: 14px 16px;
+}
+.coverageHead { font-family: var(--serif-display); font-style: italic; font-weight: 600; font-size: 14px; color: var(--terra); margin-bottom: 8px; }
+.coverageText { font-family: var(--serif-body); font-size: 13px; color: var(--ink-2); line-height: 1.55; }
+.coverageStat { font-family: var(--mono); font-size: 11px; color: var(--ink-3); margin-top: 10px; padding-top: 10px; border-top: 1px dotted var(--terra-line); display: flex; flex-wrap: wrap; gap: 6px; }
+.covChip { background: var(--card); border: 1px solid var(--card-edge); padding: 3px 8px; border-radius: 2px; }
+.covChip b { color: var(--terra); }
+
+/* 拓扑 mini */
+.topo { background: var(--card); border: 1px solid var(--card-edge); border-radius: 3px; padding: 16px 14px; box-shadow: var(--shadow-sm); }
+
+/* ----------- 底部 composer ----------- */
+.composer {
+  position: fixed; bottom: 0; left: 268px; right: 360px;
+  background: linear-gradient(180deg, transparent, var(--paper) 28%);
+  padding: 22px 46px 26px; z-index: 30;
+}
+.composerInner {
+  background: var(--card); border: 1px solid var(--rule);
+  border-radius: 4px; box-shadow: var(--shadow); overflow: hidden;
+  transition: border-color .2s ease;
+}
+.composerInner:focus-within { border-color: var(--terra); box-shadow: var(--shadow), 0 0 0 3px var(--terra-wash); }
+.composerField {
+  width: 100%; border: none; background: transparent; resize: none;
+  font-family: var(--serif-body); font-size: 16px; color: var(--ink);
+  padding: 16px 20px 4px; outline: none; line-height: 1.5;
+}
+.composerField::placeholder { color: var(--ink-faint); font-style: italic; }
+.composerBar {
+  display: flex; align-items: center; gap: 8px; padding: 10px 14px;
+  border-top: 1px solid var(--rule);
+}
+.composerTool {
+  font-family: var(--mono); font-size: 11px; background: transparent;
+  border: 1px solid var(--rule); color: var(--ink-3); padding: 6px 10px;
+  border-radius: 2px; cursor: pointer; transition: all .18s ease;
+  display: inline-flex; align-items: center; gap: 5px;
+}
+.composerTool:hover { border-color: var(--ink); color: var(--ink); }
+.composerSelect {
+  font-family: var(--mono); font-size: 11px; background: var(--paper);
+  border: 1px solid var(--rule); color: var(--ink-2); padding: 6px 8px;
+  border-radius: 2px; cursor: pointer;
+}
+.composerSend {
+  margin-left: auto; font-family: var(--serif-body); font-size: 14px;
+  background: var(--ink); color: var(--paper); border: none;
+  padding: 9px 22px; border-radius: 2px; cursor: pointer; letter-spacing: .5px;
+  display: inline-flex; align-items: center; gap: 8px; transition: all .2s ease;
+}
+.composerSend:hover { background: var(--terra); transform: translateY(-1px); }
+
+/* 工具提示注脚 */
+.footnote {
+  font-family: var(--mono); font-size: 9.5px; color: var(--ink-faint);
+  text-align: center; margin-top: 8px; letter-spacing: .5px;
+}
+
+@media (max-width: 1200px) {
+  .shell { grid-template-columns: 240px minmax(0,1fr); }
+  .margin { display: none; }
+  .composer { right: 0; }
+}
+</style>
+</head>
+<body data-theme="light">
+
+<!-- ===================== 刊头 ===================== -->
+<header class="masthead">
+  <div class="mastheadTop">
+    <div class="mastheadMeta">第 <b>叁柒</b> 期 · 北京<br>2025·01·04 廿二时</div>
+    <div class="wordmark">
+      PCAP<span class="dot">·</span>AI
+      <span class="sub">Packet Forensics Journal</span>
+    </div>
+    <div class="mastheadTools">
+      <button class="iconBtn" id="themeBtn">◐ 夜读</button>
+      <button class="iconBtn">⚙ 配置</button>
+      <button class="iconBtn">? 体例</button>
+    </div>
+  </div>
+  <div class="indexBar">
+    <div class="indexItem"><span class="k">案卷</span><span class="v">No.37</span></div>
+    <div class="indexItem"><span class="k">抓包节点</span><span class="v">1</span></div>
+    <div class="indexItem"><span class="k">协议种类</span><span class="v">6</span></div>
+    <div class="indexItem"><span class="k">RST 复位</span><span class="v alert">12</span></div>
+    <div class="indexItem"><span class="k">DNS 失败</span><span class="v alert">2</span></div>
+    <div class="indexItem"><span class="k">覆盖完整度</span><span class="v good">未截断</span></div>
+  </div>
+</header>
+
+<!-- ===================== 主三栏 ===================== -->
+<div class="shell">
+
+  <!-- 左：案卷目录 -->
+  <aside class="ledger">
+    <div class="ledgerHead">案卷目录</div>
+    <div class="ledgerSub">Case Ledger</div>
+    <button class="newCase">＋ 立卷 · 新建调查</button>
+
+    <div class="caseItem active">
+      <div class="caseNo">No.37 · 进行中</div>
+      <div class="caseTitle">SaaS 访问级联中断</div>
+      <div class="caseDate">01·04 22:13 — 60 包</div>
+    </div>
+    <div class="caseItem">
+      <div class="caseNo">No.36</div>
+      <div class="caseTitle">支付网关 TLS 握手失败</div>
+      <div class="caseDate">01·03 14:20 — 1.2k 包</div>
+    </div>
+    <div class="caseItem">
+      <div class="caseNo">No.35</div>
+      <div class="caseTitle">跨机房重传风暴定位</div>
+      <div class="caseDate">12·29 09:05 — 48k 包</div>
+    </div>
+
+    <div class="ledgerDivider">已归档</div>
+    <div class="caseItem">
+      <div class="caseNo">No.34</div>
+      <div class="caseTitle">DNS 间歇性 SERVFAIL</div>
+      <div class="caseDate">12·21 16:40 — 3.4k 包</div>
+    </div>
+    <div class="caseItem">
+      <div class="caseNo">No.33</div>
+      <div class="caseTitle">F5 后端单向流量</div>
+      <div class="caseDate">12·18 11:12 — 9.7k 包</div>
+    </div>
+  </aside>
+
+  <!-- 中：报告正文 -->
+  <main class="report">
+    <div class="fileHeader reveal" style="animation-delay:.05s">
+      <div class="fileKicker">案卷 No.37 · 网络取证报告</div>
+      <h1 class="fileTitle">SaaS 访问级联中断的成因勘验</h1>
+      <div class="fileByline">
+        <span>抓包节点 · <b>node-1（客户端侧）</b></span>
+        <span>窗口 · <b>22:13:20 — 22:13:33</b></span>
+        <span>主调查 · <b>HypothesisAgent</b></span>
+        <span>模型 · <b>MiniMax-M2.7</b></span>
+      </div>
+    </div>
+
+    <!-- 一轮对话 -->
+    <div class="turn">
+      <!-- 提问 -->
+      <div class="query reveal" style="animation-delay:.12s">
+        <div class="queryBody">
+          <div class="queryText">先查询 DNS 解析失败事件，再查询 HTTP 的 4xx 和 5xx 错误事务，综合判断故障根因。</div>
+          <div class="queryMeta">提交于 22:14:07 · 分析链 · 2 步 · 置信目标 high</div>
+        </div>
+      </div>
+
+      <!-- 调查日志 -->
+      <div class="log reveal" id="log" style="animation-delay:.2s">
+        <div class="logHead" id="logHead">
+          <span class="chev">▾</span> 调查日志 · INVESTIGATION LOG · 11 条
+        </div>
+        <div class="logList">
+          <div class="logRow"><span class="logTime">22:14:07</span><span class="logDot">·</span><span class="logMsg">分析链规划完成：<b>chain（2 步）</b></span></div>
+          <div class="logRow"><span class="logTime">22:14:08</span><span class="logDot">›</span><span class="logMsg tool">step-0 · protocol_event_query{protocol: dns}</span></div>
+          <div class="logRow"><span class="logTime">22:14:09</span><span class="logDot">·</span><span class="logMsg">命中确定性适配器 <b>deterministic_dns</b> · 2 个可疑事务</span></div>
+          <div class="logRow"><span class="logTime">22:14:10</span><span class="logDot">›</span><span class="logMsg tool">step-1 · protocol_event_query{protocol: http}</span></div>
+          <div class="logRow"><span class="logTime">22:14:11</span><span class="logDot">·</span><span class="logMsg">命中 <b>deterministic_http</b> · 12 事务 · 6 条 L7→TCP 关联</span></div>
+          <div class="logRow"><span class="logTime">22:14:12</span><span class="logDot">›</span><span class="logMsg tool">get_case_memory · load_case_graph</span></div>
+          <div class="logRow"><span class="logTime">22:14:13</span><span class="logDot">›</span><span class="logMsg tool">get_insights · get_protocol_correlations</span></div>
+          <div class="logRow"><span class="logTime">22:14:15</span><span class="logDot">›</span><span class="logMsg tool">list_tcp_zero_window · get_query_diagnosis</span></div>
+          <div class="logRow"><span class="logTime">22:14:17</span><span class="logDot">·</span><span class="logMsg">形成假设 3 项 · 验证 2 项 · 排除 1 项</span></div>
+          <div class="logRow"><span class="logTime">22:14:19</span><span class="logDot">·</span><span class="logMsg">综合解读：因果链闭合 <b>DNS→TCP→HTTP</b></span></div>
+          <div class="logRow"><span class="logTime">22:14:20</span><span class="logDot">✓</span><span class="logMsg">结论置信度 <b>high</b> · 生成 4 张证物</span></div>
+        </div>
+      </div>
+
+      <!-- 五段式报告 -->
+      <article class="dossier reveal" style="animation-delay:.3s">
+        <div class="dossierHead">
+          <div>
+            <div class="agent">假设验证专家 · HypothesisAgent</div>
+            <div class="agentSub">Hypothesis-driven Diagnosis</div>
+          </div>
+          <span class="phaseTag">● 结论 conclusion</span>
+        </div>
+        <div class="dossierBody">
+
+          <div class="section">
+            <div class="sectionLabel"><span class="no">壹</span> 判断 · VERDICT</div>
+            <div class="sectionBody">
+              本次访问中断的根因是 <strong>DNS 解析故障引发的级联服务降级</strong>。客户端对
+              <span class="ip">api.saas-portal.io</span> 的解析在 <span class="mono">22:13:22</span> 返回
+              <strong>SERVFAIL（rcode 2）</strong>，应用退化到陈旧缓存地址 <span class="ip">10.0.8.1</span>，
+              该地址已不再承载服务，导致后续 HTTP 请求集中收到 <strong>503</strong>，并伴随握手后
+              <strong>12 次 RST 复位</strong>。
+              <div class="chain">
+                <span class="chainNode root">DNS SERVFAIL</span>
+                <span class="chainArrow">→</span>
+                <span class="chainNode">陈旧缓存 IP</span>
+                <span class="chainArrow">→</span>
+                <span class="chainNode">TCP 握手后 RST ×12</span>
+                <span class="chainArrow">→</span>
+                <span class="chainNode">HTTP 503 ×9</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="section">
+            <div class="sectionLabel"><span class="no">贰</span> 证据 · EVIDENCE</div>
+            <div class="sectionBody">
+              共 4 张可回溯证物。DNS 层：<span class="mono">frame 14</span> 响应 rcode=2、
+              <span class="mono">frame 27</span> 无应答超时。TCP 层：5 个会话在
+              <span class="mono">SYN→SYN/ACK→ACK</span> 完成后 0.3s 内收到对端 RST。
+              HTTP 层：9 个事务返回 503、3 个返回 502，<strong>6 条 L7→TCP 确定性关联</strong>
+              将 HTTP Host 绑定到承载它的 TCP 流。
+            </div>
+          </div>
+
+          <div class="section">
+            <div class="sectionLabel"><span class="no">叁</span> 反证 · COUNTER-EVIDENCE</div>
+            <div class="sectionBody">
+              已排除「网络丢包」假设：未观察到重传前的 <span class="mono">duplicate_ack</span> 堆积，
+              RTT 平稳（均值 1.2ms）。已排除「服务端瓶颈」：未见
+              <span class="mono">Zero Window</span>。当前仅单点（客户端侧）抓包，
+              <strong>无法确证 RST 来自服务端还是中间设备</strong>，需服务端侧抓包补证。
+            </div>
+          </div>
+
+          <div class="section">
+            <div class="sectionLabel"><span class="no">肆</span> 置信度 · CONFIDENCE</div>
+            <div class="sectionBody">
+              <div class="stamp">
+                <div class="stampSeal">HIGH</div>
+                <div class="stampText">高 · 因果链闭合
+                  <small>DNS 证据直接 · TCP/HTTP 时序吻合</small>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="section">
+            <div class="sectionLabel"><span class="no">伍</span> 下一步 · NEXT STEPS</div>
+            <ol class="steps">
+              <li>核对 <span class="mono">api.saas-portal.io</span> 的权威 DNS 记录与上游解析器健康度，确认 SERVFAIL 来源。</li>
+              <li>在服务端侧补抓一段，用 RST 方向判定来自服务端进程还是中间防火墙/LB。</li>
+              <li>检查客户端 DNS 缓存 TTL 策略，避免解析失败时退化到陈旧地址。</li>
+            </ol>
+          </div>
+
+        </div>
+      </article>
+
+      <!-- 证物 -->
+      <section class="exhibits reveal" style="animation-delay:.42s">
+        <div class="exhibitsHead">证物清单</div>
+        <div class="exhibitsSub">Exhibits · 点击任一证物以原始过滤器在本地 Wireshark 复核</div>
+        <div class="exhibitGrid">
+          <div class="exhibit">
+            <div class="exhibitTag">Exhibit A</div>
+            <div class="exhibitTitle">DNS SERVFAIL 响应</div>
+            <div class="exhibitData">
+              <div class="row"><span class="lbl">frame</span><span class="val">№ 14</span></div>
+              <div class="row"><span class="lbl">filter</span><span class="val">dns.flags.rcode == 2</span></div>
+              <div class="row"><span class="lbl">node</span><span class="val">node-1 · 22:13:22</span></div>
+            </div>
+            <div class="exhibitOpen">在 Wireshark 中打开 <span class="arr">→</span></div>
+          </div>
+          <div class="exhibit">
+            <div class="exhibitTag">Exhibit B</div>
+            <div class="exhibitTitle">握手后 RST 复位（首例）</div>
+            <div class="exhibitData">
+              <div class="row"><span class="lbl">frame</span><span class="val">№ 31</span></div>
+              <div class="row"><span class="lbl">filter</span><span class="val">tcp.flags.reset == 1</span></div>
+              <div class="row"><span class="lbl">pair</span><span class="val">10.0.2.5 ↔ 10.0.8.1:443</span></div>
+            </div>
+            <div class="exhibitOpen">在 Wireshark 中打开 <span class="arr">→</span></div>
+          </div>
+          <div class="exhibit">
+            <div class="exhibitTag">Exhibit C</div>
+            <div class="exhibitTitle">HTTP 503 错误事务</div>
+            <div class="exhibitData">
+              <div class="row"><span class="lbl">frame</span><span class="val">№ 38</span></div>
+              <div class="row"><span class="lbl">filter</span><span class="val">http.response.code == 503</span></div>
+              <div class="row"><span class="lbl">host</span><span class="val">api.saas-portal.io</span></div>
+            </div>
+            <div class="exhibitOpen">在 Wireshark 中打开 <span class="arr">→</span></div>
+          </div>
+          <div class="exhibit">
+            <div class="exhibitTag">Exhibit D</div>
+            <div class="exhibitTitle">L7→TCP 关联（Host 绑定）</div>
+            <div class="exhibitData">
+              <div class="row"><span class="lbl">kind</span><span class="val">http_to_tcp</span></div>
+              <div class="row"><span class="lbl">filter</span><span class="val">tcp.stream eq 4</span></div>
+              <div class="row"><span class="lbl">conf</span><span class="val">certain</span></div>
+            </div>
+            <div class="exhibitOpen">在 Wireshark 中打开 <span class="arr">→</span></div>
+          </div>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <!-- 右：页边可视化 -->
+  <aside class="margin">
+    <div class="marginBlock reveal" style="animation-delay:.36s">
+      <div class="marginLabel">跨协议时序</div>
+      <div class="waterfall">
+        <div class="wfTitle">故障时刻链路分解</div>
+        <div class="wfSub">22:13:21 — 22:13:23 · 客户端侧</div>
+        <div class="wfRow"><span class="wfProto">DNS</span><div class="wfTrack"><div class="wfBar dns" style="left:2%;width:20%">查询</div><div class="wfBar err" style="left:24%;width:14%">SERVFAIL</div></div></div>
+        <div class="wfRow"><span class="wfProto">TCP</span><div class="wfTrack"><div class="wfBar tcp" style="left:38%;width:18%">握手</div><div class="wfBar err" style="left:57%;width:10%">RST</div></div></div>
+        <div class="wfRow"><span class="wfProto">TLS</span><div class="wfTrack"><div class="wfBar tls" style="left:56%;width:8%">Hello</div></div></div>
+        <div class="wfRow"><span class="wfProto">HTTP</span><div class="wfTrack"><div class="wfBar err" style="left:66%;width:30%">503 ×9</div></div></div>
+        <div class="wfAxis"><span>+0.0s</span><span>+1.0s</span><span>+2.0s</span></div>
+      </div>
+    </div>
+
+    <div class="marginBlock reveal" style="animation-delay:.46s">
+      <div class="marginLabel">分析覆盖范围</div>
+      <div class="coverage">
+        <div class="coverageHead">本案勘验边界</div>
+        <div class="coverageText">
+          自动洞察基于异常包预提取，覆盖 TCP 异常、DNS 失败、TLS 告警/握手、
+          HTTP 4xx/5xx、ICMP 异常。<strong>未覆盖的协议事件不代表不存在</strong>，
+          需以工具直接验证。
+        </div>
+        <div class="coverageStat">
+          <span class="covChip">TCP 重传 <b>2</b></span>
+          <span class="covChip">Zero Win <b>2</b></span>
+          <span class="covChip">DNS 失败 <b>1</b></span>
+          <span class="covChip">HTTP 5xx <b>4</b></span>
+          <span class="covChip">ICMP <b>2</b></span>
+          <span class="covChip">截断 <b>否</b></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="marginBlock reveal" style="animation-delay:.54s">
+      <div class="marginLabel">链路拓扑</div>
+      <div class="topo">
+        <svg viewBox="0 0 300 150" style="width:100%;height:auto" font-family="IBM Plex Mono">
+          <defs>
+            <marker id="ar" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+              <path d="M0,0 L6,3 L0,6" fill="none" stroke="var(--terra)" stroke-width="1"/>
+            </marker>
+          </defs>
+          <line x1="55" y1="40" x2="150" y2="40" stroke="var(--rule)" stroke-width="1" marker-end="url(#ar)"/>
+          <line x1="150" y1="55" x2="150" y2="95" stroke="var(--danger)" stroke-width="1" stroke-dasharray="3 3" marker-end="url(#ar)"/>
+          <line x1="150" y1="110" x2="245" y2="110" stroke="var(--rule)" stroke-width="1" marker-end="url(#ar)"/>
+          <g>
+            <rect x="8" y="28" width="48" height="24" rx="2" fill="var(--paper)" stroke="var(--rule)"/>
+            <text x="32" y="43" text-anchor="middle" font-size="9" fill="var(--ink)">客户端</text>
+          </g>
+          <g>
+            <rect x="118" y="28" width="64" height="24" rx="2" fill="var(--paper)" stroke="var(--ink-faint)"/>
+            <text x="150" y="43" text-anchor="middle" font-size="8.5" fill="var(--ink)">DNS 解析器</text>
+          </g>
+          <g>
+            <rect x="116" y="98" width="68" height="24" rx="2" fill="var(--danger-wash)" stroke="var(--danger)"/>
+            <text x="150" y="113" text-anchor="middle" font-size="8" fill="var(--danger)">陈旧 10.0.8.1</text>
+          </g>
+          <g>
+            <rect x="200" y="98" width="56" height="24" rx="2" fill="var(--paper)" stroke="var(--rule)"/>
+            <text x="228" y="113" text-anchor="middle" font-size="8.5" fill="var(--ink-3)">SaaS API</text>
+          </g>
+          <text x="92" y="36" font-size="7.5" fill="var(--ink-faint)">解析</text>
+          <text x="156" y="80" font-size="7.5" fill="var(--danger)">RST</text>
+        </svg>
+      </div>
+    </div>
+  </aside>
+
+</div>
+
+<!-- ===================== composer ===================== -->
+<div class="composer">
+  <div class="composerInner">
+    <textarea class="composerField" rows="1" placeholder="续问、补充抓包位置，或提出新的勘验请求……"></textarea>
+    <div class="composerBar">
+      <button class="composerTool">＋ 附 pcap</button>
+      <select class="composerSelect"><option>MiniMax-M2.7</option><option>Opus 4.8</option></select>
+      <select class="composerSelect"><option>思考 · 标准</option><option>思考 · 深入</option></select>
+      <button class="composerSend">付印 ↵</button>
+    </div>
+  </div>
+  <div class="footnote">证据卡以原始 display filter 与帧号回溯本地 Wireshark · 结论均绑定可回溯 ID</div>
+</div>
+
+<script>
+  // 主题切换
+  const themeBtn = document.getElementById('themeBtn');
+  themeBtn.addEventListener('click', () => {
+    const body = document.body;
+    const dark = body.getAttribute('data-theme') === 'dark';
+    body.setAttribute('data-theme', dark ? 'light' : 'dark');
+    themeBtn.textContent = dark ? '◐ 夜读' : '◑ 日读';
+  });
+  // 调查日志折叠
+  const logHead = document.getElementById('logHead');
+  logHead.addEventListener('click', () => document.getElementById('log').classList.toggle('collapsed'));
+  // 案卷切换
+  document.querySelectorAll('.caseItem').forEach(it => it.addEventListener('click', () => {
+    document.querySelectorAll('.caseItem').forEach(x => x.classList.remove('active'));
+    it.classList.add('active');
+  }));
+  // textarea 自适应
+  const ta = document.querySelector('.composerField');
+  ta.addEventListener('input', () => { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 160) + 'px'; });
+</script>
+</body>
+</html>
