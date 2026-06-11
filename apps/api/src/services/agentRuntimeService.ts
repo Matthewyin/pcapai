@@ -219,6 +219,7 @@ export function createAgentRuntimeService(deps: AgentRuntimeDependencies) {
           graph: freshGraph,
           question: `基于以下分析链结果，综合解读异常并给出诊断结论：\n${finalAnswer.answer}`,
           chatHistory: request.chatHistory,
+          onTrace: emit ? (text) => emit.thought(text) : undefined,
           tools: deps.createAgentTools(graph.spec.caseId, request.question)
         });
         answer = {

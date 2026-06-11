@@ -465,7 +465,8 @@ const agentToolRegistryService = createAgentToolRegistryService({
   loadGraph,
   recordToolRun,
   runLlmExplain: async (graph, question) => {
-    const answer = await runPcapTroubleshootingAgent({ graph, question, chatHistory: undefined });
+    // leader 提示词依赖 get_case_memory/load_case_graph 等 case graph 工具，必须随调用注入
+    const answer = await runPcapTroubleshootingAgent({ graph, question, chatHistory: undefined, tools: createCaseGraphToolsFor(graph.spec.caseId) });
     return answer;
   }
 });
