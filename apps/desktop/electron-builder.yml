@@ -1,0 +1,62 @@
+appId: com.pcapai.app
+productName: pcapAI
+copyright: Copyright © 2026 pcapAI
+directories:
+  output: release
+  buildResources: build
+files:
+  - dist/**/*
+  - package.json
+extraResources:
+  # 整个项目根作为 Resources/app；运行时 process.resourcesPath/app 指向这里
+  - from: ../../
+    to: app
+    filter:
+      - apps/api/dist/**/*
+      - apps/web/dist/**/*
+      - mcp/tshark-query/dist/**/*
+      - mcp/evidence-opener/dist/**/*
+      - packages/shared/dist/**/*
+      - config/defaults.json
+      - apps/api/package.json
+      - mcp/tshark-query/package.json
+      - mcp/evidence-opener/package.json
+      - apps/web/package.json
+      - packages/shared/package.json
+      - package.json
+      - RFC/**/*
+      - data/rfc-index/**/*
+mac:
+  category: public.app-category.developer-tools
+  target:
+    - target: dmg
+      arch:
+        - arm64
+        - x64
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  extendInfo:
+    NSHumanReadableCopyright: Copyright © 2026 pcapAI
+    LSEnvironment:
+      PCAPAI_DESKTOP_MODE: prod
+    CFBundleDocumentTypes:
+      - CFBundleTypeName: Packet Capture
+        CFBundleTypeRole: Viewer
+        LSHandlerRank: Default
+        LSItemContentTypes:
+          - com.wireshark.pcap
+          - com.wireshark.pcapng
+        CFBundleTypeExtensions:
+          - pcap
+          - pcapng
+          - cap
+dmg:
+  title: pcapAI ${version}
+  contents:
+    - x: 130
+      y: 220
+      type: file
+    - x: 410
+      y: 220
+      type: link
+      path: /Applications
