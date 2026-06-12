@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { Router } from "express";
 import multer from "multer";
@@ -300,6 +300,53 @@ function resetAnalysis(graph: CaseGraph) {
     path: {
       nodes: graph.path.nodes.map((node) => ({ ...node, status: "unknown" as const })),
       edges: []
+    }
+  };
+}
+
+// 抓包文件入库的共享逻辑：裁剪 payload → 读时间范围 → 重置分析 → 生成证据卡。
+// attachments（multer 上传）与 attachments-by-path（桌面双击本地文件）共用。
+async function ingestCaptureFiles(caseId: string, entries: Array<{ pcapPath: string; originalName: string }>) {
+  let graph = loadGraph(caseId);
+  const baseNodeIndex = graph.captures.length;
+  const addedCaptures = [];
+  for (const [index, entry] of entries.entries()) {
+    const strippedPath = await stripPayload(entry.pcapPath);
+    const pcapFilename = path.basename(strippedPath);
+    const capture = CaptureNodeSchema.parse({
+      nodeId: `node-${baseNodeIndex + index + 1}`,
+      name: entry.originalName.replace(/\.[^.]+$/, "") || `抓包节点 ${baseNodeIndex + index + 1}`,
+      role: "unknown",
+      interfaceDirection: "unknown",
+      capturePosition: "",
+      pcapFilename
+    });
+    graph = addCapture(graph, capture);
+    addedCaptures.push(capture);
+  }
+  const ranges = await readCaptureTimeRanges(graph, addedCaptures);
+  graph = graphWithCaptureTimeRanges(resetAnalysis(graph), ranges);
+  const evidenceCards = captureEvidenceCardsFromRanges(ranges);
+  writeCaseGraph(graph);
+  cacheCase(caseId, graph);
+  return { graph, evidenceCards };
+}
+
+function captureUploadResponse(graph: CaseGraph, evidenceCards: EvidenceCard[], fileCount: number) {
+  return {
+    graph,
+    evidenceCards,
+    agentAnswer: {
+      answer: [
+        `已收到 ${fileCount} 个数据包文件。`,
+        ...evidenceCards.map((card) => `- ${card.summary}`),
+        "请补充这些抓包节点的角色、抓包位置、入/出方向，以及故障时间、源地址、目的地址和端口。"
+      ].join("\n"),
+      thoughts: ["接收 pcap。", "裁剪 payload 后用 tshark-query 读取时间范围。", "当前缺少节点上下文，先追问必要信息。"],
+      evidenceCards,
+      actions: ["request_upload"],
+      missingContext: ["节点角色", "抓包位置", "入/出方向", "故障时间", "源地址", "目的地址", "端口"],
+      confidence: "needs_context"
     }
   };
 }
@@ -774,44 +821,31 @@ export function createAgentRouter() {
     const files = Array.isArray(req.files) ? req.files : [];
     if (!files.length) return res.status(400).json({ error: `${apiConfig.uploadFieldName} file is required` });
     try {
-      let graph = loadGraph(caseId);
-      const addedCaptures = [];
-      const baseNodeIndex = graph.captures.length;
-      for (const [index, file] of files.entries()) {
-        const strippedPath = await stripPayload(file.path);
-        const pcapFilename = path.basename(strippedPath);
-        const capture = CaptureNodeSchema.parse({
-          nodeId: `node-${baseNodeIndex + index + 1}`,
-          name: file.originalname.replace(/\.[^.]+$/, "") || `抓包节点 ${baseNodeIndex + index + 1}`,
-          role: "unknown",
-          interfaceDirection: "unknown",
-          capturePosition: "",
-          pcapFilename
-        });
-        graph = addCapture(graph, capture);
-        addedCaptures.push(capture);
-      }
-      const ranges = await readCaptureTimeRanges(graph, addedCaptures);
-      graph = graphWithCaptureTimeRanges(resetAnalysis(graph), ranges);
-      const evidenceCards = captureEvidenceCardsFromRanges(ranges);
-      writeCaseGraph(graph);
-      cacheCase(caseId, graph);
-      return res.status(201).json({
-        graph,
-        evidenceCards,
-        agentAnswer: {
-          answer: [
-            `已收到 ${files.length} 个数据包文件。`,
-            ...evidenceCards.map((card) => `- ${card.summary}`),
-            "请补充这些抓包节点的角色、抓包位置、入/出方向，以及故障时间、源地址、目的地址和端口。"
-          ].join("\n"),
-          thoughts: ["通过聊天附件接收 pcap。", "裁剪 payload 后用 tshark-query 读取时间范围。", "当前缺少节点上下文，先追问必要信息。"],
-          evidenceCards,
-          actions: ["request_upload"],
-          missingContext: ["节点角色", "抓包位置", "入/出方向", "故障时间", "源地址", "目的地址", "端口"],
-          confidence: "needs_context"
-        }
+      const { graph, evidenceCards } = await ingestCaptureFiles(caseId, files.map((file) => ({ pcapPath: file.path, originalName: file.originalname })));
+      return res.status(201).json(captureUploadResponse(graph, evidenceCards, files.length));
+    } catch (error) {
+      return res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  // 桌面端双击 .pcap：按本地路径入库（先 copy 进 captures 目录，绝不改动用户原文件）
+  router.post(`/cases/:caseId/attachments-by-path`, async (req, res) => {
+    const caseId = String(req.params.caseId);
+    const rawPaths = Array.isArray(req.body?.paths) ? req.body.paths : [];
+    const sourcePaths = rawPaths.filter((item: unknown): item is string => typeof item === "string" && /\.(pcap|pcapng|cap)$/i.test(item));
+    if (!sourcePaths.length) return res.status(400).json({ error: "paths must be a non-empty array of .pcap/.pcapng/.cap file paths" });
+    try {
+      const directory = capturesDirectory(caseId);
+      mkdirSync(directory, { recursive: true });
+      const entries = sourcePaths.map((sourcePath: string, index: number) => {
+        if (!existsSync(sourcePath)) throw new Error(`file not found: ${sourcePath}`);
+        const originalName = path.basename(sourcePath);
+        const destPath = path.join(directory, `${Date.now()}-${index}-${safePathPart(originalName)}`);
+        copyFileSync(sourcePath, destPath);
+        return { pcapPath: destPath, originalName };
       });
+      const { graph, evidenceCards } = await ingestCaptureFiles(caseId, entries);
+      return res.status(201).json(captureUploadResponse(graph, evidenceCards, entries.length));
     } catch (error) {
       return res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
     }

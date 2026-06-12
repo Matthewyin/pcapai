@@ -115,6 +115,10 @@ function buildSidecarEnv() {
   // Keychain 中的 LLM Key 在 spawn 前注入；优先于 .env 文件（API 读 process.env）
   if (cachedLlmKey) env.PCAPAI_LLM_API_KEY = cachedLlmKey;
   if (!isDev) {
+    // 生产期 sidecar 与其 spawn 的 MCP 子进程都用 Electron 二进制当 node 运行时，
+    // 必须设此变量让 execPath 以纯 node 模式启动（否则会拉起 GUI 实例）。
+    // native module（better-sqlite3 / keytar）均为 N-API，Electron ABI 130 下实测可加载。
+    env.ELECTRON_RUN_AS_NODE = "1";
     env.PCAPAI_CASE_DATA_DIR ??= dirs.cases;
     env.PCAPAI_RAG_INDEX_PATH ??= path.join(dirs.rfcIndex, "rfc.db");
     env.PCAPAI_LEARNED_PATTERNS_PATH ??= path.join(userData, "learned_patterns.json");

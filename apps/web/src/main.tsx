@@ -1754,6 +1754,50 @@ function openWireshark(pcap,filter){fetch("${window.location.origin}/api/cases/$
     localStorage.setItem("pcapai-theme", theme);
   }, [theme]);
 
+  // 桌面端双击 .pcap：每次新建 case 后按本地路径导入（绝不动用户原文件，后端 copy）
+  async function openPcapFromPaths(paths: string[]) {
+    if (!paths.length) return;
+    const created = await createNewChat();
+    const caseId = created?.spec?.caseId;
+    if (!caseId) return;
+    setStatus("正在导入数据包...");
+    try {
+      const response = await fetch(`/api/cases/${caseId}/attachments-by-path`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ paths })
+      });
+      const data = await response.json();
+      if (!response.ok) { setStatus(formatApiError(data)); return; }
+      setGraph(data.graph);
+      setMappingHints(data.graph.mappingHints || []);
+      setTimeOffsetHints(data.graph.timeOffsetHints || []);
+      await loadCaseHistory();
+      setStatus(`已导入数据包，读取到 ${capturePacketTotal(data.graph)} 个包。`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  // Electron 主进程菜单与文件关联事件（Web 模式下不触发）
+  React.useEffect(() => {
+    const onNewCase = () => { void createNewChat(); };
+    const onOpenPcap = () => { composerFileInputRef.current?.click(); };
+    const onOpenPcapFile = (event: Event) => {
+      const detail = (event as CustomEvent<string>).detail;
+      if (typeof detail === "string" && detail) void openPcapFromPaths([detail]);
+    };
+    window.addEventListener("pcapai:new-case", onNewCase);
+    window.addEventListener("pcapai:open-pcap", onOpenPcap);
+    window.addEventListener("pcapai:open-pcap-file", onOpenPcapFile as EventListener);
+    return () => {
+      window.removeEventListener("pcapai:new-case", onNewCase);
+      window.removeEventListener("pcapai:open-pcap", onOpenPcap);
+      window.removeEventListener("pcapai:open-pcap-file", onOpenPcapFile as EventListener);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   React.useEffect(() => {
     function closeMenusOnOutsideClick(event: PointerEvent) {
       const target = event.target;
