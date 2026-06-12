@@ -125,6 +125,11 @@ export const apiConfig = {
   caseDataDir: process.env.PCAPAI_CASE_DATA_DIR
     ? path.resolve(process.env.PCAPAI_CASE_DATA_DIR)
     : path.resolve(workspaceRoot, defaults.api.caseDataDir),
+  // 本地自用：API 进程同源托管前端静态产物（前端与 /api 同端口，相对路径无断裂）
+  serveWeb: process.env.PCAPAI_SERVE_WEB === "1",
+  webDistPath: process.env.PCAPAI_WEB_DIST_PATH
+    ? path.resolve(process.env.PCAPAI_WEB_DIST_PATH)
+    : path.resolve(workspaceRoot, "apps/web/dist"),
   learnedPatternsPath: process.env.PCAPAI_LEARNED_PATTERNS_PATH
     ? path.resolve(process.env.PCAPAI_LEARNED_PATTERNS_PATH)
     : path.resolve(workspaceRoot, "data/learned_patterns.json"),

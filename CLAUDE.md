@@ -10,7 +10,8 @@ pcapAI is an Agent-first packet troubleshooting chat workbench. Its primary unit
 
 ```bash
 npm install                # install all workspace deps
-npm run dev                # start API + web using config/defaults.json
+npm run launch             # 本地自用：构建前端 + 起单进程 API（同源托管前端，PCAPAI_SERVE_WEB=1）+ 开浏览器独立窗口；也可双击 pcapAI.command
+npm run dev                # 开发模式：API + web（Vite HMR，双进程）using config/defaults.json
 npm run build              # build all workspaces
 npm run check              # type-check all workspaces
 npm run test               # run tests across workspaces (if present)
@@ -39,7 +40,9 @@ All runtime defaults live here: API host/port (default `30022`), CORS origins, M
 
 ### `apps/api` — Express API + Agent runtime (`@pcapai/api`)
 - **`src/config.ts`** — loads defaults from `config/defaults.json` and applies `PCAPAI_*` env overrides. Exports `apiConfig` and `updateLlmConfig()`.
-- **`src/index.ts`** — Express app configured from `apiConfig`.
+- **`src/index.ts`** — Express app configured from `apiConfig`; exports `startApi()`. 当 `PCAPAI_SERVE_WEB=1` 时在 `/api` 路由后同源托管 `apps/web/dist`（含 SPA fallback），供本地 web app 模式单进程运行。
+- **`scripts/launch.mjs`** + **`pcapAI.command`** — 本地启动器：构建前端 → 起单进程 API（同源托管）→ 等 health → 开 Chrome `--app` 独立窗口（无地址栏，近似桌面 app），回退系统默认浏览器。
+- **`apps/desktop`** — Electron 外壳（实验性，非主路径）。已实现 sidecar/依赖检测/.pcap 关联/Keychain，但本地自用推荐 `npm run launch` 的 web app 模式。
 - **`src/http/routes.ts`** — REST endpoints. Key routes:
   - `GET /api/health`
   - `GET/POST /api/settings/llm`, `GET/POST/DELETE /api/settings/llm/profiles`, `POST /api/settings/llm/test` — LLM config CRUD with profile support
