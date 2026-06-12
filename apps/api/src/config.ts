@@ -70,6 +70,7 @@ const defaults = JSON.parse(readFileSync(configPath, "utf8")) as {
       timeOverlapToleranceSeconds: number;
     };
     planner: {
+      learnedBypassMinHits: number;
       fallbackPatterns: {
         usageHelp: string;
         networkStatistics: string;
@@ -164,6 +165,7 @@ export const apiConfig = {
     timeOverlapToleranceSeconds: numberFromEnv(process.env.PCAPAI_PATH_TIME_OVERLAP_TOLERANCE_SECONDS, defaults.api.pathCorrelation.timeOverlapToleranceSeconds)
   },
   planner: {
+    learnedBypassMinHits: numberFromEnv(process.env.PCAPAI_PLANNER_LEARNED_BYPASS_MIN_HITS, defaults.api.planner.learnedBypassMinHits),
     fallbackPatterns: {
       ...defaults.api.planner.fallbackPatterns,
       ...objectFromJsonEnv(process.env.PCAPAI_PLANNER_FALLBACK_PATTERNS)

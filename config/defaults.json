@@ -50,6 +50,7 @@
       "timeOverlapToleranceSeconds": 3
     },
     "planner": {
+      "learnedBypassMinHits": 3,
       "fallbackPatterns": {
         "usageHelp": "怎么用|怎样使用|如何使用|使用方法|使用说明|帮助|新手|流程|怎么开始|如何开始|这个\\s*agent.*(做什么|怎么用|如何用)|agent.*(怎么用|如何用|使用)",
         "networkStatistics": "IP|端口|port|\\bRST\\b|reset|复位|重传|retransmission|HTTP.*状态码|DNS.*rcode|时间范围|时间窗口|通信对|通讯对|tcp.*连接",

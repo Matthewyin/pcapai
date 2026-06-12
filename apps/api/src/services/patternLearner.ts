@@ -55,6 +55,23 @@ export function listLearnedPatterns(): LearnedPattern[] {
   return readStore().patterns;
 }
 
+// 直通车选择：命中次数达到阈值的学习模式可绕过 Chain Planner 直接走确定性路径
+export function selectBypassPattern(patterns: LearnedPattern[], question: string, minHits: number): LearnedPattern | null {
+  for (const pattern of patterns) {
+    if (pattern.hitCount < minHits) continue;
+    try {
+      if (new RegExp(pattern.regex, "i").test(question)) return pattern;
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
+export function findBypassPattern(question: string, minHits: number): LearnedPattern | null {
+  return selectBypassPattern(readStore().patterns, question, minHits);
+}
+
 export function deleteLearnedPattern(regex: string, adapterId: string): boolean {
   const store = readStore();
   const remaining = store.patterns.filter((p) => !(p.regex === regex && p.adapterId === adapterId));

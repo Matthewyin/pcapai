@@ -15,6 +15,7 @@ npm run build              # build all workspaces
 npm run check              # type-check all workspaces
 npm run test               # run tests across workspaces (if present)
 npm run rag:build          # build RFC full-text index (SQLite FTS5) from RFC/ txt corpus
+npm run eval               # behavioral eval against running API (golden cases in apps/api/scripts/evalCases.json); requires dev server + LLM key; [-- --case <id>] to run one
 ```
 
 Individual workspace commands:

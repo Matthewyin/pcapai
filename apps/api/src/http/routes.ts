@@ -16,7 +16,7 @@ import { runAgentCompatibilityCheck, runPcapTroubleshootingAgent } from "../agen
 import { createCaseGraphTools } from "../agents/caseGraphTools.js";
 import { createRfcTools } from "../agents/rfcTools.js";
 import { rfcIndexStatus, searchRfc } from "../services/rfcRagService.js";
-import { deleteLearnedPattern, incrementHitCount, learnFromAgentRun, listLearnedPatterns, loadLearnedPatterns } from "../services/patternLearner.js";
+import { deleteLearnedPattern, findBypassPattern, incrementHitCount, learnFromAgentRun, listLearnedPatterns, loadLearnedPatterns } from "../services/patternLearner.js";
 import { apiConfig } from "../config.js";
 import { getCaptureTimeRangeWithMcp, getConversationPacketsWithMcp, listDnsPacketsWithMcp, listHttpPacketsWithMcp, listIcmpEventsWithMcp, listTcpResetsWithMcp, listTcpRetransmissionsWithMcp, listTcpStreamsWithMcp, followTcpStreamWithMcp, listTcpZeroWindowWithMcp, listTlsPacketsWithMcp, listUdpPacketsWithMcp, queryPacketsWithMcp } from "../mcp/tsharkQueryClient.js";
 import { createPacketPairAnswer, createProtocolQueryAnswer, groupPacketPairs, noCaptureAnswer, pairGroupFromPackets, pairKey, protocolPacketCard } from "../protocolAdapters/builders.js";
@@ -499,7 +499,8 @@ const agentRuntimeService = createAgentRuntimeService({
   createAgentTools: (caseId, question) => [...createCaseGraphToolsFor(caseId), ...createRfcTools(), ...agentToolRegistryService.createSdkTools(caseId, question)],
   learnFromAgentRun: (question, toolCalls, adapterIds) => {
     learnFromAgentRun(question, toolCalls, adapterIds).catch(() => {});
-  }
+  },
+  findLearnedBypass: (question) => findBypassPattern(question, apiConfig.planner.learnedBypassMinHits)
 });
 
 export const pathCorrelationTestHooks = {

@@ -13,7 +13,8 @@
     "build": "npm run build --workspaces --if-present",
     "check": "npm run check --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
-    "rag:build": "npm run rag:build -w apps/api"
+    "rag:build": "npm run rag:build -w apps/api --",
+    "eval": "npm run eval -w apps/api --"
   },
   "devDependencies": {
     "concurrently": "^9.2.1",

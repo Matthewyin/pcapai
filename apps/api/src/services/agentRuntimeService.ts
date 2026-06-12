@@ -53,6 +53,7 @@ type AgentRuntimeDependencies = {
   adapterIds: () => string[];
   createAgentTools: (caseId: string, question: string) => Tool[];
   learnFromAgentRun: (question: string, toolCalls: string[], adapterIds: string[]) => void;
+  findLearnedBypass: (question: string) => { regex: string; adapterId: string } | null;
 };
 
 function singlePlanFromChain(chainPlan: AnalysisChainPlan): AgentIntentPlan {
@@ -119,6 +120,32 @@ function shouldInterviewBeforeExecution(graph: CaseGraph, chainPlan: AnalysisCha
 }
 
 export function createAgentRuntimeService(deps: AgentRuntimeDependencies) {
+  // 高命中学习模式直通车：确定性路径直接执行，省一次 planner LLM 调用；未产出结果则回退正常流程
+  async function tryLearnedBypass(graph: CaseGraph, request: AgentChatRequest, startedAt: number, onTrace?: (text: string) => void) {
+    const bypass = deps.findLearnedBypass(request.question);
+    if (!bypass) return null;
+    onTrace?.(`命中高置信学习模式（${bypass.adapterId}），跳过分析链规划直接执行。`);
+    const plan: AgentIntentPlan = {
+      intent: "protocol_event_query",
+      confidence: "high",
+      reason: `命中高置信学习模式（regex: ${bypass.regex} → ${bypass.adapterId}），跳过规划`,
+      missingContext: []
+    };
+    try {
+      const result = await deps.executeChainStep(graph, request.question, "protocol_event_query", {});
+      if (!result) return null;
+      const answer = deps.answerWithPlannerThought(result.answer, plan);
+      deps.recordAnswerRun(graph.spec.caseId, request.question, plan, "learned_bypass", answer, Date.now() - startedAt);
+      deps.updateRuntimeStatus(statusPatch(graph, "learned_bypass"));
+      deps.syncMemoryFromQueryRuns(deps.loadGraph(graph.spec.caseId));
+      return { status: "learned_bypass", answer };
+    } catch {
+      // 直通失败不致命，回退正常规划流程
+      onTrace?.("学习模式直通执行失败，回退到正常规划流程。");
+      return null;
+    }
+  }
+
   function executeInterview(graph: CaseGraph, request: AgentChatRequest, chainPlan: AnalysisChainPlan, durationMs: number, startedAt: number) {
     const plan = singlePlanFromChain(chainPlan);
     const answer = deps.answerWithPlannerThought(deps.diagnosticInterviewAnswer(graph, request.question, chainPlan.missingContext), plan);
@@ -252,6 +279,8 @@ export function createAgentRuntimeService(deps: AgentRuntimeDependencies) {
       deps.updateRuntimeStatus(statusPatch(graph, "llm_key_required", "missing llm api key"));
       return { status: "llm_key_required", answer };
     }
+    const bypassResult = await tryLearnedBypass(graph, request, startedAt);
+    if (bypassResult) return bypassResult;
     const plannerStartedAt = Date.now();
     const chainPlan = await deps.planChain(graph, request.question, undefined, request.chatHistory);
     const durationMs = Date.now() - plannerStartedAt;
@@ -272,6 +301,13 @@ export function createAgentRuntimeService(deps: AgentRuntimeDependencies) {
       emit.thought("未配置 LLM API Key，Agent 分析未启动。");
       emitAnswerInChunks(emit, answer.answer);
       emit.done(answer);
+      return;
+    }
+    const bypassResult = await tryLearnedBypass(graph, request, startedAt, (text) => emit.thought(text));
+    if (bypassResult) {
+      bypassResult.answer.thoughts?.forEach((thought) => emit.thought(thought));
+      emitAnswerInChunks(emit, bypassResult.answer.answer);
+      emit.done(bypassResult.answer);
       return;
     }
     const plannerStartedAt = Date.now();

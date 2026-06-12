@@ -1,4 +1,5 @@
 import { existsSync, statSync } from "node:fs";
+import path from "node:path";
 import Database from "better-sqlite3";
 import { apiConfig } from "../config.js";
 import { buildFtsMatchQuery } from "./rfcCorpus.js";
@@ -145,8 +146,14 @@ export function rfcIndexStatus() {
   const meta = Object.fromEntries(
     (database.prepare("SELECT key, value FROM meta").all() as Array<{ key: string; value: string }>).map((row) => [row.key, row.value])
   );
+  // 陈旧检测：RFC 官方索引文件比构建时间新说明语料已更新，提示重建
+  const rfcIndexFile = path.join(apiConfig.rag.rfcDir, "rfc-index.txt");
+  const builtAtMs = Date.parse(meta.builtAt || "") || 0;
+  const stale = existsSync(rfcIndexFile) && statSync(rfcIndexFile).mtimeMs > builtAtMs;
   return {
     built: true,
+    stale,
+    ...(stale ? { staleNote: "RFC 语料比索引新，请重新运行 npm run rag:build。" } : {}),
     indexPath: apiConfig.rag.indexPath,
     sizeBytes: statSync(apiConfig.rag.indexPath).size,
     builtAt: meta.builtAt,

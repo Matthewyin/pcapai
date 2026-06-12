@@ -1,4 +1,4 @@
-import { Agent, OpenAIProvider, Runner, tool, withTrace, type Tool } from "@openai/agents";
+import { Agent, MaxTurnsExceededError, OpenAIProvider, Runner, tool, withTrace, type Tool } from "@openai/agents";
 import { z } from "zod";
 import { AgentIntentEnum, AnalysisChainPlanSchema, type AgentAnswer, type AnalysisChainPlan, type AnalysisChainStep, type CaseGraph } from "../../../../packages/shared/src/index.js";
 import { apiConfig } from "../config.js";
@@ -659,22 +659,52 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
   });
   input.onTrace?.(`已创建 Leader Agent 和 3 个专家 Agent，模型=${llm.model}。`);
 
-  // 有 onTrace 时走 stream 模式，把工具调用与专家切换事件实时透传；最终 JSON 答案仍在完成后解析
+  // 始终走 stream 模式：实时透传工具事件（有 onTrace 时），并持续收集工具输出，
+  // 供回合超限时的强制收口使用；最终 JSON 答案仍在完成后解析
+  const collectedToolResults: Array<{ name: string; output: string }> = [];
+  let lastToolName = "tool";
   async function runLeaderAgent(contextMessage: string) {
-    if (!input.onTrace) return runner.run(leaderAgent, contextMessage, { maxTurns: llm.maxTurns });
     const streamed = await runner.run(leaderAgent, contextMessage, { maxTurns: llm.maxTurns, stream: true });
     for await (const event of streamed) {
       if (event.type === "run_item_stream_event") {
-        const item = event.item as { type?: string; rawItem?: { name?: string } };
-        if (item.type === "tool_call_item" && item.rawItem?.name) input.onTrace(`正在调用工具：${item.rawItem.name}`);
-        else if (item.type === "handoff_call_item") input.onTrace("Leader 正在移交给专家 Agent。");
+        const item = event.item as { type?: string; output?: unknown; rawItem?: { name?: string; output?: unknown } };
+        if (item.type === "tool_call_item" && item.rawItem?.name) {
+          lastToolName = item.rawItem.name;
+          input.onTrace?.(`正在调用工具：${item.rawItem.name}`);
+        } else if (item.type === "tool_call_output_item") {
+          const output = String(item.output ?? item.rawItem?.output ?? "");
+          if (output) collectedToolResults.push({ name: lastToolName, output: output.slice(0, 2400) });
+        } else if (item.type === "handoff_call_item") {
+          input.onTrace?.("Leader 正在移交给专家 Agent。");
+        }
       } else if (event.type === "agent_updated_stream_event") {
         const agentName = (event as { agent?: { name?: string } }).agent?.name;
-        if (agentName) input.onTrace(`当前执行 Agent：${agentName}`);
+        if (agentName) input.onTrace?.(`当前执行 Agent：${agentName}`);
       }
     }
     await streamed.completed;
     return streamed;
+  }
+
+  // 回合超限收口：用无工具 Agent 基于已收集的工具结果输出最终结论，避免整步报废
+  async function closeOutAnswer(): Promise<AgentAnswerWithToolCalls> {
+    const evidence = collectedToolResults.slice(-8).map((item) => `【${item.name}】\n${item.output}`).join("\n\n");
+    const closerAgent = new Agent({
+      name: "AnswerCloserAgent",
+      instructions: [
+        "你是 pcapAI 的收口器。分析回合预算已耗尽，你只能基于下面提供的已收集工具结果回答用户问题，不允许调用任何工具。",
+        "信息不足的部分要如实说明，confidence 不得高于 low。",
+        jsonOutputInstruction
+      ].join("\n"),
+      model: llm.model,
+      modelSettings: modelSettingsFrom(llm.providerData)
+    });
+    const result = await runner.run(
+      closerAgent,
+      `用户问题：${input.question}\n\n已收集的工具结果：\n${evidence}\n\n基于以上信息输出最终 JSON 结论。`,
+      { maxTurns: 2 }
+    );
+    return { ...parseAgentOutput(result.finalOutput), toolCalls: collectedToolResults.map((item) => item.name) };
   }
 
   try {
@@ -682,7 +712,7 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
     const contextMessage = input.chatHistory?.length
       ? `之前的对话上下文：\n${input.chatHistory.map((m) => `${m.role === "user" ? "用户" : "Agent"}：${m.content}`).join("\n")}\n\n用户最新回复：${input.question}`
       : input.question;
-    let result = await withTrace("pcapAI leader agent", () => runLeaderAgent(contextMessage), {
+    const result = await withTrace("pcapAI leader agent", () => runLeaderAgent(contextMessage), {
       groupId: input.graph.spec.caseId,
       metadata: {
         caseId: input.graph.spec.caseId,
@@ -692,20 +722,26 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
       }
     });
     const toolCalls = extractToolCalls(result);
+    let finalOutput: unknown = result.finalOutput;
     // 部分模型会以"纯 <think> 无正文"的消息中途收尾；带上下文追加一轮催收最终 JSON
-    const strippedFinal = String(result.finalOutput ?? "").replace(/<think>[\s\S]*?<\/think>/g, "").trim();
+    const strippedFinal = String(finalOutput ?? "").replace(/<think>[\s\S]*?<\/think>/g, "").trim();
     if (!strippedFinal && toolCalls.length) {
       input.onTrace?.("模型以思考块收尾且没有正文，追加一轮要求输出最终结论。");
-      result = await runner.run(
+      const followup = await runner.run(
         leaderAgent,
         result.history.concat({ role: "user", content: "继续：基于已获取的工具结果直接输出最终 JSON 结论，不要再调用工具，不要输出 <think>。" }),
         { maxTurns: 4 }
       );
+      finalOutput = followup.finalOutput;
     }
     input.onTrace?.("Agents SDK 运行完成，正在归一化模型输出为 AgentAnswer。");
-    const answer = parseAgentOutput(result.finalOutput);
+    const answer = parseAgentOutput(finalOutput);
     return { ...answer, toolCalls };
   } catch (error) {
+    if (error instanceof MaxTurnsExceededError && collectedToolResults.length) {
+      input.onTrace?.(`回合预算（${llm.maxTurns}）耗尽，基于已收集的 ${collectedToolResults.length} 条工具结果强制收口。`);
+      return closeOutAnswer();
+    }
     // 会话失败可能源于 MCP 连接断开，重置单例让下一次请求重新拉起
     resetTsharkQueryMcp();
     throw error;

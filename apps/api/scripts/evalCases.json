@@ -1,0 +1,58 @@
+{
+  "fixture": "data/fixtures/saas-cascade-fault.pcap",
+  "note": "用例按数组顺序执行；interview-gate 必须在产生 QueryRun 的用例之前运行",
+  "cases": [
+    {
+      "id": "insights-coverage",
+      "kind": "insights",
+      "describe": "首次自动洞察必须覆盖多协议并携带覆盖范围声明",
+      "expect": {
+        "minInsights": 3,
+        "coverageRequired": true,
+        "minProtocolKinds": 3
+      }
+    },
+    {
+      "id": "interview-gate",
+      "kind": "agent",
+      "describe": "开放性问题且无 QueryRun 时必须进入诊断访谈，不执行宽查询",
+      "question": "帮我看看哪里有问题",
+      "expect": {
+        "answerMatch": ["补充|追问|需要你|上下文"],
+        "answerNotMatch": ["<think>"]
+      }
+    },
+    {
+      "id": "protocol-stats",
+      "kind": "agent",
+      "describe": "统计类问题走确定性路径并给出协议分布",
+      "question": "这个抓包文件里有哪些协议？各自多少包？",
+      "expect": {
+        "answerMatch": ["tcp", "dns"],
+        "answerNotMatch": ["<think>"],
+        "eventMatch": ["statistics|protocol_statistics"]
+      }
+    },
+    {
+      "id": "dns-http-chain",
+      "kind": "agent",
+      "describe": "多步链按结构化参数命中 DNS 与 HTTP 确定性适配器",
+      "question": "先查询 DNS 解析失败事件，再查询 HTTP 的 4xx 和 5xx 错误事务",
+      "expect": {
+        "eventMatch": ["deterministic_dns", "deterministic_http"],
+        "answerMatch": ["DNS"],
+        "answerNotMatch": ["<think>"]
+      }
+    },
+    {
+      "id": "rfc-citation",
+      "kind": "agent",
+      "describe": "规范合规问题必须引用 RFC 编号（经知识库回读）",
+      "question": "抓包是在客户端侧抓的，方向双向。包里 DNS 查询返回了 SERVFAIL（rcode 2），客户端随后访问旧地址导致 HTTP 503。请结合 RFC 条文判断：SERVFAIL 的规范含义是什么？解析失败后客户端继续使用陈旧缓存地址是否符合规范？必须引用 RFC 编号和章节原文作为依据。",
+      "expect": {
+        "answerMatch": ["RFC\\s*\\d{3,4}"],
+        "answerNotMatch": ["<think>"]
+      }
+    }
+  ]
+}
