@@ -1,0 +1,21 @@
+{
+  "name": "@pcapai/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "dev": "tsc -p tsconfig.json && PCAPAI_DESKTOP_MODE=dev electron .",
+    "start": "PCAPAI_DESKTOP_MODE=prod electron ."
+  },
+  "dependencies": {
+    "@pcapai/api": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "electron": "^33.4.4",
+    "tsx": "^4.20.6"
+  }
+}

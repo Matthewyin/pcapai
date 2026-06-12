@@ -125,6 +125,9 @@ export const apiConfig = {
   caseDataDir: process.env.PCAPAI_CASE_DATA_DIR
     ? path.resolve(process.env.PCAPAI_CASE_DATA_DIR)
     : path.resolve(workspaceRoot, defaults.api.caseDataDir),
+  learnedPatternsPath: process.env.PCAPAI_LEARNED_PATTERNS_PATH
+    ? path.resolve(process.env.PCAPAI_LEARNED_PATTERNS_PATH)
+    : path.resolve(workspaceRoot, "data/learned_patterns.json"),
   uploadFieldName: process.env.PCAPAI_UPLOAD_FIELD_NAME || defaults.api.uploadFieldName,
   payloadTrim: {
     enabled: process.env.PCAPAI_PAYLOAD_TRIM_ENABLED

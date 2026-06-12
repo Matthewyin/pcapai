@@ -1,5 +1,5 @@
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname } from "node:path";
 import { apiConfig } from "../config.js";
 
 export interface LearnedPattern {
@@ -14,7 +14,7 @@ interface PatternStore {
   patterns: LearnedPattern[];
 }
 
-const PATTERNS_FILE = join(process.cwd(), "data", "learned_patterns.json");
+const PATTERNS_FILE = apiConfig.learnedPatternsPath;
 
 // 学习是 fire-and-forget 的异步任务，串行化读改写避免并发互相覆盖
 let writeLock: Promise<void> = Promise.resolve();
