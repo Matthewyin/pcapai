@@ -39,36 +39,77 @@ function flushPendingPcap() {
   }
 }
 
-// 系统依赖检测：tshark 套件与 Wireshark.app 是本 app 的硬依赖，缺失要在启动时阻断并引导
-function checkSystemDependencies(): { ok: boolean; missing: string[] } {
-  const cliTools = ["tshark", "editcap", "capinfos"];
-  const missing: string[] = [];
-  for (const tool of cliTools) {
-    const result = spawnSync("which", [tool], { stdio: ["ignore", "ignore", "ignore"] });
-    if (result.status !== 0) missing.push(tool);
+// macOS 上 Wireshark.app 的 CLI 工具目录（GUI app 启动时 PATH 不含此路径,需显式探测）
+const WIRESHARK_APP_MACOS_DIR = "/Applications/Wireshark.app/Contents/MacOS";
+const WIRESHARK_APP_PATH = "/Applications/Wireshark.app";
+
+/**
+ * 探测单个 CLI 工具的绝对路径。
+ * 顺序：(1) which（PATH 解析,开发模式或 brew symlink 时命中）
+ *       (2) Wireshark.app/Contents/MacOS/<tool>（GUI app 默认安装位置）
+ *       (3) /opt/homebrew/bin/<tool> + /usr/local/bin/<tool>（brew --cask 装的 symlink）
+ * 找不到返回 null。
+ */
+function resolveCliTool(tool: string): string | null {
+  // (1) which
+  const whichResult = spawnSync("which", [tool], { stdio: ["ignore", "pipe", "ignore"] });
+  if (whichResult.status === 0) {
+    const found = String(whichResult.stdout).trim();
+    if (found) return found;
   }
-  // Wireshark.app 仅用于打开 evidence；缺失只警告不阻断
-  const wiresharkPath = "/Applications/Wireshark.app";
-  const result = spawnSync("test", ["-d", wiresharkPath], { stdio: ["ignore", "ignore", "ignore"] });
-  if (result.status !== 0) missing.push("Wireshark.app（用于复核证据）");
-  return { ok: missing.filter((item) => !item.includes("Wireshark")).length === 0, missing };
+  // (2) Wireshark.app/Contents/MacOS/
+  const appPath = path.join(WIRESHARK_APP_MACOS_DIR, tool);
+  if (existsSync(appPath)) return appPath;
+  // (3) brew 常见 symlink 位置
+  for (const binDir of ["/opt/homebrew/bin", "/usr/local/bin"]) {
+    const brewPath = path.join(binDir, tool);
+    if (existsSync(brewPath)) return brewPath;
+  }
+  return null;
 }
 
+/** 解析全部 CLI 工具路径（供 buildSidecarEnv 注入）。Wireshark GUI 单独处理（.app 可直接 open）。 */
+function resolveCliToolPaths(): { tshark: string | null; editcap: string | null; capinfos: string | null; wireshark: string | null } {
+  return {
+    tshark: resolveCliTool("tshark"),
+    editcap: resolveCliTool("editcap"),
+    capinfos: resolveCliTool("capinfos"),
+    wireshark: existsSync(WIRESHARK_APP_PATH) ? WIRESHARK_APP_PATH : resolveCliTool("wireshark")
+  };
+}
+
+// 系统依赖检测：tshark 套件是硬依赖（解析数据包），Wireshark.app 仅用于复核证据（软依赖）
+function checkSystemDependencies(): { ok: boolean; missing: string[]; paths: ReturnType<typeof resolveCliToolPaths> } {
+  const paths = resolveCliToolPaths();
+  const missing: string[] = [];
+  // CLI 工具缺失则阻断（核心解析能力）
+  if (!paths.tshark) missing.push("tshark");
+  if (!paths.editcap) missing.push("editcap");
+  if (!paths.capinfos) missing.push("capinfos");
+  // Wireshark.app 缺失只警告
+  if (!paths.wireshark) missing.push("Wireshark.app（用于复核证据）");
+  const blocking = !paths.tshark || !paths.editcap || !paths.capinfos;
+  return { ok: !blocking, missing, paths };
+}
+
+// 解析到的 CLI 工具绝对路径（ensureDependencies 填充,buildSidecarEnv 读取注入）
+let resolvedToolPaths: ReturnType<typeof resolveCliToolPaths> | null = null;
+
 async function ensureDependencies() {
-  const { ok, missing } = checkSystemDependencies();
+  const { ok, missing, paths } = checkSystemDependencies();
+  resolvedToolPaths = paths;
   if (!missing.length) return;
-  const blocking = !ok;
   const result = await dialog.showMessageBox({
-    type: blocking ? "error" : "warning",
-    title: blocking ? "缺少系统依赖" : "建议安装",
-    message: blocking ? "pcapAI 需要 Wireshark 套件提供的命令才能解析数据包。" : "未检测到 Wireshark.app，证据复核功能将不可用。",
+    type: ok ? "warning" : "error",
+    title: ok ? "建议安装" : "缺少系统依赖",
+    message: ok ? "未检测到 Wireshark.app，证据复核功能将不可用。" : "pcapAI 需要 Wireshark 套件提供的命令才能解析数据包。",
     detail: `检测缺失：${missing.join("、")}\n\n推荐方案：访问 https://www.wireshark.org/download.html 下载安装；或在终端执行：\n  brew install --cask wireshark\n安装完成后重新启动 pcapAI。`,
-    buttons: blocking ? ["前往下载", "退出"] : ["前往下载", "继续"],
+    buttons: ok ? ["前往下载", "继续"] : ["前往下载", "退出"],
     defaultId: 0,
     cancelId: 1
   });
   if (result.response === 0) await shell.openExternal("https://www.wireshark.org/download.html");
-  if (blocking) {
+  if (!ok) {
     app.quit();
     throw new Error("missing system dependencies");
   }
@@ -143,6 +184,10 @@ function buildSidecarEnv() {
     env.PCAPAI_FIELD_NOTES_SEEDS_DIR ??= dirs.fieldNotesSeeds;
     env.PCAPAI_FIELD_NOTES_INDEX_PATH ??= path.join(dirs.fieldNotes, "field-notes.db");
     env.PCAPAI_SKILLS_DIR ??= dirs.skills;
+    // 生产模式：API sidecar 同源托管前端 dist（/api + 静态文件同端口）
+    // 这样 Electron 窗口用 loadURL(apiUrl) 加载,fetch("/api/*") 天然同源,无需路径重写
+    env.PCAPAI_SERVE_WEB ??= "1";
+    env.PCAPAI_WEB_DIST_PATH ??= path.join(workspaceRoot, "apps/web/dist");
     // 生产期 MCP 走编译产物（Resources 内置 node + dist），免 npm 依赖
     const mcpTshark = path.join(workspaceRoot, "mcp/tshark-query/dist/index.js");
     const mcpEvidence = path.join(workspaceRoot, "mcp/evidence-opener/dist/index.js");
@@ -154,6 +199,14 @@ function buildSidecarEnv() {
       env.PCAPAI_EVIDENCE_OPENER_MCP_COMMAND ??= process.execPath;
       env.PCAPAI_EVIDENCE_OPENER_MCP_ARGS ??= mcpEvidence;
     }
+  }
+  // CLI 工具路径注入（开发 + 生产都需要：GUI app 启动时 PATH 不含 Wireshark.app/Contents/MacOS）
+  // ensureDependencies 已探测到绝对路径,这里注入给 API + MCP 子进程,避免裸命令名 PATH 解析失败
+  if (resolvedToolPaths) {
+    if (resolvedToolPaths.tshark) env.PCAPAI_TSHARK_COMMAND ??= resolvedToolPaths.tshark;
+    if (resolvedToolPaths.editcap) env.PCAPAI_EDITCAP_COMMAND ??= resolvedToolPaths.editcap;
+    if (resolvedToolPaths.capinfos) env.PCAPAI_CAPINFOS_COMMAND ??= resolvedToolPaths.capinfos;
+    if (resolvedToolPaths.wireshark) env.PCAPAI_WIRESHARK_COMMAND ??= resolvedToolPaths.wireshark;
   }
   return env;
 }
@@ -250,7 +303,9 @@ async function createMainWindow(apiUrl: string) {
     const devUrl = process.env.PCAPAI_WEB_DEV_URL || "http://127.0.0.1:30023";
     await win.loadURL(devUrl);
   } else {
-    await win.loadFile(path.join(workspaceRoot, "apps/web/dist/index.html"));
+    // 生产模式：API sidecar 同源托管前端（PCAPAI_SERVE_WEB=1），loadURL 让 fetch("/api/*") 天然同源
+    // 避免了 file:// 协议下相对路径 / API 请求 / SSE / Blob URL 的所有断裂问题
+    await win.loadURL(apiUrl);
   }
   win.webContents.executeJavaScript(`window.__PCAPAI_API__ = ${JSON.stringify(apiUrl)};`).catch(() => {});
   win.webContents.on("did-finish-load", () => flushPendingPcap());

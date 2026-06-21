@@ -35,7 +35,7 @@
       "topK": 6,
       "sectionCharLimit": 12000,
       "download": {
-        "url": "https://github.com/matthewyin/pcapAI/releases/download/rfc-data/rfc.db",
+        "url": "https://github.com/Matthewyin/pcapai/releases/download/rfc-data/rfc.db",
         "targetFilename": "rfc.db",
         "chunkSize": 1048576,
         "timeoutMs": 300000

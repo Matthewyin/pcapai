@@ -35,7 +35,10 @@ const host = process.env.PCAPAI_WEB_HOST || defaults.web.host;
 const port = Number(process.env.PCAPAI_WEB_PORT || defaults.web.port);
 const apiTarget = process.env.PCAPAI_API_TARGET || defaults.web.apiTarget;
 
-export default defineConfig({
+export default defineConfig(({ command }) => ({
+  // Electron 生产模式用 loadFile 加载本地 HTML，需要相对路径（./assets/...）
+  // dev server 模式用默认绝对路径（/assets/...）
+  base: command === "build" ? "./" : "/",
   plugins: [react(), tailwindcss()],
   define: {
     __PCAPAI_WEB_CONFIG__: JSON.stringify({
@@ -56,4 +59,4 @@ export default defineConfig({
       "/api": apiTarget
     }
   }
-});
+}));
