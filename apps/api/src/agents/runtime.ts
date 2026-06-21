@@ -1,8 +1,38 @@
-import { Agent, MaxTurnsExceededError, OpenAIProvider, Runner, tool, withTrace, type Tool } from "@openai/agents";
+import { Agent, MaxTurnsExceededError, OpenAIProvider, Runner, tool, withTrace, type Tool, type AgentInputItem } from "@openai/agents";
 import { z } from "zod";
+import { existsSync, readFileSync } from "node:fs";
+import path from "node:path";
 import { AgentIntentEnum, AnalysisChainPlanSchema, type AgentAnswer, type AnalysisChainPlan, type AnalysisChainStep, type CaseGraph } from "../../../../packages/shared/src/index.js";
 import { apiConfig } from "../config.js";
 import { getTsharkQueryMcp, resetTsharkQueryMcp } from "../mcp/tsharkQueryMcpRuntime.js";
+import { SqliteSession } from "./sqliteSession.js";
+
+// 排障方法论：从 docs/agent-methodology.md 加载，开发期可改文档不必改代码。
+// 启动时读一次缓存。文件不存在则用内置精简版兜底。
+let cachedMethodology: string | null = null;
+function loadMethodology(): string {
+  if (cachedMethodology !== null) return cachedMethodology;
+  // workspaceRoot 与 config.ts 同款解析
+  const candidates = [process.cwd(), path.resolve(process.cwd(), "../..")];
+  const root = candidates.find((c) => existsSync(path.join(c, "docs/agent-methodology.md"))) || candidates[0];
+  const filePath = path.join(root, "docs/agent-methodology.md");
+  if (existsSync(filePath)) {
+    cachedMethodology = readFileSync(filePath, "utf8");
+  } else {
+    cachedMethodology = [
+      "## 核心定位",
+      "你是同时能读抓包、又能查 RFC 的资深网络工程师。告诉用户现象意味着什么、该怎么修。",
+      "## 三层知识体系",
+      "Skills（方法论层）：可复用排障 SOP。实战知识库（案例层）：现象→真因→RFC。抓包事实（数据层）。",
+      "## 诊断流程",
+      "第 0 步（强制）：调 search_field_notes 取候选先验。命中则验证，不命中则自主推理。",
+      "第 1 步：信息收集（interview）。第 2 步：假设驱动（hypothesis/testing）。第 3 步：结论（conclusion）。",
+      "## 防幻觉红线",
+      "根因结论必须 rfcVerified=true（get_rfc_section 回读）或 false（标注经验推测）。不凭记忆引用 RFC。"
+    ].join("\n");
+  }
+  return cachedMethodology;
+}
 
 type RuntimeInput = {
   graph: CaseGraph;
@@ -10,6 +40,8 @@ type RuntimeInput = {
   chatHistory?: Array<{ role: "user" | "assistant"; content: string }>;
   onTrace?: (message: string) => void;
   tools?: Tool[];
+  // session 持久化目录（通常是 case 目录）。传入则用 SqliteSession 跨轮持久化；不传则无 session（降级）。
+  sessionDir?: string;
 };
 
 export const AgentIntentSchema = z.object({
@@ -43,9 +75,11 @@ type CompatibilityInput = {
 const jsonOutputInstruction = [
   "最终只能输出一个 JSON 对象，不要使用 Markdown。",
   "禁止把 <think> 思考内容当作最终输出；思考结束后必须继续调用工具或直接输出最终 JSON。",
-  "JSON 字段固定为 answer、evidenceIds、packetIds、sessionLinkIds、findingIds、missingContext、confidence、suggestedActions、suggestedQueries、handoffAgent。",
+  "JSON 字段固定为 answer、evidenceIds、packetIds、sessionLinkIds、findingIds、missingContext、confidence、suggestedActions、suggestedQueries、handoffAgent、rootCauses。",
   "suggestedQueries 是一个数组，每项包含 question（可执行的问题文本）、reason（为什么建议这个查询）、intent（推荐 intent）。",
   "如果调用过 suggest_next_query，把返回的建议放入 suggestedQueries。",
+  "rootCauses 是根因结论清单（防幻觉核心）。每个元素：cause（根因描述）、rfcDocId（RFC 编号，无则省略）、rfcSection（章节）、rfcVerified（boolean，true=已用 get_rfc_section 回读原文并引用）、confidence（certain/high/low/needs_context）、evidencePacketIds（支撑该根因的包 ID）、skillIds（用到的技能名）。",
+  "rootCauses 规则：只有经 get_rfc_section 回读 RFC 原文并引用的根因才能 rfcVerified=true；其余根因 rfcVerified=false 表示经验推测。诊断阶段（interview/hypothesis）无根因时填 []。",
   "没有内容的数组填 []，没有 confidence 或 handoffAgent 时填 null。"
 ].join("\n");
 
@@ -94,6 +128,19 @@ function normalizeHypotheses(value: unknown): Array<{ id: string; description: s
   }));
 }
 
+function normalizeRootCauses(value: unknown): Array<{ cause: string; rfcDocId?: number; rfcSection?: string; rfcVerified: boolean; confidence: "certain" | "high" | "low" | "needs_context"; evidencePacketIds: string[]; skillIds: string[] }> {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is Record<string, unknown> => item && typeof item === "object" && typeof item.cause === "string").map((item) => ({
+    cause: String(item.cause),
+    rfcDocId: typeof item.rfcDocId === "number" ? item.rfcDocId : undefined,
+    rfcSection: typeof item.rfcSection === "string" ? item.rfcSection : undefined,
+    rfcVerified: item.rfcVerified === true,
+    confidence: confidenceFrom(item.confidence) || "low",
+    evidencePacketIds: stringArrayFrom(item.evidencePacketIds),
+    skillIds: stringArrayFrom(item.skillIds)
+  }));
+}
+
 function normalizeAgentObject(value: Record<string, unknown>): AgentAnswer {
   const answer = {
     answer: typeof value.answer === "string" ? value.answer : JSON.stringify(value),
@@ -108,7 +155,8 @@ function normalizeAgentObject(value: Record<string, unknown>): AgentAnswer {
     handoffAgent: typeof value.handoffAgent === "string" && value.handoffAgent.trim() ? value.handoffAgent : undefined,
     followUpQuestions: stringArrayFrom(value.followUpQuestions).length ? stringArrayFrom(value.followUpQuestions) : undefined,
     diagnosticPhase: diagnosticPhaseFrom(value.diagnosticPhase),
-    hypotheses: normalizeHypotheses(value.hypotheses).length ? normalizeHypotheses(value.hypotheses) : undefined
+    hypotheses: normalizeHypotheses(value.hypotheses).length ? normalizeHypotheses(value.hypotheses) : undefined,
+    rootCauses: normalizeRootCauses(value.rootCauses)
   };
   return formatAgentAnswer(answer);
 }
@@ -135,7 +183,8 @@ function parseAgentOutput(output: unknown): AgentAnswer {
     findingIds: [],
     missingContext: [],
     suggestedActions: [],
-    suggestedQueries: []
+    suggestedQueries: [],
+    rootCauses: []
   });
 }
 
@@ -318,7 +367,8 @@ export async function runChainPlanner(input: ChainPlannerInput): Promise<Analysi
       "不要硬编码特定故障场景。根据 case graph 的实际数据决定步骤。",
       "如果不确定，输出 plan_kind=single，intent=needs_clarification。",
       "",
-      "重要：当用户问题是开放性分析问题（如\"分析异常\"、\"有什么问题\"、\"帮我看看\"），但没有故障时间、源、目的、端口、节点位置或明确协议时，必须输出 single + needs_clarification，先追问，不执行宽查询。",
+      "重要：当用户问题是开放性分析问题（如\"分析异常\"、\"有什么问题\"、\"帮我看看\"），且 case graph 中没有任何 captures（未上传 pcap）时，必须输出 single + needs_clarification，先追问，不执行宽查询。",
+      "但如果 case graph 中已有 captures（已上传 pcap），即使用户没有给出具体 IP/端口/时间，也允许安排 overview 类的确定性扫描（如 protocol_event_query + eventKind=overview）收集证据，最后一步用 llm_explain 综合解读。",
       "只有用户已经给出可验证范围，或当前已有可用 QueryRun/选中 session 时，才先安排确定性步骤收集证据，最后一步用 llm_explain 综合解读证据并给出诊断结论。",
       "llm_explain 步骤的 purpose 应描述为\"综合解读前序步骤的证据，给出诊断结论和建议\"。",
       "纯统计问题（如\"协议分布\"、\"端口排名\"）不需要 llm_explain。"
@@ -499,7 +549,8 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
   const agentToolInstruction = localTools.length
     ? [
       "## pcapAI 本地工具",
-      "你可以优先调用 pcapai_ 前缀的本地工具来创建 QueryRun、查询统计、关联多文件、诊断选中 session 或导出报告。",
+      "你可以调用 pcapai_ 前缀的本地工具来创建 QueryRun、查询统计、关联多文件、诊断选中 session 或导出报告。",
+      "**工具名必须精确匹配**：前缀是 `pcapai_`（p-c-a-p-a-i 下划线），不要拼成 papai_ 或 pcaipi_。调用前确认名称。",
       "这些工具会写入 QueryRun、EvidenceCard、checks 和 ToolRun，适合回答用户的具体排障问题。",
       "tshark-query MCP 仍用于更底层的包级查询；不要绕过 pcapai_ 工具重复做已经封装好的确定性查询。"
     ].join("\n")
@@ -611,10 +662,18 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
     instructions: [
       "你是 pcapAI 的网络排障诊断 leader。你的工作不是翻译 tshark 输出，而是像高级网络工程师一样诊断故障。",
       "",
+      loadMethodology(),
+      "",
       memoryInstruction,
       agentToolInstruction,
       "",
       "## 诊断流程",
+      "",
+      "### 第 0 步（强制，每次推理开始）",
+      "开始任何推理前，必须先调用 search_field_notes（question 参数传当前用户问题）：",
+      "- 命中已知排障案例：优先验证候选真因（用抓包 + RFC 验证），验证通过引用对应 RFC 下结论，不要直接套用候选。",
+      "- 不命中：基于症状自主推理（tshark MCP + RFC）。",
+      "实战知识库是先验提示，不是定论；Agent 保留否决权。",
       "",
       "根据对话上下文判断当前处于哪个诊断阶段：",
       "",
@@ -647,6 +706,7 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
       "- 不要翻译 tshark 输出。要解释证据与故障的关系。",
       "- 不允许编造包、节点或结论。没有证据支持的假设不要当成结论。",
       "- 协议行为合规性判断优先用 search_rfc 取得条文依据，引用必须经 get_rfc_section 回读原文并带 RFC 编号与 §section，不凭记忆引用 RFC。",
+      "- 根因结论（root cause）必须满足以下之一：(a) 经 get_rfc_section 回读 RFC 原文并引用编号+§section；(b) 明确标注\"经验推测，无 RFC 依据\"。不允许凭记忆引用 RFC 编号或章节内容。",
       "- 当信息不足时，返回 followUpQuestions，不要猜测。",
       "- 输出必须绑定 QueryRun、evidenceIds、packetIds 等可回溯 ID。",
       jsonOutputInstruction
@@ -663,8 +723,12 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
   // 供回合超限时的强制收口使用；最终 JSON 答案仍在完成后解析
   const collectedToolResults: Array<{ name: string; output: string }> = [];
   let lastToolName = "tool";
-  async function runLeaderAgent(contextMessage: string) {
-    const streamed = await runner.run(leaderAgent, contextMessage, { maxTurns: llm.maxTurns, stream: true });
+  async function runLeaderAgent(contextMessage: string, session?: SqliteSession) {
+    // 每次 run 独立收集工具结果：followup 收尾会再调一次本函数，不清空会导致两轮工具输出混入，
+    // 进而在后续 closeOutAnswer 的 slice(-8) 里污染证据
+    collectedToolResults.length = 0;
+    lastToolName = "tool";
+    const streamed = await runner.run(leaderAgent, contextMessage, { maxTurns: llm.maxTurns, stream: true, ...(session ? { session } : {}) });
     for await (const event of streamed) {
       if (event.type === "run_item_stream_event") {
         const item = event.item as { type?: string; output?: unknown; rawItem?: { name?: string; output?: unknown } };
@@ -686,41 +750,123 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
     return streamed;
   }
 
-  // 回合超限收口：用无工具 Agent 基于已收集的工具结果输出最终结论，避免整步报废
+  // 回合超限收口：用无工具 Agent 基于已收集的工具结果输出最终结论，避免整步报废。
+  // 收口器自身也用小 maxTurns，可能再次超限；包一层 try/catch 退化为纯文本，保证不抛。
   async function closeOutAnswer(): Promise<AgentAnswerWithToolCalls> {
     const evidence = collectedToolResults.slice(-8).map((item) => `【${item.name}】\n${item.output}`).join("\n\n");
-    const closerAgent = new Agent({
-      name: "AnswerCloserAgent",
-      instructions: [
-        "你是 pcapAI 的收口器。分析回合预算已耗尽，你只能基于下面提供的已收集工具结果回答用户问题，不允许调用任何工具。",
-        "信息不足的部分要如实说明，confidence 不得高于 low。",
-        jsonOutputInstruction
-      ].join("\n"),
-      model: llm.model,
-      modelSettings: modelSettingsFrom(llm.providerData)
-    });
-    const result = await runner.run(
-      closerAgent,
-      `用户问题：${input.question}\n\n已收集的工具结果：\n${evidence}\n\n基于以上信息输出最终 JSON 结论。`,
-      { maxTurns: 2 }
-    );
-    return { ...parseAgentOutput(result.finalOutput), toolCalls: collectedToolResults.map((item) => item.name) };
+    const toolCalls = collectedToolResults.map((item) => item.name);
+    try {
+      const closerAgent = new Agent({
+        name: "AnswerCloserAgent",
+        instructions: [
+          "你是 pcapAI 的收口器。分析回合预算已耗尽，你只能基于下面提供的已收集工具结果回答用户问题，不允许调用任何工具。",
+          "信息不足的部分要如实说明，confidence 不得高于 low。",
+          jsonOutputInstruction
+        ].join("\n"),
+        model: llm.model,
+        modelSettings: modelSettingsFrom(llm.providerData)
+      });
+      const result = await runner.run(
+        closerAgent,
+        `用户问题：${input.question}\n\n已收集的工具结果：\n${evidence}\n\n基于以上信息输出最终 JSON 结论。`,
+        { maxTurns: 2 }
+      );
+      return { ...parseAgentOutput(result.finalOutput), toolCalls };
+    } catch {
+      // 收口器自身失败（如再次超 turn）时退化为纯文本，保证永远返回一个 AgentAnswer
+      return {
+        answer: `分析回合预算耗尽，基于已收集的 ${collectedToolResults.length} 条工具结果给出初步结论（未完成 LLM 综合解读）：\n\n${evidence}`,
+        thoughts: ["回合预算耗尽，收口器未完成最终综合，已输出原始工具结果。"],
+        evidenceIds: [],
+        packetIds: [],
+        sessionLinkIds: [],
+        findingIds: [],
+        missingContext: [],
+        suggestedActions: [],
+        suggestedQueries: [],
+        rootCauses: [],
+        confidence: "low",
+        toolCalls
+      };
+    }
+  }
+
+  // 应用层上下文压缩：session 条目超阈值时，把早期的工具调用/输出聚合成一条摘要，
+  // 保留最近 N 条原样。确定性压缩（不调 LLM），降本且防 context 爆炸。
+  // SDK 原生 OpenAIResponsesCompactionSession 依赖 OpenAI Responses API（MiniMax useResponses=false 不支持）。
+  async function compressSessionIfNeeded(session: SqliteSession) {
+    const threshold = apiConfig.session.compressThreshold;
+    const keepRecent = apiConfig.session.keepRecent;
+    if (session.itemCount() <= threshold) return;
+    const allItems = await session.getItems();
+    if (allItems.length <= keepRecent) return;
+    const recent = allItems.slice(allItems.length - keepRecent);
+    const older = allItems.slice(0, allItems.length - keepRecent);
+    // 聚合早期工具相关条目为摘要
+    const toolSummaries: string[] = [];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    for (const item of older as any[]) {
+      if (item.type === "function_call" && item.name) {
+        toolSummaries.push(`调用 ${item.name}`);
+      } else if (item.type === "function_call_output" && item.output) {
+        const out = typeof item.output === "string" ? item.output : JSON.stringify(item.output);
+        toolSummaries.push(`  输出: ${out.slice(0, 120)}`);
+      }
+    }
+    const summaryItems: AgentInputItem[] = toolSummaries.length
+      ? [{
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: `[上下文压缩] 早期 ${older.length} 条历史已聚合，其中工具调用：\n${toolSummaries.slice(0, 20).join("\n")}${toolSummaries.length > 20 ? `\n...等共 ${toolSummaries.length} 条` : ""}` }]
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        } as any]
+      : [];
+    session.replaceAllWith([...summaryItems, ...recent]);
+    input.onTrace?.(`上下文压缩：${allItems.length} 条 → ${summaryItems.length + recent.length} 条。`);
   }
 
   try {
     input.onTrace?.("开始运行 OpenAI Agents SDK，等待模型选择专家并调用 case-graph 工具。");
-    const contextMessage = input.chatHistory?.length
-      ? `之前的对话上下文：\n${input.chatHistory.map((m) => `${m.role === "user" ? "用户" : "Agent"}：${m.content}`).join("\n")}\n\n用户最新回复：${input.question}`
-      : input.question;
-    const result = await withTrace("pcapAI leader agent", () => runLeaderAgent(contextMessage), {
-      groupId: input.graph.spec.caseId,
-      metadata: {
-        caseId: input.graph.spec.caseId,
-        activeQueryRunId: input.graph.activeQueryRunId || "",
-        captureCount: String(input.graph.captures.length),
-        queryRunCount: String(input.graph.queryRuns.length)
+    // session：有 sessionDir 时启用跨轮持久化记忆，SDK 自动 prepend 历史并持久化新轮。
+    // 此时 contextMessage 只传当前问题（历史由 session 管），不重复拼 chatHistory 避免双重计入。
+    const session = input.sessionDir ? new SqliteSession({ baseDir: input.sessionDir, sessionId: input.graph.spec.caseId }) : undefined;
+    if (session) input.onTrace?.(`已启用持久化 session（${session.itemCount()} 条历史）。`);
+    const contextMessage = session
+      ? input.question
+      : (input.chatHistory?.length
+        ? `之前的对话上下文：\n${input.chatHistory.map((m) => `${m.role === "user" ? "用户" : "Agent"}：${m.content}`).join("\n")}\n\n用户最新回复：${input.question}`
+        : input.question);
+    let result;
+    // MiniMax 等模型常把 pcapai_ 前缀拼错（papai_/pintai_/pcaipi_ 等），导致 SDK 抛 "Tool not found"
+    // 整个 run 失败。这里带纠正提示最多重试 2 次，每次把错误名反馈给模型。
+    let lastContextMessage = contextMessage;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        result = await withTrace("pcapAI leader agent", () => runLeaderAgent(lastContextMessage, session), {
+          groupId: input.graph.spec.caseId,
+          ...(attempt === 0 ? {
+            metadata: {
+              caseId: input.graph.spec.caseId,
+              activeQueryRunId: input.graph.activeQueryRunId || "",
+              captureCount: String(input.graph.captures.length),
+              queryRunCount: String(input.graph.queryRuns.length)
+            }
+          } : {})
+        });
+        break;
+      } catch (runError) {
+        const errMsg = runError instanceof Error ? runError.message : String(runError);
+        if (/Tool .* not found/i.test(errMsg) && attempt < 2) {
+          input.onTrace?.(`第 ${attempt + 1} 次工具名错误（${errMsg.slice(0, 80)}），带纠正提示重试。`);
+          // 提取拼错的工具名，明确告诉正确前缀
+          const wrongName = errMsg.match(/Tool (\S+) not found/)?.[1] || "";
+          lastContextMessage = `${contextMessage}\n\n[系统提示-重要] 上次调用的工具名 "${wrongName}" 不存在。所有本地确定性工具前缀是 pcapai_（p-c-a-p-a-i-下划线），示例：pcapai_ask_clarification、pcapai_list_protocols、pcapai_get_network_statistics。请用精确名称重新调用。`;
+        } else {
+          throw runError;
+        }
       }
-    });
+    }
+    if (!result) throw new Error("Agent 运行未产生结果（重试耗尽）。");
     const toolCalls = extractToolCalls(result);
     let finalOutput: unknown = result.finalOutput;
     // 部分模型会以"纯 <think> 无正文"的消息中途收尾；带上下文追加一轮催收最终 JSON
@@ -736,6 +882,9 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
     }
     input.onTrace?.("Agents SDK 运行完成，正在归一化模型输出为 AgentAnswer。");
     const answer = parseAgentOutput(finalOutput);
+    // 应用层上下文压缩：session 条目超阈值时聚合早期工具调用，防下一轮 context 爆炸。
+    // SDK 原生 compaction 依赖 OpenAI Responses API（MiniMax 不支持），此处用确定性压缩兜底。
+    if (session) await compressSessionIfNeeded(session);
     return { ...answer, toolCalls };
   } catch (error) {
     if (error instanceof MaxTurnsExceededError && collectedToolResults.length) {

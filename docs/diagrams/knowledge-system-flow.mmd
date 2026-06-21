@@ -1,0 +1,41 @@
+%% 三层知识体系端到端流程（以 TCP 重传案例为例）
+%% 展示 Agent 如何串联 Skills / 实战库 / RFC / 飞轮
+%% 渲染：粘贴到 https://mermaid.live 或任何支持 mermaid 的查看器
+flowchart LR
+  subgraph Data["抓包事实层（数据）"]
+    Pcap["raw pcap<br/>62k 包，234 重传"]
+    Features["extractPacketFeatures<br/>observedFlags / missingFlags / analysisFlags"]
+    Pcap --> Features
+  end
+
+  subgraph CaseLayer["实战知识库（案例层）"]
+    SearchFn["searchFieldNotes<br/>三层检索：<br/>协议过滤 → 特征打分 → 飞轮权重"]
+    Hit["命中：TCP 重传指数退避<br/>RFC 6298§2<br/>skillIds: analyze-retransmission-pattern"]
+    SearchFn --> Hit
+  end
+
+  subgraph SkillLayer["Skills 层（方法论）"]
+    GetSkill["get_skill(analyze-retransmission-pattern)<br/>SOP：取重传包 → 统计间隔 →<br/>区分模式 → 验证对端 → 对照 RFC"]
+    CreateSkill["create_skill（自我进化）<br/>Agent 把验证有效的流程<br/>固化为新 SOP"]
+    GetSkill -.->|"验证后固化"| CreateSkill
+  end
+
+  subgraph RfcLayer["RFC 全文库（规范层）"]
+    GetRfc["get_rfc_section(6298, 2)<br/>回读 RFC 6298 §5.4 / §5.5 原文<br/>（防幻觉：不凭记忆引用）"]
+  end
+
+  subgraph Conclusion["结论"]
+    RootCause["rootCauses<br/>rfcVerified: true<br/>挂 RFC 6298§5.4-5.6<br/>+ skillIds 关联"]
+  end
+
+  subgraph Flywheel["飞轮（沉淀闭环）"]
+    Verify["用户 verify / dispute<br/>verifiedCount++ 驱动权重演进"]
+  end
+
+  Features --> SearchFn
+  Hit -->|"skillIds 关联"| GetSkill
+  Hit -->|"防幻觉：回读原文"| GetRfc
+  GetSkill --> RootCause
+  GetRfc --> RootCause
+  RootCause -.->|"沉淀闭环"| Verify
+  Verify -.->|"提权 / 降权"| SearchFn

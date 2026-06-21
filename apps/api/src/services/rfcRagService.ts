@@ -30,19 +30,46 @@ export type RfcSectionResult = {
 
 type DocRow = { doc_id: number; title: string; status: string; obsoleted_by: string; updated_by: string };
 
+/**
+ * 双层库加载状态：记录当前用的是哪一层 db。
+ * 阶段 3a 双层库：完整库（userData 静默下载，750MB）优先 → 精简库（Resources 内置，20MB）降级。
+ */
+export type RfcTier = "full" | "curated" | "none";
+
 let db: Database.Database | null = null;
+let activeTier: RfcTier = "none";
+
+export function activeRfcTier(): RfcTier {
+  return activeTier;
+}
 
 export class RfcIndexMissingError extends Error {
   constructor() {
-    super("RFC 全文索引未构建。请先在项目根目录运行 npm run rag:build。");
+    super(
+      "RFC 全文索引未构建。请先在项目根目录运行 npm run rag:build，或等待完整库静默下载完成。"
+    );
   }
 }
 
+/**
+ * 双层库解析：优先完整库（apiConfig.rag.indexPath）→ 降级精简库（apiConfig.rag.curatedIndexPath）。
+ * 完整库缺失时静默切到精简库；两者都缺失才抛 RfcIndexMissingError。
+ */
 function getDb(): Database.Database {
   if (db) return db;
-  if (!existsSync(apiConfig.rag.indexPath)) throw new RfcIndexMissingError();
-  db = new Database(apiConfig.rag.indexPath, { readonly: true, fileMustExist: true });
-  return db;
+  // 第一层：完整库（开发环境是 data/rfc-index/rfc.db；Mac app 是 userData/rfc.db 静默下载产物）
+  if (existsSync(apiConfig.rag.indexPath)) {
+    db = new Database(apiConfig.rag.indexPath, { readonly: true, fileMustExist: true });
+    activeTier = "full";
+    return db;
+  }
+  // 第二层：精简库（Resources 内置，~118 篇高频 RFC）
+  if (existsSync(apiConfig.rag.curatedIndexPath)) {
+    db = new Database(apiConfig.rag.curatedIndexPath, { readonly: true, fileMustExist: true });
+    activeTier = "curated";
+    return db;
+  }
+  throw new RfcIndexMissingError();
 }
 
 function numbersFromJson(value: string): number[] {
@@ -139,23 +166,40 @@ export function getRfcSection(docId: number, section?: string): RfcSectionResult
 }
 
 export function rfcIndexStatus() {
-  if (!existsSync(apiConfig.rag.indexPath)) {
-    return { built: false, indexPath: apiConfig.rag.indexPath };
+  // 双层库状态：优先报告完整库，降级报告精简库
+  const fullExists = existsSync(apiConfig.rag.indexPath);
+  const curatedExists = existsSync(apiConfig.rag.curatedIndexPath);
+
+  if (!fullExists && !curatedExists) {
+    return {
+      built: false,
+      tier: "none" as const,
+      indexPath: apiConfig.rag.indexPath,
+      curatedIndexPath: apiConfig.rag.curatedIndexPath
+    };
   }
-  const database = getDb();
+
+  // 优先用完整库报告；否则用精简库
+  const reportPath = fullExists ? apiConfig.rag.indexPath : apiConfig.rag.curatedIndexPath;
+  const tier = fullExists ? ("full" as const) : ("curated" as const);
+  const database = new Database(reportPath, { readonly: true });
   const meta = Object.fromEntries(
     (database.prepare("SELECT key, value FROM meta").all() as Array<{ key: string; value: string }>).map((row) => [row.key, row.value])
   );
+  database.close();
   // 陈旧检测：RFC 官方索引文件比构建时间新说明语料已更新，提示重建
   const rfcIndexFile = path.join(apiConfig.rag.rfcDir, "rfc-index.txt");
   const builtAtMs = Date.parse(meta.builtAt || "") || 0;
   const stale = existsSync(rfcIndexFile) && statSync(rfcIndexFile).mtimeMs > builtAtMs;
   return {
     built: true,
+    tier,
     stale,
     ...(stale ? { staleNote: "RFC 语料比索引新，请重新运行 npm run rag:build。" } : {}),
     indexPath: apiConfig.rag.indexPath,
-    sizeBytes: statSync(apiConfig.rag.indexPath).size,
+    curatedIndexPath: apiConfig.rag.curatedIndexPath,
+    activePath: reportPath,
+    sizeBytes: statSync(reportPath).size,
     builtAt: meta.builtAt,
     docCount: Number(meta.docCount || 0),
     sectionCount: Number(meta.sectionCount || 0)

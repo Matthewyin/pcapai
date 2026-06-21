@@ -1,0 +1,2064 @@
+{
+  "type": "excalidraw",
+  "version": 2,
+  "source": "mcp-diagram-generator",
+  "elements": [
+    {
+      "type": "rectangle",
+      "id": "1",
+      "x": 80,
+      "y": 80,
+      "width": 160,
+      "height": 70,
+      "strokeColor": "#000000",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 1,
+      "opacity": 100,
+      "boundElements": [
+        {
+          "type": "arrow",
+          "id": "20"
+        },
+        {
+          "type": "text",
+          "id": "41"
+        }
+      ],
+      "groupIds": [
+        "1-group"
+      ]
+    },
+    {
+      "type": "text",
+      "id": "41",
+      "x": 90,
+      "y": 105,
+      "width": 140,
+      "height": 20,
+      "text": "apps/web React 工作台\n聊天界面 + 知识库管理页\nSSE 流式输出",
+      "fontSize": 16,
+      "fontFamily": 1,
+      "textAlign": "center",
+      "verticalAlign": "middle",
+      "strokeColor": "#000000",
+      "roughness": 1,
+      "opacity": 100,
+      "containerId": "1",
+      "groupIds": [
+        "1-group"
+      ]
+    },
+    {
+      "type": "rectangle",
+      "id": "2",
+      "x": 320,
+      "y": 80,
+      "width": 160,
+      "height": 70,
+      "strokeColor": "#000000",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 1,
+      "opacity": 100,
+      "boundElements": [
+        {
+          "type": "arrow",
+          "id": "20"
+        },
+        {
+          "type": "arrow",
+          "id": "21"
+        },
+        {
+          "type": "arrow",
+          "id": "37"
+        },
+        {
+          "type": "arrow",
+          "id": "39"
+        },
+        {
+          "type": "arrow",
+          "id": "40"
+        },
+        {
+          "type": "text",
+          "id": "42"
+        }
+      ],
+      "groupIds": [
+        "2-group"
+      ]
+    },
+    {
+      "type": "text",
+      "id": "42",
+      "x": 330,
+      "y": 105,
+      "width": 140,
+      "height": 20,
+      "text": "routes.ts\nREST + SSE + per-case 锁\nfield-notes/skills CRUD",
+      "fontSize": 16,
+      "fontFamily": 1,
+      "textAlign": "center",
+      "verticalAlign": "middle",
+      "strokeColor": "#000000",
+      "roughness": 1,
+      "opacity": 100,
+      "containerId": "2",
+      "groupIds": [
+        "2-group"
+      ]
+    },
+    {
+      "type": "rectangle",
+      "id": "3",
+      "x": 560,
+      "y": 80,
+      "width": 160,
+      "height": 70,
+      "strokeColor": "#000000",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 1,
+      "opacity": 100,
+      "boundElements": [
+        {
+          "type": "arrow",
+          "id": "21"
+        },
+        {
+          "type": "arrow",
+          "id": "22"
+        },
+        {
+          "type": "text",
+          "id": "43"
+        }
+      ],
+      "groupIds": [
+        "3-group"
+      ]
+    },
+    {
+      "type": "text",
+      "id": "43",
+      "x": 570,
+      "y": 105,
+      "width": 140,
+      "height": 20,
+      "text": "AgentRuntimeService\nAgent 第一入口 P7\n不经 planner 拦路",
+      "fontSize": 16,
+      "fontFamily": 1,
+      "textAlign": "center",
+      "verticalAlign": "middle",
+      "strokeColor": "#000000",
+      "roughness": 1,
+      "opacity": 100,
+      "containerId": "3",
+      "groupIds": [
+        "3-group"
+      ]
+    },
+    {
+      "type": "rectangle",
+      "id": "4",
+      "x": 80,
+      "y": 220,
+      "width": 160,
+      "height": 70,
+      "strokeColor": "#000000",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 1,
+      "opacity": 100,
+      "boundElements": [
+        {
+          "type": "arrow",
+          "id": "24"
+        },
+        {
+          "type": "text",
+          "id": "44"
+        }
+      ],
+      "groupIds": [
+        "4-group"
+      ]
+    },
+    {
+      "type": "text",
+      "id": "44",
+      "x": 90,
+      "y": 245,
+      "width": 140,
+      "height": 20,
+      "text": "SqliteSession\n跨轮持久化 + 应用层压缩",
+      "fontSize": 16,
+      "fontFamily": 1,
+      "textAlign": "center",
+      "verticalAlign": "middle",
+      "strokeColor": "#000000",
+      "roughness": 1,
+      "opacity": 100,
+      "containerId": "4",
+      "groupIds": [
+        "4-group"
+      ]
+    },
+    {
+      "type": "rectangle",
+      "id": "5",
+      "x": 320,
+      "y": 220,
+      "width": 160,
+      "height": 70,
+      "strokeColor": "#000000",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 1,
+      "opacity": 100,
+      "boundElements": [
+        {
+          "type": "arrow",
+          "id": "22"
+        },
+        {
+          "type": "arrow",
+          "id": "23"
+        },
+        {
+          "type": "arrow",
+          "id": "24"
+        },
+        {
+          "type": "arrow",
+          "id": "25"
+        },
+        {
+          "type": "arrow",
+          "id": "26"
+        },
+        {
+          "type": "arrow",
+          "id": "27"
+        },
+        {
+          "type": "arrow",
+          "id": "28"
+        },
+        {
+          "type": "arrow",
+          "id": "29"
+        },
+        {
+          "type": "arrow",
+          "id": "30"
+        },
+        {
+          "type": "arrow",
+          "id": "31"
+        },
+        {
+          "type": "arrow",
+          "id": "32"
+        },
+        {
+          "type": "arrow",
+          "id": "33"
+        },
+        {
+          "type": "text",
+          "id": "45"
+        }
+      ],
+      "groupIds": [
+        "5-group"
+      ]
+    },
+    {
+      "type": "text",
+      "id": "45",
+      "x": 330,
+      "y": 245,
+      "width": 140,
+      "height": 20,
+      "text": "Leader Agent\n方法论驱动\ndocs/agent-methodology.md",
+      "fontSize": 16,
+      "fontFamily": 1,
+      "textAlign": "center",
+      "verticalAlign": "middle",
+      "strokeColor": "#000000",
+      "roughness": 1,
+      "opacity": 100,
+      "containerId": "5",
+      "groupIds": [
+        "5-group"
+      ]
+    },
+    {
+      "type": "rectangle",
+      "id": "6",
+      "x": 560,
+      "y": 220,
+      "width": 160,
+      "height": 70,
+      "strokeColor": "#000000",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 1,
+      "opacity": 100,
+      "boundElements": [
+        {
+          "type": "arrow",
+          "id": "25"
+        },
+        {
+          "type": "text",
+          "id": "46"
+        }
+      ],
+      "groupIds": [
+        "6-group"
+      ]
+    },
+    {
+      "type": "text",
+      "id": "46",
+      "x": 570,
+      "y": 245,
+      "width": 140,
+      "height": 20,
+      "text": "Hypothesis Agent",
+      "fontSize": 16,
+      "fontFamily": 1,
+      "textAlign": "center",
+      "verticalAlign": "middle",
+      "strokeColor": "#000000",
+      "roughness": 1,
+      "opacity": 100,
+      "containerId": "6",
+      "groupIds": [
+        "6-group"
+      ]
+    },
+    {
+      "type": "rectangle",
+      "id": "7",
+      "x": 80,
+      "y": 360,
+      "width": 160,
+      "height": 70,
+      "strokeColor": "#000000",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 1,
+      "opacity": 100,
+      "boundElements": [
+        {
+          "type": "arrow",
+          "id": "26"
+        },
+        {
+          "type": "text",
+          "id": "47"
+        }
+      ],
+      "groupIds": [
+        "7-group"
+      ]
+    },
+    {
+      "type": "text",
+      "id": "47",
+      "x": 90,
+      "y": 385,
+      "width": 140,
+      "height": 20,
+      "text": "Path Agent",
+      "fontSize": 16,
+      "fontFamily": 1,
+      "textAlign": "center",
+      "verticalAlign": "middle",
+      "strokeColor": "#000000",
+      "roughness": 1,
+      "opacity": 100,
+      "containerId": "7",
+      "groupIds": [
+        "7-group"
+      ]
+    },
+    {
+      "type": "rectangle",
+      "id": "8",
+      "x": 320,
+      "y": 360,
+      "width": 160,
+      "height": 70,
+      "strokeColor": "#000000",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 1,
+      "opacity": 100,
+      "boundElements": [
+        {
+          "type": "arrow",
+          "id": "27"
+        },
+        {
+          "type": "text",
+          "id": "48"
+        }
+      ],
+      "groupIds": [
+        "8-group"
+      ]
+    },
+    {
+      "type": "text",
+      "id": "48",
+      "x": 330,
+      "y": 385,
+      "width": 140,
+      "height": 20,
+      "text": "Protocol Agent",
+      "fontSize": 16,
+      "fontFamily": 1,
+      "textAlign": "center",
+      "verticalAlign": "middle",
+      "strokeColor": "#000000",
+      "roughness": 1,
+      "opacity": 100,
+      "containerId": "8",
+      "groupIds": [
+        "8-group"
+      ]
+    },
+    {
+      "type": "rectangle",
+      "id": "9",
+      "x": 560,
+      "y": 360,
+      "width": 160,
+      "height": 70,
+      "strokeColor": "#000000",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 1,
+      "opacity": 100,
+      "boundElements": [
+        {
+          "type": "arrow",
+          "id": "28"
+        },
+        {
+          "type": "text",
+          "id": "49"
+        }
+      ],
+      "groupIds": [
+        "9-group"
+      ]
+    },
+    {
+      "type": "text",
+      "id": "49",
+      "x": 570,
+      "y": 385,
+      "width": 140,
+      "height": 20,
+      "text": "AnswerCloserAgent\n回合超限收口",
+      "fontSize": 16,
+      "fontFamily": 1,
+      "textAlign": "center",
+      "verticalAlign": "middle",
+      "strokeColor": "#000000",
+      "roughness": 1,
+      "opacity": 100,
+      "containerId": "9",
+      "groupIds": [
+        "9-group"
+      ]
+    },
+    {
+      "type": "rectangle",
+      "id": "10",
+      "x": 80,
+      "y": 500,
+      "width": 160,
+      "height": 70,
+      "strokeColor": "#000000",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 1,
+      "opacity": 100,
+      "boundElements": [
+        {
+          "type": "arrow",
+          "id": "29"
+        },
+        {
+          "type": "arrow",
+          "id": "34"
+        },
+        {
+          "type": "arrow",
+          "id": "39"
+        },
+        {
+          "type": "text",
+          "id": "50"
+        }
+      ],
+      "groupIds": [
+        "10-group"
+      ]
+    },
+    {
+      "type": "text",
+      "id": "50",
+      "x": 90,
+      "y": 525,
+      "width": 140,
+      "height": 20,
+      "text": "实战知识库（案例层）\nSQLite + FTS5\n现象→真因→RFC + 飞轮权重",
+      "fontSize": 16,
+      "fontFamily": 1,
+      "textAlign": "center",
+      "verticalAlign": "middle",
+      "strokeColor": "#000000",
+      "roughness": 1,
+      "opacity": 100,
+      "containerId": "10",
+      "groupIds": [
+        "10-group"
+      ]
+    },
+    {
+      "type": "rectangle",
+      "id": "11",
+      "x": 320,
+      "y": 500,
+      "width": 160,
+      "height": 70,
+      "strokeColor": "#000000",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 1,
+      "opacity": 100,
+      "boundElements": [
+        {
+          "type": "arrow",
+          "id": "30"
+        },
+        {
+          "type": "arrow",
+          "id": "34"
+        },
+        {
+          "type": "arrow",
+          "id": "40"
+        },
+        {
+          "type": "text",
+          "id": "51"
+        }
+      ],
+      "groupIds": [
+        "11-group"
+      ]
+    },
+    {
+      "type": "text",
+      "id": "51",
+      "x": 330,
+      "y": 525,
+      "width": 140,
+      "height": 20,
+      "text": "Skills 库（方法论层）\ndata/skills/*.md\n可复用排障 SOP",
+      "fontSize": 16,
+      "fontFamily": 1,
+      "textAlign": "center",
+      "verticalAlign": "middle",
+      "strokeColor": "#000000",
+      "roughness": 1,
+      "opacity": 100,
+      "containerId": "11",
+      "groupIds": [
+        "11-group"
+      ]
+    },
+    {
+      "type": "rectangle",
+      "id": "12",
+      "x": 560,
+      "y": 500,
+      "width": 160,
+      "height": 70,
+      "strokeColor": "#000000",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 1,
+      "opacity": 100,
+      "boundElements": [
+        {
+          "type": "arrow",
+          "id": "31"
+        },
+        {
+          "type": "text",
+          "id": "52"
+        }
+      ],
+      "groupIds": [
+        "12-group"
+      ]
+    },
+    {
+      "type": "text",
+      "id": "52",
+      "x": 570,
+      "y": 525,
+      "width": 140,
+      "height": 20,
+      "text": "RFC 全文库（规范层）\nSQLite + FTS5 786MB",
+      "fontSize": 16,
+      "fontFamily": 1,
+      "textAlign": "center",
+      "verticalAlign": "middle",
+      "strokeColor": "#000000",
+      "roughness": 1,
+      "opacity": 100,
+      "containerId": "12",
+      "groupIds": [
+        "12-group"
+      ]
+    },
+    {
+      "type": "rectangle",
+      "id": "13",
+      "x": 80,
+      "y": 640,
+      "width": 160,
+      "height": 70,
+      "strokeColor": "#000000",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 1,
+      "opacity": 100,
+      "boundElements": [
+        {
+          "type": "arrow",
+          "id": "32"
+        },
+        {
+          "type": "text",
+          "id": "53"
+        }
+      ],
+      "groupIds": [
+        "13-group"
+      ]
+    },
+    {
+      "type": "text",
+      "id": "53",
+      "x": 90,
+      "y": 665,
+      "width": 140,
+      "height": 20,
+      "text": "case-graph 工具\nsearch_field_notes / get_skill /\nsearch_rfc / get_rfc_section",
+      "fontSize": 16,
+      "fontFamily": 1,
+      "textAlign": "center",
+      "verticalAlign": "middle",
+      "strokeColor": "#000000",
+      "roughness": 1,
+      "opacity": 100,
+      "containerId": "13",
+      "groupIds": [
+        "13-group"
+      ]
+    },
+    {
+      "type": "rectangle",
+      "id": "14",
+      "x": 320,
+      "y": 640,
+      "width": 160,
+      "height": 70,
+      "strokeColor": "#000000",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 1,
+      "opacity": 100,
+      "boundElements": [
+        {
+          "type": "arrow",
+          "id": "33"
+        },
+        {
+          "type": "arrow",
+          "id": "35"
+        },
+        {
+          "type": "text",
+          "id": "54"
+        }
+      ],
+      "groupIds": [
+        "14-group"
+      ]
+    },
+    {
+      "type": "text",
+      "id": "54",
+      "x": 330,
+      "y": 665,
+      "width": 140,
+      "height": 20,
+      "text": "Protocol Adapters\npcapai_ 确定性工具\nTCP/DNS/TLS/HTTP/ICMP/UDP",
+      "fontSize": 16,
+      "fontFamily": 1,
+      "textAlign": "center",
+      "verticalAlign": "middle",
+      "strokeColor": "#000000",
+      "roughness": 1,
+      "opacity": 100,
+      "containerId": "14",
+      "groupIds": [
+        "14-group"
+      ]
+    },
+    {
+      "type": "rectangle",
+      "id": "15",
+      "x": 560,
+      "y": 640,
+      "width": 160,
+      "height": 70,
+      "strokeColor": "#000000",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 1,
+      "opacity": 100,
+      "boundElements": [
+        {
+          "type": "arrow",
+          "id": "35"
+        },
+        {
+          "type": "arrow",
+          "id": "36"
+        },
+        {
+          "type": "text",
+          "id": "55"
+        }
+      ],
+      "groupIds": [
+        "15-group"
+      ]
+    },
+    {
+      "type": "text",
+      "id": "55",
+      "x": 570,
+      "y": 665,
+      "width": 140,
+      "height": 20,
+      "text": "tshark-query MCP\n19 个工具",
+      "fontSize": 16,
+      "fontFamily": 1,
+      "textAlign": "center",
+      "verticalAlign": "middle",
+      "strokeColor": "#000000",
+      "roughness": 1,
+      "opacity": 100,
+      "containerId": "15",
+      "groupIds": [
+        "15-group"
+      ]
+    },
+    {
+      "type": "rectangle",
+      "id": "16",
+      "x": 80,
+      "y": 780,
+      "width": 160,
+      "height": 70,
+      "strokeColor": "#000000",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 1,
+      "opacity": 100,
+      "boundElements": [
+        {
+          "type": "arrow",
+          "id": "37"
+        },
+        {
+          "type": "arrow",
+          "id": "38"
+        },
+        {
+          "type": "text",
+          "id": "56"
+        }
+      ],
+      "groupIds": [
+        "16-group"
+      ]
+    },
+    {
+      "type": "text",
+      "id": "56",
+      "x": 90,
+      "y": 805,
+      "width": 140,
+      "height": 20,
+      "text": "evidence-opener MCP",
+      "fontSize": 16,
+      "fontFamily": 1,
+      "textAlign": "center",
+      "verticalAlign": "middle",
+      "strokeColor": "#000000",
+      "roughness": 1,
+      "opacity": 100,
+      "containerId": "16",
+      "groupIds": [
+        "16-group"
+      ]
+    },
+    {
+      "type": "rectangle",
+      "id": "17",
+      "x": 320,
+      "y": 780,
+      "width": 160,
+      "height": 70,
+      "strokeColor": "#000000",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 1,
+      "opacity": 100,
+      "boundElements": [
+        {
+          "type": "arrow",
+          "id": "36"
+        },
+        {
+          "type": "text",
+          "id": "57"
+        }
+      ],
+      "groupIds": [
+        "17-group"
+      ]
+    },
+    {
+      "type": "text",
+      "id": "57",
+      "x": 330,
+      "y": 805,
+      "width": 140,
+      "height": 20,
+      "text": "tshark",
+      "fontSize": 16,
+      "fontFamily": 1,
+      "textAlign": "center",
+      "verticalAlign": "middle",
+      "strokeColor": "#000000",
+      "roughness": 1,
+      "opacity": 100,
+      "containerId": "17",
+      "groupIds": [
+        "17-group"
+      ]
+    },
+    {
+      "type": "rectangle",
+      "id": "18",
+      "x": 560,
+      "y": 780,
+      "width": 160,
+      "height": 70,
+      "strokeColor": "#000000",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 1,
+      "opacity": 100,
+      "boundElements": [
+        {
+          "type": "arrow",
+          "id": "38"
+        },
+        {
+          "type": "text",
+          "id": "58"
+        }
+      ],
+      "groupIds": [
+        "18-group"
+      ]
+    },
+    {
+      "type": "text",
+      "id": "58",
+      "x": 570,
+      "y": 805,
+      "width": 140,
+      "height": 20,
+      "text": "Wireshark",
+      "fontSize": 16,
+      "fontFamily": 1,
+      "textAlign": "center",
+      "verticalAlign": "middle",
+      "strokeColor": "#000000",
+      "roughness": 1,
+      "opacity": 100,
+      "containerId": "18",
+      "groupIds": [
+        "18-group"
+      ]
+    },
+    {
+      "type": "rectangle",
+      "id": "19",
+      "x": 80,
+      "y": 920,
+      "width": 160,
+      "height": 70,
+      "strokeColor": "#000000",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 1,
+      "opacity": 100,
+      "boundElements": [
+        {
+          "type": "arrow",
+          "id": "23"
+        },
+        {
+          "type": "text",
+          "id": "59"
+        }
+      ],
+      "groupIds": [
+        "19-group"
+      ]
+    },
+    {
+      "type": "text",
+      "id": "59",
+      "x": 90,
+      "y": 945,
+      "width": 140,
+      "height": 20,
+      "text": "GLM-5.2（默认）/\nDeepSeek / Ollama",
+      "fontSize": 16,
+      "fontFamily": 1,
+      "textAlign": "center",
+      "verticalAlign": "middle",
+      "strokeColor": "#000000",
+      "roughness": 1,
+      "opacity": 100,
+      "containerId": "19",
+      "groupIds": [
+        "19-group"
+      ]
+    },
+    {
+      "type": "arrow",
+      "id": "20",
+      "x": 240,
+      "y": 115,
+      "width": 80,
+      "height": 0,
+      "strokeColor": "#000000",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 1,
+      "opacity": 100,
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          80,
+          0
+        ]
+      ],
+      "lastCommittedPoint": [
+        80,
+        0
+      ],
+      "startArrowhead": null,
+      "endArrowhead": "arrow",
+      "startBinding": {
+        "elementId": "1",
+        "focus": 0,
+        "gap": 0
+      },
+      "endBinding": {
+        "elementId": "2",
+        "focus": 0,
+        "gap": 0
+      },
+      "boundElements": [
+        {
+          "type": "text",
+          "id": "60"
+        }
+      ]
+    },
+    {
+      "type": "text",
+      "id": "60",
+      "x": 190,
+      "y": 83,
+      "width": 180,
+      "height": 20,
+      "text": "HTTP / SSE",
+      "fontSize": 14,
+      "fontFamily": 1,
+      "strokeColor": "#000000",
+      "roughness": 1,
+      "opacity": 100,
+      "containerId": "20"
+    },
+    {
+      "type": "arrow",
+      "id": "21",
+      "x": 480,
+      "y": 115,
+      "width": 80,
+      "height": 0,
+      "strokeColor": "#000000",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 1,
+      "opacity": 100,
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          80,
+          0
+        ]
+      ],
+      "lastCommittedPoint": [
+        80,
+        0
+      ],
+      "startArrowhead": null,
+      "endArrowhead": "arrow",
+      "startBinding": {
+        "elementId": "2",
+        "focus": 0,
+        "gap": 0
+      },
+      "endBinding": {
+        "elementId": "3",
+        "focus": 0,
+        "gap": 0
+      }
+    },
+    {
+      "type": "arrow",
+      "id": "22",
+      "x": 580,
+      "y": 150,
+      "width": -120,
+      "height": 70,
+      "strokeColor": "#000000",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 1,
+      "opacity": 100,
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          -120,
+          70
+        ]
+      ],
+      "lastCommittedPoint": [
+        -120,
+        70
+      ],
+      "startArrowhead": null,
+      "endArrowhead": "arrow",
+      "startBinding": {
+        "elementId": "3",
+        "focus": -0.75,
+        "gap": 0
+      },
+      "endBinding": {
+        "elementId": "5",
+        "focus": 0.75,
+        "gap": 0
+      },
+      "boundElements": [
+        {
+          "type": "text",
+          "id": "61"
+        }
+      ]
+    },
+    {
+      "type": "text",
+      "id": "61",
+      "x": 439,
+      "y": 153,
+      "width": 162,
+      "height": 20,
+      "text": "直接进 Agent",
+      "fontSize": 14,
+      "fontFamily": 1,
+      "strokeColor": "#000000",
+      "roughness": 1,
+      "opacity": 100,
+      "containerId": "22"
+    },
+    {
+      "type": "arrow",
+      "id": "23",
+      "x": 388,
+      "y": 290,
+      "width": -216,
+      "height": 630,
+      "strokeColor": "#000000",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 1,
+      "opacity": 100,
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          -216,
+          630
+        ]
+      ],
+      "lastCommittedPoint": [
+        -216,
+        630
+      ],
+      "startArrowhead": null,
+      "endArrowhead": "arrow",
+      "startBinding": {
+        "elementId": "5",
+        "focus": -0.15,
+        "gap": 0
+      },
+      "endBinding": {
+        "elementId": "19",
+        "focus": 0.15,
+        "gap": 0
+      }
+    },
+    {
+      "type": "arrow",
+      "id": "24",
+      "x": 320,
+      "y": 255,
+      "width": -80,
+      "height": 0,
+      "strokeColor": "#000000",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 1,
+      "opacity": 100,
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          -80,
+          0
+        ]
+      ],
+      "lastCommittedPoint": [
+        -80,
+        0
+      ],
+      "startArrowhead": null,
+      "endArrowhead": "arrow",
+      "startBinding": {
+        "elementId": "5",
+        "focus": 0,
+        "gap": 0
+      },
+      "endBinding": {
+        "elementId": "4",
+        "focus": 0,
+        "gap": 0
+      },
+      "boundElements": [
+        {
+          "type": "text",
+          "id": "62"
+        }
+      ]
+    },
+    {
+      "type": "text",
+      "id": "62",
+      "x": 217,
+      "y": 223,
+      "width": 126,
+      "height": 20,
+      "text": "session",
+      "fontSize": 14,
+      "fontFamily": 1,
+      "strokeColor": "#000000",
+      "roughness": 1,
+      "opacity": 100,
+      "containerId": "24"
+    },
+    {
+      "type": "arrow",
+      "id": "25",
+      "x": 480,
+      "y": 255,
+      "width": 80,
+      "height": 0,
+      "strokeColor": "#000000",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 1,
+      "opacity": 100,
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          80,
+          0
+        ]
+      ],
+      "lastCommittedPoint": [
+        80,
+        0
+      ],
+      "startArrowhead": null,
+      "endArrowhead": "arrow",
+      "startBinding": {
+        "elementId": "5",
+        "focus": 0,
+        "gap": 0
+      },
+      "endBinding": {
+        "elementId": "6",
+        "focus": 0,
+        "gap": 0
+      }
+    },
+    {
+      "type": "arrow",
+      "id": "26",
+      "x": 340,
+      "y": 290,
+      "width": -120,
+      "height": 70,
+      "strokeColor": "#000000",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 1,
+      "opacity": 100,
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          -120,
+          70
+        ]
+      ],
+      "lastCommittedPoint": [
+        -120,
+        70
+      ],
+      "startArrowhead": null,
+      "endArrowhead": "arrow",
+      "startBinding": {
+        "elementId": "5",
+        "focus": -0.75,
+        "gap": 0
+      },
+      "endBinding": {
+        "elementId": "7",
+        "focus": 0.75,
+        "gap": 0
+      }
+    },
+    {
+      "type": "arrow",
+      "id": "27",
+      "x": 400,
+      "y": 290,
+      "width": 0,
+      "height": 70,
+      "strokeColor": "#000000",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 1,
+      "opacity": 100,
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          0,
+          70
+        ]
+      ],
+      "lastCommittedPoint": [
+        0,
+        70
+      ],
+      "startArrowhead": null,
+      "endArrowhead": "arrow",
+      "startBinding": {
+        "elementId": "5",
+        "focus": 0,
+        "gap": 0
+      },
+      "endBinding": {
+        "elementId": "8",
+        "focus": 0,
+        "gap": 0
+      }
+    },
+    {
+      "type": "arrow",
+      "id": "28",
+      "x": 460,
+      "y": 290,
+      "width": 120,
+      "height": 70,
+      "strokeColor": "#000000",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 1,
+      "opacity": 100,
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          120,
+          70
+        ]
+      ],
+      "lastCommittedPoint": [
+        120,
+        70
+      ],
+      "startArrowhead": null,
+      "endArrowhead": "arrow",
+      "startBinding": {
+        "elementId": "5",
+        "focus": 0.75,
+        "gap": 0
+      },
+      "endBinding": {
+        "elementId": "9",
+        "focus": -0.75,
+        "gap": 0
+      },
+      "boundElements": [
+        {
+          "type": "text",
+          "id": "63"
+        }
+      ]
+    },
+    {
+      "type": "text",
+      "id": "63",
+      "x": 430,
+      "y": 293,
+      "width": 180,
+      "height": 20,
+      "text": "maxTurns超限",
+      "fontSize": 14,
+      "fontFamily": 1,
+      "strokeColor": "#000000",
+      "roughness": 1,
+      "opacity": 100,
+      "containerId": "28"
+    },
+    {
+      "type": "arrow",
+      "id": "29",
+      "x": 370,
+      "y": 290,
+      "width": -180,
+      "height": 210,
+      "strokeColor": "#000000",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 1,
+      "opacity": 100,
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          -180,
+          210
+        ]
+      ],
+      "lastCommittedPoint": [
+        -180,
+        210
+      ],
+      "startArrowhead": null,
+      "endArrowhead": "arrow",
+      "startBinding": {
+        "elementId": "5",
+        "focus": -0.375,
+        "gap": 0
+      },
+      "endBinding": {
+        "elementId": "10",
+        "focus": 0.375,
+        "gap": 0
+      },
+      "boundElements": [
+        {
+          "type": "text",
+          "id": "64"
+        }
+      ]
+    },
+    {
+      "type": "text",
+      "id": "64",
+      "x": 292,
+      "y": 385,
+      "width": 90,
+      "height": 20,
+      "text": "强制第一步",
+      "fontSize": 14,
+      "fontFamily": 1,
+      "strokeColor": "#000000",
+      "roughness": 1,
+      "opacity": 100,
+      "containerId": "29"
+    },
+    {
+      "type": "arrow",
+      "id": "30",
+      "x": 400,
+      "y": 290,
+      "width": 0,
+      "height": 210,
+      "strokeColor": "#000000",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 1,
+      "opacity": 100,
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          0,
+          210
+        ]
+      ],
+      "lastCommittedPoint": [
+        0,
+        210
+      ],
+      "startArrowhead": null,
+      "endArrowhead": "arrow",
+      "startBinding": {
+        "elementId": "5",
+        "focus": 0,
+        "gap": 0
+      },
+      "endBinding": {
+        "elementId": "11",
+        "focus": 0,
+        "gap": 0
+      },
+      "boundElements": [
+        {
+          "type": "text",
+          "id": "65"
+        }
+      ]
+    },
+    {
+      "type": "text",
+      "id": "65",
+      "x": 412,
+      "y": 385,
+      "width": 162,
+      "height": 20,
+      "text": "get_skill",
+      "fontSize": 14,
+      "fontFamily": 1,
+      "strokeColor": "#000000",
+      "roughness": 1,
+      "opacity": 100,
+      "containerId": "30"
+    },
+    {
+      "type": "arrow",
+      "id": "31",
+      "x": 430,
+      "y": 290,
+      "width": 180,
+      "height": 210,
+      "strokeColor": "#000000",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 1,
+      "opacity": 100,
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          180,
+          210
+        ]
+      ],
+      "lastCommittedPoint": [
+        180,
+        210
+      ],
+      "startArrowhead": null,
+      "endArrowhead": "arrow",
+      "startBinding": {
+        "elementId": "5",
+        "focus": 0.375,
+        "gap": 0
+      },
+      "endBinding": {
+        "elementId": "12",
+        "focus": -0.375,
+        "gap": 0
+      },
+      "boundElements": [
+        {
+          "type": "text",
+          "id": "66"
+        }
+      ]
+    },
+    {
+      "type": "text",
+      "id": "66",
+      "x": 532,
+      "y": 385,
+      "width": 306,
+      "height": 20,
+      "text": "get_rfc_section验证",
+      "fontSize": 14,
+      "fontFamily": 1,
+      "strokeColor": "#000000",
+      "roughness": 1,
+      "opacity": 100,
+      "containerId": "31"
+    },
+    {
+      "type": "arrow",
+      "id": "32",
+      "x": 380,
+      "y": 290,
+      "width": -200,
+      "height": 350,
+      "strokeColor": "#000000",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 1,
+      "opacity": 100,
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          -200,
+          350
+        ]
+      ],
+      "lastCommittedPoint": [
+        -200,
+        350
+      ],
+      "startArrowhead": null,
+      "endArrowhead": "arrow",
+      "startBinding": {
+        "elementId": "5",
+        "focus": -0.25,
+        "gap": 0
+      },
+      "endBinding": {
+        "elementId": "13",
+        "focus": 0.25,
+        "gap": 0
+      }
+    },
+    {
+      "type": "arrow",
+      "id": "33",
+      "x": 400,
+      "y": 290,
+      "width": 0,
+      "height": 350,
+      "strokeColor": "#000000",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 1,
+      "opacity": 100,
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          0,
+          350
+        ]
+      ],
+      "lastCommittedPoint": [
+        0,
+        350
+      ],
+      "startArrowhead": null,
+      "endArrowhead": "arrow",
+      "startBinding": {
+        "elementId": "5",
+        "focus": 0,
+        "gap": 0
+      },
+      "endBinding": {
+        "elementId": "14",
+        "focus": 0,
+        "gap": 0
+      }
+    },
+    {
+      "type": "arrow",
+      "id": "34",
+      "x": 240,
+      "y": 535,
+      "width": 80,
+      "height": 0,
+      "strokeColor": "#000000",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 1,
+      "opacity": 100,
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          80,
+          0
+        ]
+      ],
+      "lastCommittedPoint": [
+        80,
+        0
+      ],
+      "startArrowhead": null,
+      "endArrowhead": "arrow",
+      "startBinding": {
+        "elementId": "10",
+        "focus": 0,
+        "gap": 0
+      },
+      "endBinding": {
+        "elementId": "11",
+        "focus": 0,
+        "gap": 0
+      },
+      "boundElements": [
+        {
+          "type": "text",
+          "id": "67"
+        }
+      ]
+    },
+    {
+      "type": "text",
+      "id": "67",
+      "x": 190,
+      "y": 503,
+      "width": 180,
+      "height": 20,
+      "text": "skillIds关联",
+      "fontSize": 14,
+      "fontFamily": 1,
+      "strokeColor": "#000000",
+      "roughness": 1,
+      "opacity": 100,
+      "containerId": "34"
+    },
+    {
+      "type": "arrow",
+      "id": "35",
+      "x": 480,
+      "y": 675,
+      "width": 80,
+      "height": 0,
+      "strokeColor": "#000000",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 1,
+      "opacity": 100,
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          80,
+          0
+        ]
+      ],
+      "lastCommittedPoint": [
+        80,
+        0
+      ],
+      "startArrowhead": null,
+      "endArrowhead": "arrow",
+      "startBinding": {
+        "elementId": "14",
+        "focus": 0,
+        "gap": 0
+      },
+      "endBinding": {
+        "elementId": "15",
+        "focus": 0,
+        "gap": 0
+      },
+      "boundElements": [
+        {
+          "type": "text",
+          "id": "68"
+        }
+      ]
+    },
+    {
+      "type": "text",
+      "id": "68",
+      "x": 367,
+      "y": 643,
+      "width": 306,
+      "height": 20,
+      "text": "tsharkQueryClient",
+      "fontSize": 14,
+      "fontFamily": 1,
+      "strokeColor": "#000000",
+      "roughness": 1,
+      "opacity": 100,
+      "containerId": "35"
+    },
+    {
+      "type": "arrow",
+      "id": "36",
+      "x": 580,
+      "y": 710,
+      "width": -120,
+      "height": 70,
+      "strokeColor": "#000000",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 1,
+      "opacity": 100,
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          -120,
+          70
+        ]
+      ],
+      "lastCommittedPoint": [
+        -120,
+        70
+      ],
+      "startArrowhead": null,
+      "endArrowhead": "arrow",
+      "startBinding": {
+        "elementId": "15",
+        "focus": -0.75,
+        "gap": 0
+      },
+      "endBinding": {
+        "elementId": "17",
+        "focus": 0.75,
+        "gap": 0
+      }
+    },
+    {
+      "type": "arrow",
+      "id": "37",
+      "x": 388,
+      "y": 150,
+      "width": -216,
+      "height": 630,
+      "strokeColor": "#000000",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 1,
+      "opacity": 100,
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          -216,
+          630
+        ]
+      ],
+      "lastCommittedPoint": [
+        -216,
+        630
+      ],
+      "startArrowhead": null,
+      "endArrowhead": "arrow",
+      "startBinding": {
+        "elementId": "2",
+        "focus": -0.15,
+        "gap": 0
+      },
+      "endBinding": {
+        "elementId": "16",
+        "focus": 0.15,
+        "gap": 0
+      }
+    },
+    {
+      "type": "arrow",
+      "id": "38",
+      "x": 240,
+      "y": 815,
+      "width": 320,
+      "height": 0,
+      "strokeColor": "#000000",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 1,
+      "opacity": 100,
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          320,
+          0
+        ]
+      ],
+      "lastCommittedPoint": [
+        320,
+        0
+      ],
+      "startArrowhead": null,
+      "endArrowhead": "arrow",
+      "startBinding": {
+        "elementId": "16",
+        "focus": 0,
+        "gap": 0
+      },
+      "endBinding": {
+        "elementId": "18",
+        "focus": 0,
+        "gap": 0
+      }
+    },
+    {
+      "type": "arrow",
+      "id": "39",
+      "x": 380,
+      "y": 150,
+      "width": -200,
+      "height": 350,
+      "strokeColor": "#000000",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 1,
+      "opacity": 100,
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          -200,
+          350
+        ]
+      ],
+      "lastCommittedPoint": [
+        -200,
+        350
+      ],
+      "startArrowhead": null,
+      "endArrowhead": "arrow",
+      "startBinding": {
+        "elementId": "2",
+        "focus": -0.25,
+        "gap": 0
+      },
+      "endBinding": {
+        "elementId": "10",
+        "focus": 0.25,
+        "gap": 0
+      },
+      "boundElements": [
+        {
+          "type": "text",
+          "id": "69"
+        }
+      ]
+    },
+    {
+      "type": "text",
+      "id": "69",
+      "x": 292,
+      "y": 315,
+      "width": 72,
+      "height": 20,
+      "text": "CRUD",
+      "fontSize": 14,
+      "fontFamily": 1,
+      "strokeColor": "#000000",
+      "roughness": 1,
+      "opacity": 100,
+      "containerId": "39"
+    },
+    {
+      "type": "arrow",
+      "id": "40",
+      "x": 400,
+      "y": 150,
+      "width": 0,
+      "height": 350,
+      "strokeColor": "#000000",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 1,
+      "opacity": 100,
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          0,
+          350
+        ]
+      ],
+      "lastCommittedPoint": [
+        0,
+        350
+      ],
+      "startArrowhead": null,
+      "endArrowhead": "arrow",
+      "startBinding": {
+        "elementId": "2",
+        "focus": 0,
+        "gap": 0
+      },
+      "endBinding": {
+        "elementId": "11",
+        "focus": 0,
+        "gap": 0
+      },
+      "boundElements": [
+        {
+          "type": "text",
+          "id": "70"
+        }
+      ]
+    },
+    {
+      "type": "text",
+      "id": "70",
+      "x": 412,
+      "y": 315,
+      "width": 72,
+      "height": 20,
+      "text": "CRUD",
+      "fontSize": 14,
+      "fontFamily": 1,
+      "strokeColor": "#000000",
+      "roughness": 1,
+      "opacity": 100,
+      "containerId": "40"
+    }
+  ],
+  "appState": {
+    "viewBackgroundColor": "#ffffff"
+  }
+}

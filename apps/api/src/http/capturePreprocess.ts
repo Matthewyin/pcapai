@@ -17,6 +17,11 @@ export async function stripPayload(inputPath: string) {
     inputPath,
     outputPath
   ]);
-  unlinkSync(inputPath);
+  // 原始 pcap 删除失败（权限/占用）不应让已成功 trim 的上传整体失败
+  try {
+    unlinkSync(inputPath);
+  } catch {
+    /* trim 已完成，原始文件残留不影响后续使用 headers 文件 */
+  }
   return outputPath;
 }

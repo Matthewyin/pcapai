@@ -4,7 +4,7 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from "electron";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import path from "node:path";
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import keytar from "keytar";
 
@@ -105,11 +105,19 @@ function registerIpcHandlers() {
 
 function buildSidecarEnv() {
   const userData = app.getPath("userData");
+  // userData 可写区：cases / rfc-index（完整库下载目标）/ field-notes / skills
   const dirs = {
     cases: path.join(userData, "cases"),
-    rfcIndex: path.join(userData, "rfc-index")
+    rfcIndex: path.join(userData, "rfc-index"),
+    fieldNotes: path.join(userData, "field-notes"),
+    fieldNotesSeeds: path.join(userData, "field-notes", "seeds"),
+    skills: path.join(userData, "skills")
   };
   for (const dir of Object.values(dirs)) mkdirSync(dir, { recursive: true });
+
+  // 首次启动：从 Resources（只读）seed userData 可写区（field-notes seeds + skills）
+  // 后续用户可自由编辑/新增，不受 app 更新覆盖
+  seedUserDataFromResources(dirs);
 
   const env: NodeJS.ProcessEnv = { ...process.env, PCAPAI_ROOT: workspaceRoot };
   // Keychain 中的 LLM Key 在 spawn 前注入；优先于 .env 文件（API 读 process.env）
@@ -120,10 +128,21 @@ function buildSidecarEnv() {
     // native module（better-sqlite3 / keytar）均为 N-API，Electron ABI 130 下实测可加载。
     env.ELECTRON_RUN_AS_NODE = "1";
     env.PCAPAI_CASE_DATA_DIR ??= dirs.cases;
+    // 阶段 3a 双层库：
+    //   - 完整库（userData 可写，下载目标）：PCAPAI_RAG_INDEX_PATH → userData/rfc-index/rfc.db
+    //   - 精简库（Resources 只读，降级层）：PCAPAI_RAG_CURATED_INDEX_PATH → Resources/data/rfc-index/rfc-mini.db
     env.PCAPAI_RAG_INDEX_PATH ??= path.join(dirs.rfcIndex, "rfc.db");
+    const bundledMini = path.join(workspaceRoot, "data/rfc-index/rfc-mini.db");
+    if (existsSync(bundledMini)) env.PCAPAI_RAG_CURATED_INDEX_PATH ??= bundledMini;
+    // 完整库下载服务目标（rfcDownloadService 读此变量）
+    env.PCAPAI_USERDATA_DIR ??= userData;
     env.PCAPAI_LEARNED_PATTERNS_PATH ??= path.join(userData, "learned_patterns.json");
     const bundledRfc = path.join(workspaceRoot, "RFC");
     if (existsSync(bundledRfc)) env.PCAPAI_RAG_RFC_DIR ??= bundledRfc;
+    // 阶段 3 实战笔记 + 技能：指向 userData 可写区（首次启动已从 Resources seed）
+    env.PCAPAI_FIELD_NOTES_SEEDS_DIR ??= dirs.fieldNotesSeeds;
+    env.PCAPAI_FIELD_NOTES_INDEX_PATH ??= path.join(dirs.fieldNotes, "field-notes.db");
+    env.PCAPAI_SKILLS_DIR ??= dirs.skills;
     // 生产期 MCP 走编译产物（Resources 内置 node + dist），免 npm 依赖
     const mcpTshark = path.join(workspaceRoot, "mcp/tshark-query/dist/index.js");
     const mcpEvidence = path.join(workspaceRoot, "mcp/evidence-opener/dist/index.js");
@@ -137,6 +156,30 @@ function buildSidecarEnv() {
     }
   }
   return env;
+}
+
+/**
+ * 首次启动：从 Resources（只读）复制 field-notes seeds + skills 到 userData（可写）。
+ * userData 目标已存在文件时不覆盖（用户已编辑过）。
+ */
+function seedUserDataFromResources(dirs: { fieldNotesSeeds: string; skills: string }) {
+  const seedPairs: Array<[string, string]> = [
+    [path.join(workspaceRoot, "data/field-notes/seeds"), dirs.fieldNotesSeeds],
+    [path.join(workspaceRoot, "data/skills"), dirs.skills]
+  ];
+  for (const [src, dest] of seedPairs) {
+    if (!existsSync(src)) continue;
+    try {
+      for (const entry of readdirSync(src)) {
+        const srcFile = path.join(src, entry);
+        const destFile = path.join(dest, entry);
+        if (existsSync(destFile)) continue; // 不覆盖用户编辑
+        copyFileSync(srcFile, destFile);
+      }
+    } catch {
+      // seed 失败不阻塞启动（API 会用空库降级）
+    }
+  }
 }
 
 async function waitForHealth(host: string, port: number, timeoutMs = 20000) {

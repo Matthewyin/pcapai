@@ -3,6 +3,9 @@ import { z } from "zod";
 import type { CaseGraph, CaseMemory, QueryRun } from "../../../../packages/shared/src/index.js";
 import { DataPathHopSchema, NetworkDeviceSchema } from "../../../../packages/shared/src/index.js";
 import { buildCaseReportMarkdown } from "../http/reportBuilder.js";
+import { extractPacketFeatures, searchFieldNotes, type FieldNoteHit } from "../services/fieldNotesService.js";
+import { listSkills, getSkill, createSkill } from "../services/skillsService.js";
+import { apiConfig } from "../config.js";
 
 // case graph 只读/记忆工具：原 case-graph MCP 的进程内实现。
 // 读工具直接访问内存中的 graph；写工具（拓扑、记忆）通过 saveGraph 落到真实 caseStore，
@@ -236,6 +239,22 @@ function defaultCaseMemory(): CaseMemory {
   return { topology: "", findings: [], userNotes: [] };
 }
 
+// 实战知识库候选格式化：明确标注"候选、需验证"，防止 Agent 直接套用。
+// 候选只是先验提示，Agent 必须用抓包+RFC 验证后才能下结论。
+// candidateCause 带 skillIds 时提示 Agent 调 get_skill 读取操作 SOP（方法论层）。
+function formatFieldNoteHits(hits: FieldNoteHit[]): string {
+  if (!hits.length) return "未在实战知识库中匹配到已知排障案例。请基于抓包和 RFC 自主推理。";
+  const lines = hits.map((hit, index) => {
+    const causes = hit.note.candidateCauses.map((cause) => {
+      const rfc = cause.rfcDocId ? `RFC ${cause.rfcDocId}${cause.rfcSection ? `§${cause.rfcSection}` : ""}` : "无 RFC 依据（经验推测）";
+      const skillHint = cause.skillIds?.length ? `\n      推荐技能（调 get_skill 读取操作步骤）：${cause.skillIds.join(", ")}` : "";
+      return `    - [${cause.likelihood}] ${cause.cause}（${rfc}）\n      验证方法：${cause.howToVerify}${skillHint}`;
+    }).join("\n");
+    return `[候选${index + 1}]（特征匹配度 ${hit.featureScore}）${hit.note.title}\n  摘要：${hit.note.summary}\n  候选真因：\n${causes}`;
+  });
+  return `以下已知排障案例可能相关（均为候选，需你用抓包+RFC 验证，不可直接套用）：\n\n${lines.join("\n\n")}`;
+}
+
 export function createCaseGraphTools(input: CaseGraphToolsInput): Tool[] {
   const json = (value: unknown) => JSON.stringify(value);
   return [
@@ -250,6 +269,74 @@ export function createCaseGraphTools(input: CaseGraphToolsInput): Tool[] {
       description: "读取确定性统计结果，例如 TCP 通信对数量、诊断标签统计、捕获数据包整体时间范围。",
       parameters: z.object({}),
       execute: async () => json(caseStatistics(input.loadGraph()))
+    }),
+    tool({
+      name: "search_field_notes",
+      description: "从当前抓包特征检索实战知识库，返回已知排障案例候选（现象→候选真因→RFC 引用）。建议在排障开始时优先调用，用候选指导后续抓包/RFC 验证。候选仅为提示，必须验证后才能下结论。特征不命中时可用 question 做关键词兜底。",
+      parameters: z.object({
+        question: z.string().optional().describe("当前用户问题，特征不命中时用于关键词兜底检索")
+      }),
+      execute: async ({ question }) => {
+        // 失败降级：知识库未构建或检索异常时返回空，不阻塞 Agent 自主推理。
+        try {
+          const features = extractPacketFeatures(input.loadGraph());
+          const hits = searchFieldNotes(features, apiConfig.fieldNotes.topK, question);
+          return formatFieldNoteHits(hits);
+        } catch {
+          return "实战知识库暂不可用，请基于抓包和 RFC 自主推理。";
+        }
+      }
+    }),
+    tool({
+      name: "list_skills",
+      description: "列出所有可用的排障技能（Skills，方法论层 SOP）。Skills 比实战知识库更抽象，描述可复用的操作流程（如\"如何验证 TCP options\"）。实战库命中后可按其 skillIds 调 get_skill 读取详细步骤。",
+      parameters: z.object({}),
+      execute: async () => {
+        try {
+          const skills = listSkills();
+          if (!skills.length) return "暂无可用技能。";
+          const lines = skills.map((s) => `- ${s.name}：${s.description}${s.triggers?.length ? `（触发：${s.triggers.join("、")}）` : ""}`);
+          return `可用技能（${skills.length} 个）：\n${lines.join("\n")}\n\n用 get_skill(name) 读取具体执行步骤。`;
+        } catch {
+          return "技能库暂不可用。";
+        }
+      }
+    }),
+    tool({
+      name: "get_skill",
+      description: "读取指定技能的完整执行步骤（SOP）。当实战知识库命中的候选真因引用了某 skill，或 list_skills 看到匹配当前问题的技能时调用。",
+      parameters: z.object({ name: z.string().describe("技能名，如 verify-tcp-options") }),
+      execute: async ({ name }) => {
+        try {
+          const skill = getSkill(name);
+          if (!skill) return `未找到技能：${name}。用 list_skills 查看可用技能。`;
+          return `# 技能：${skill.name}\n描述：${skill.description}\n${skill.triggers?.length ? `触发场景：${skill.triggers.join("、")}\n` : ""}${skill.toolsRequired?.length ? `依赖工具：${skill.toolsRequired.join(", ")}\n` : ""}\n${skill.body}`;
+        } catch {
+          return `技能 ${name} 读取失败。`;
+        }
+      }
+    }),
+    tool({
+      name: "create_skill",
+      description: "把验证有效的排障操作流程固化为新技能（自我进化）。当你执行了一套行之有效的步骤且可复用时调用。技能名用 kebab-case（如 verify-mtu-blackhole）。",
+      parameters: z.object({
+        name: z.string().describe("技能名，kebab-case，如 verify-tcp-options"),
+        description: z.string().describe("一句话说明用途"),
+        triggers: z.array(z.string()).optional().describe("触发场景描述列表"),
+        toolsRequired: z.array(z.string()).optional().describe("依赖的工具名列表"),
+        body: z.string().describe("正文：适用场景、执行步骤、判定标准，markdown 格式"),
+        overwrite: z.boolean().optional().describe("已存在时是否覆盖，默认 false")
+      }),
+      execute: async ({ name, description, triggers, toolsRequired, body, overwrite }) => {
+        try {
+          const result = createSkill({ name, description, triggers, toolsRequired, body, overwrite });
+          return result.created
+            ? `技能 ${name} 已${overwrite ? "更新" : "创建"}：${result.filePath}`
+            : `技能 ${name} 未创建：${result.reason}`;
+        } catch (error) {
+          return error instanceof Error ? `技能创建失败：${error.message}` : "技能创建失败。";
+        }
+      }
     }),
     tool({
       name: "get_query_runs",

@@ -291,6 +291,14 @@ export const ConversationSchema = z.object({
   rstCount: z.number().int().default(0),
   retransmissionCount: z.number().int().default(0),
   zeroWindowCount: z.number().int().default(0),
+  // 方向级摘要（由 tshark-query MCP 的 summarizeConversations 计算）。
+  // tcpFlags 是整条连接所有包 flag 的去重并集，无法据此判定握手和方向；下列字段按 forward=src→dst /
+  // reverse=dst→src 拆分，让会话级健康判定能与包级 classifyConversationHealth 对齐，无需逐连接取包。
+  handshakePhase: z.enum(["complete", "syn_ack", "syn", "none"]).default("none"),
+  forwardPacketCount: z.number().int().default(0),
+  reversePacketCount: z.number().int().default(0),
+  hasForwardPayload: z.boolean().default(false),
+  hasReversePayload: z.boolean().default(false),
   rankScore: z.number().default(0),
   rankReasons: z.array(z.string()).default([]),
   displayFilter: z.string()
@@ -644,6 +652,19 @@ export const DiagnosticHypothesisSchema = z.object({
 });
 export type DiagnosticHypothesis = z.infer<typeof DiagnosticHypothesisSchema>;
 
+// 根因结论分层：事实（抓包证据）→ 模式（统计）→ 根因（必须 RFC 或标注推测）→ 建议（依赖根因）
+// rfcVerified=true 表示根因已用 get_rfc_section 回读 RFC 原文并引用；false 表示经验推测，UI 标黄
+export const RootCauseSchema = z.object({
+  cause: z.string(),
+  rfcDocId: z.number().int().optional(),
+  rfcSection: z.string().optional(),
+  rfcVerified: z.boolean().default(false),
+  confidence: ConfidenceSchema,
+  evidencePacketIds: z.array(z.string()).default([]),
+  skillIds: z.array(z.string()).default([])
+});
+export type RootCause = z.infer<typeof RootCauseSchema>;
+
 export const AgentAnswerSchema = z.object({
   answer: z.string(),
   thoughts: z.array(z.string()).optional(),
@@ -661,7 +682,10 @@ export const AgentAnswerSchema = z.object({
   protocolCorrelations: z.array(ProtocolCorrelationSchema).optional(),
   followUpQuestions: z.array(z.string()).optional(),
   diagnosticPhase: z.enum(["interview", "hypothesis", "testing", "conclusion"]).optional(),
-  hypotheses: z.array(DiagnosticHypothesisSchema).optional()
+  hypotheses: z.array(DiagnosticHypothesisSchema).optional(),
+  // 结论分层：根因清单（防幻觉核心，Agent 专属）。每个根因要么 rfcVerified=true（挂 RFC），要么 false（经验推测）。
+  // 确定性 adapter 答案无根因（根因是 Agent 归因产物），故 optional。
+  rootCauses: z.array(RootCauseSchema).optional()
 });
 export type AgentAnswer = z.infer<typeof AgentAnswerSchema>;
 

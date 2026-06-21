@@ -1,0 +1,214 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mxfile host="Electron" agent="Claude MCP Server" version="1.0.0" pages="1">
+  <diagram name="pcapAI 架构总览（P7 重构：Agent 第一入口 + 三层知识体系）" id="diagram-1">
+    <mxGraphModel dx="1426" dy="840" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1654" pageHeight="2339" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="root-parent" parent="0" />
+        <mxCell id="1" value="apps/web React 工作台
+聊天界面 + 知识库管理页
+SSE 流式输出" style="shape=rect;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;spacing=8;fillColor=#F8FAFC;strokeColor=#333333;strokeWidth=2;fontColor=#111827;fontSize=20" parent="root-parent" vertex="1">
+          <mxGeometry x="50" y="50" width="180" height="72" as="geometry" />
+        </mxCell>
+        <mxCell id="2" value="routes.ts
+REST + SSE + per-case 锁
+field-notes/skills CRUD" style="shape=rect;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;spacing=8;fillColor=#F8FAFC;strokeColor=#333333;strokeWidth=2;fontColor=#111827;fontSize=20" parent="root-parent" vertex="1">
+          <mxGeometry x="302" y="50" width="180" height="72" as="geometry" />
+        </mxCell>
+        <mxCell id="3" value="AgentRuntimeService
+Agent 第一入口 P7
+不经 planner 拦路" style="shape=rect;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;spacing=8;fillColor=#F8FAFC;strokeColor=#333333;strokeWidth=2;fontColor=#111827;fontSize=20" parent="root-parent" vertex="1">
+          <mxGeometry x="50" y="194" width="180" height="72" as="geometry" />
+        </mxCell>
+        <mxCell id="4" value="SqliteSession
+跨轮持久化 + 应用层压缩" style="shape=rect;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;spacing=8;fillColor=#F8FAFC;strokeColor=#333333;strokeWidth=2;fontColor=#111827;fontSize=20" parent="root-parent" vertex="1">
+          <mxGeometry x="302" y="194" width="180" height="72" as="geometry" />
+        </mxCell>
+        <mxCell id="5" value="Leader Agent
+方法论驱动
+docs/agent-methodology.md" style="shape=rect;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;spacing=8;fillColor=#F8FAFC;strokeColor=#333333;strokeWidth=2;fontColor=#111827;fontSize=20" parent="root-parent" vertex="1">
+          <mxGeometry x="50" y="338" width="180" height="72" as="geometry" />
+        </mxCell>
+        <mxCell id="6" value="Hypothesis Agent" style="shape=rect;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;spacing=8;fillColor=#F8FAFC;strokeColor=#333333;strokeWidth=2;fontColor=#111827;fontSize=20" parent="root-parent" vertex="1">
+          <mxGeometry x="302" y="338" width="180" height="72" as="geometry" />
+        </mxCell>
+        <mxCell id="7" value="Path Agent" style="shape=rect;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;spacing=8;fillColor=#F8FAFC;strokeColor=#333333;strokeWidth=2;fontColor=#111827;fontSize=20" parent="root-parent" vertex="1">
+          <mxGeometry x="50" y="482" width="180" height="72" as="geometry" />
+        </mxCell>
+        <mxCell id="8" value="Protocol Agent" style="shape=rect;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;spacing=8;fillColor=#F8FAFC;strokeColor=#333333;strokeWidth=2;fontColor=#111827;fontSize=20" parent="root-parent" vertex="1">
+          <mxGeometry x="302" y="482" width="180" height="72" as="geometry" />
+        </mxCell>
+        <mxCell id="9" value="AnswerCloserAgent
+回合超限收口" style="shape=rect;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;spacing=8;fillColor=#F8FAFC;strokeColor=#333333;strokeWidth=2;fontColor=#111827;fontSize=20" parent="root-parent" vertex="1">
+          <mxGeometry x="50" y="626" width="180" height="72" as="geometry" />
+        </mxCell>
+        <mxCell id="10" value="实战知识库（案例层）
+SQLite + FTS5
+现象→真因→RFC + 飞轮权重" style="shape=rect;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;spacing=8;fillColor=#F8FAFC;strokeColor=#333333;strokeWidth=2;fontColor=#111827;fontSize=20" parent="root-parent" vertex="1">
+          <mxGeometry x="302" y="626" width="180" height="72" as="geometry" />
+        </mxCell>
+        <mxCell id="11" value="Skills 库（方法论层）
+data/skills/*.md
+可复用排障 SOP" style="shape=rect;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;spacing=8;fillColor=#F8FAFC;strokeColor=#333333;strokeWidth=2;fontColor=#111827;fontSize=20" parent="root-parent" vertex="1">
+          <mxGeometry x="50" y="770" width="180" height="72" as="geometry" />
+        </mxCell>
+        <mxCell id="12" value="RFC 全文库（规范层）
+SQLite + FTS5 786MB" style="shape=rect;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;spacing=8;fillColor=#F8FAFC;strokeColor=#333333;strokeWidth=2;fontColor=#111827;fontSize=20" parent="root-parent" vertex="1">
+          <mxGeometry x="302" y="770" width="180" height="72" as="geometry" />
+        </mxCell>
+        <mxCell id="13" value="case-graph 工具
+search_field_notes / get_skill /
+search_rfc / get_rfc_section" style="shape=rect;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;spacing=8;fillColor=#F8FAFC;strokeColor=#333333;strokeWidth=2;fontColor=#111827;fontSize=20" parent="root-parent" vertex="1">
+          <mxGeometry x="50" y="914" width="180" height="72" as="geometry" />
+        </mxCell>
+        <mxCell id="14" value="Protocol Adapters
+pcapai_ 确定性工具
+TCP/DNS/TLS/HTTP/ICMP/UDP" style="shape=rect;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;spacing=8;fillColor=#F8FAFC;strokeColor=#333333;strokeWidth=2;fontColor=#111827;fontSize=20" parent="root-parent" vertex="1">
+          <mxGeometry x="302" y="914" width="180" height="72" as="geometry" />
+        </mxCell>
+        <mxCell id="15" value="tshark-query MCP
+19 个工具" style="shape=rect;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;spacing=8;fillColor=#F8FAFC;strokeColor=#333333;strokeWidth=2;fontColor=#111827;fontSize=20" parent="root-parent" vertex="1">
+          <mxGeometry x="50" y="1058" width="180" height="72" as="geometry" />
+        </mxCell>
+        <mxCell id="16" value="evidence-opener MCP" style="shape=rect;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;spacing=8;fillColor=#F8FAFC;strokeColor=#333333;strokeWidth=2;fontColor=#111827;fontSize=20" parent="root-parent" vertex="1">
+          <mxGeometry x="302" y="1058" width="180" height="72" as="geometry" />
+        </mxCell>
+        <mxCell id="17" value="tshark" style="shape=rect;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;spacing=8;fillColor=#F8FAFC;strokeColor=#333333;strokeWidth=2;fontColor=#111827;fontSize=20" parent="root-parent" vertex="1">
+          <mxGeometry x="50" y="1202" width="180" height="72" as="geometry" />
+        </mxCell>
+        <mxCell id="18" value="Wireshark" style="shape=rect;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;spacing=8;fillColor=#F8FAFC;strokeColor=#333333;strokeWidth=2;fontColor=#111827;fontSize=20" parent="root-parent" vertex="1">
+          <mxGeometry x="302" y="1202" width="180" height="72" as="geometry" />
+        </mxCell>
+        <mxCell id="19" value="GLM-5.2（默认）/
+DeepSeek / Ollama" style="shape=rect;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;spacing=8;fillColor=#F8FAFC;strokeColor=#333333;strokeWidth=2;fontColor=#111827;fontSize=20" parent="root-parent" vertex="1">
+          <mxGeometry x="50" y="1346" width="180" height="72" as="geometry" />
+        </mxCell>        <mxCell id="20" value="HTTP / SSE" style="html=1;rounded=0;endFill=0;fontSize=9;labelBackgroundColor=#ffffff;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" parent="root-parent" source="1" target="2" edge="1">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="0" y="0" as="sourcePoint" />
+            <mxPoint x="0" y="0" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="21" style="html=1;rounded=0;endFill=0;fontSize=9;labelBackgroundColor=#ffffff;exitX=0;exitY=0.5;entryX=1;entryY=0.5;" parent="root-parent" source="2" target="3" edge="1">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="0" y="0" as="sourcePoint" />
+            <mxPoint x="0" y="0" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="22" value="直接进 Agent" style="html=1;rounded=0;endFill=0;fontSize=9;labelBackgroundColor=#ffffff;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" parent="root-parent" source="3" target="5" edge="1">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="0" y="0" as="sourcePoint" />
+            <mxPoint x="0" y="0" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="23" style="html=1;rounded=0;endFill=0;fontSize=9;labelBackgroundColor=#ffffff;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" parent="root-parent" source="5" target="19" edge="1">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="0" y="0" as="sourcePoint" />
+            <mxPoint x="0" y="0" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="24" value="session" style="html=1;rounded=0;endFill=0;fontSize=9;labelBackgroundColor=#ffffff;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" parent="root-parent" source="5" target="4" edge="1">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="0" y="0" as="sourcePoint" />
+            <mxPoint x="0" y="0" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="25" style="html=1;rounded=0;endFill=0;fontSize=9;labelBackgroundColor=#ffffff;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" parent="root-parent" source="5" target="6" edge="1">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="0" y="0" as="sourcePoint" />
+            <mxPoint x="0" y="0" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="26" style="html=1;rounded=0;endFill=0;fontSize=9;labelBackgroundColor=#ffffff;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" parent="root-parent" source="5" target="7" edge="1">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="0" y="0" as="sourcePoint" />
+            <mxPoint x="0" y="0" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="27" style="html=1;rounded=0;endFill=0;fontSize=9;labelBackgroundColor=#ffffff;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" parent="root-parent" source="5" target="8" edge="1">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="0" y="0" as="sourcePoint" />
+            <mxPoint x="0" y="0" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="28" value="maxTurns超限" style="html=1;rounded=0;endFill=0;fontSize=9;labelBackgroundColor=#ffffff;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" parent="root-parent" source="5" target="9" edge="1">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="0" y="0" as="sourcePoint" />
+            <mxPoint x="0" y="0" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="29" value="强制第一步" style="html=1;rounded=0;endFill=0;fontSize=9;labelBackgroundColor=#ffffff;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" parent="root-parent" source="5" target="10" edge="1">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="0" y="0" as="sourcePoint" />
+            <mxPoint x="0" y="0" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="30" value="get_skill" style="html=1;rounded=0;endFill=0;fontSize=9;labelBackgroundColor=#ffffff;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" parent="root-parent" source="5" target="11" edge="1">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="0" y="0" as="sourcePoint" />
+            <mxPoint x="0" y="0" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="31" value="get_rfc_section验证" style="html=1;rounded=0;endFill=0;fontSize=9;labelBackgroundColor=#ffffff;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" parent="root-parent" source="5" target="12" edge="1">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="0" y="0" as="sourcePoint" />
+            <mxPoint x="0" y="0" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="32" style="html=1;rounded=0;endFill=0;fontSize=9;labelBackgroundColor=#ffffff;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" parent="root-parent" source="5" target="13" edge="1">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="0" y="0" as="sourcePoint" />
+            <mxPoint x="0" y="0" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="33" style="html=1;rounded=0;endFill=0;fontSize=9;labelBackgroundColor=#ffffff;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" parent="root-parent" source="5" target="14" edge="1">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="0" y="0" as="sourcePoint" />
+            <mxPoint x="0" y="0" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="34" value="skillIds关联" style="html=1;rounded=0;endFill=0;fontSize=9;labelBackgroundColor=#ffffff;exitX=0;exitY=0.5;entryX=1;entryY=0.5;" parent="root-parent" source="10" target="11" edge="1">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="0" y="0" as="sourcePoint" />
+            <mxPoint x="0" y="0" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="35" value="tsharkQueryClient" style="html=1;rounded=0;endFill=0;fontSize=9;labelBackgroundColor=#ffffff;exitX=0;exitY=0.5;entryX=1;entryY=0.5;" parent="root-parent" source="14" target="15" edge="1">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="0" y="0" as="sourcePoint" />
+            <mxPoint x="0" y="0" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="36" style="html=1;rounded=0;endFill=0;fontSize=9;labelBackgroundColor=#ffffff;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" parent="root-parent" source="15" target="17" edge="1">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="0" y="0" as="sourcePoint" />
+            <mxPoint x="0" y="0" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="37" style="html=1;rounded=0;endFill=0;fontSize=9;labelBackgroundColor=#ffffff;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" parent="root-parent" source="2" target="16" edge="1">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="0" y="0" as="sourcePoint" />
+            <mxPoint x="0" y="0" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="38" style="html=1;rounded=0;endFill=0;fontSize=9;labelBackgroundColor=#ffffff;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" parent="root-parent" source="16" target="18" edge="1">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="0" y="0" as="sourcePoint" />
+            <mxPoint x="0" y="0" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="39" value="CRUD" style="html=1;rounded=0;endFill=0;fontSize=9;labelBackgroundColor=#ffffff;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" parent="root-parent" source="2" target="10" edge="1">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="0" y="0" as="sourcePoint" />
+            <mxPoint x="0" y="0" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="40" style="html=1;rounded=0;endFill=0;fontSize=9;labelBackgroundColor=#ffffff;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" parent="root-parent" source="2" target="11" edge="1">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="0" y="0" as="sourcePoint" />
+            <mxPoint x="0" y="0" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

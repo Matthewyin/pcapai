@@ -1,5 +1,9 @@
 // RFC 全文索引构建：rfc-index.txt 元数据 + 逐篇 txt 章节切分 → SQLite FTS5。
-// 用法：npm run rag:build [-- --limit 50] [-- --only 9293]
+// 用法：npm run rag:build [-- --limit 50] [-- --only 9293] [-- --only-file path] [-- --output path]
+//   --limit N        只构建前 N 篇
+//   --only DOCID     只构建单篇（调试用）
+//   --only-file PATH 按文件中的 RFC 编号列表构建（双层库精简层，如 data/rfc-curated.txt）
+//   --output PATH    输出 db 路径（默认 apiConfig.rag.indexPath，精简库用 --output data/rfc-index/rfc-mini.db）
 import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import path from "node:path";
 import Database from "better-sqlite3";
@@ -13,9 +17,29 @@ function argValue(name: string): string | undefined {
 
 const limit = Number(argValue("--limit")) || 0;
 const only = Number(argValue("--only")) || 0;
+const onlyFile = argValue("--only-file");
+const outputPath = argValue("--output") || apiConfig.rag.indexPath;
+
+// 从 only-file 读取 RFC 编号列表（每行一个数字或 "# 注释"）
+let onlyDocIds: Set<number> | null = null;
+if (onlyFile) {
+  if (!existsSync(onlyFile)) {
+    console.error(`未找到 --only-file 指定的文件：${onlyFile}`);
+    process.exit(1);
+  }
+  const raw = readFileSync(onlyFile, "utf8");
+  onlyDocIds = new Set(
+    raw
+      .split(/\r?\n/)
+      .map((line) => line.split(/[#\s]/)[0]) // 取行首数字（# 前的部分）
+      .map((token) => Number(token))
+      .filter((num) => Number.isFinite(num) && num > 0)
+  );
+  console.log(`从 ${onlyFile} 读取 ${onlyDocIds.size} 个 RFC 编号。`);
+}
 
 const rfcDir = apiConfig.rag.rfcDir;
-const indexPath = apiConfig.rag.indexPath;
+const indexPath = outputPath;
 const indexFile = path.join(rfcDir, "rfc-index.txt");
 if (!existsSync(indexFile)) {
   console.error(`未找到 ${indexFile}，请确认 RFC 目录配置（api.rag.rfcDir）。`);
@@ -26,6 +50,10 @@ console.log(`解析 ${indexFile} ...`);
 let entries = parseRfcIndex(readFileSync(indexFile, "utf8"));
 console.log(`索引条目 ${entries.length} 条。`);
 if (only) entries = entries.filter((entry) => entry.docId === only);
+if (onlyDocIds) {
+  entries = entries.filter((entry) => onlyDocIds!.has(entry.docId));
+  console.log(`按 --only-file 过滤后剩余 ${entries.length} 篇。`);
+}
 if (limit) entries = entries.slice(0, limit);
 
 mkdirSync(path.dirname(indexPath), { recursive: true });

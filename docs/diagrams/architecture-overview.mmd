@@ -1,0 +1,70 @@
+%% pcapAI 架构总览（P7 重构后：Agent 第一入口 + 三层知识体系）
+%% 渲染：粘贴到 https://mermaid.live 或任何支持 mermaid 的查看器
+flowchart TB
+  subgraph Web["apps/web — React 工作台"]
+    UI["聊天界面 + 知识库管理页<br/>SSE 流式输出"]
+  end
+
+  subgraph API["apps/api — Express + Agent Runtime"]
+    Router["routes.ts<br/>REST + SSE + per-case 锁<br/>+ field-notes/skills CRUD"]
+    RuntimeSvc["AgentRuntimeService<br/>Agent 第一入口（P7）<br/>不经 planner 拦路"]
+    Session["SqliteSession<br/>跨轮持久化 + 应用层压缩"]
+  end
+
+  subgraph Knowledge["三层知识体系"]
+    FieldNotes["实战知识库（案例层）<br/>SQLite + FTS5<br/>现象→真因→RFC + 飞轮权重"]
+    Skills["Skills 库（方法论层）<br/>data/skills/*.md<br/>可复用排障 SOP"]
+    RfcDb["RFC 全文库（规范层）<br/>SQLite + FTS5 786MB"]
+    FieldNotes -.->|"skillIds 关联"| Skills
+  end
+
+  subgraph AgentRuntime["Agent Runtime (OpenAI Agents SDK)"]
+    Leader["Leader Agent<br/>方法论驱动<br/>docs/agent-methodology.md"]
+    Hypo["Hypothesis Agent"]
+    PathA["Path Agent"]
+    Proto["Protocol Agent"]
+    Closer["AnswerCloserAgent<br/>回合超限收口"]
+    Leader --> Hypo
+    Leader --> PathA
+    Leader --> Proto
+    Leader -.->|"maxTurns 超限"| Closer
+  end
+
+  subgraph Tools["Agent 工具箱（按需调用，不拦路）"]
+    CaseGraph["case-graph 工具<br/>search_field_notes / get_skill /<br/>search_rfc / get_rfc_section"]
+    Adapters["Protocol Adapters<br/>pcapai_ 确定性工具<br/>TCP/DNS/TLS/HTTP/ICMP/UDP"]
+  end
+
+  subgraph MCP["MCP Servers (stdio)"]
+    TQ["tshark-query MCP<br/>19 个工具"]
+    EO["evidence-opener MCP"]
+  end
+
+  subgraph LLM["LLM Provider"]
+    Model["GLM-5.2（默认）/<br/>DeepSeek / Ollama"]
+  end
+
+  subgraph External["外部工具"]
+    Tshark["tshark"]
+    Wireshark["Wireshark"]
+  end
+
+  UI -->|"HTTP / SSE"| Router
+  Router --> RuntimeSvc
+  RuntimeSvc -->|"直接进 Agent"| Leader
+  Leader --> Model
+  Leader -->|"session"| Session
+
+  Leader ==>|"强制第一步"| FieldNotes
+  Leader -->|"get_skill"| Skills
+  Leader -->|"get_rfc_section 验证"| RfcDb
+  Leader --> CaseGraph
+  Leader --> Adapters
+
+  Adapters -->|"tsharkQueryClient"| TQ
+  TQ --> Tshark
+  Router --> EO
+  EO --> Wireshark
+
+  Router -.->|"CRUD"| FieldNotes
+  Router -.->|"CRUD"| Skills

@@ -1,5 +1,6 @@
 import type { AgentAnswer, AnalysisChainPlan, CaseGraph } from "../../../../packages/shared/src/index.js";
 import type { Tool } from "@openai/agents";
+import path from "node:path";
 import { apiConfig } from "../config.js";
 import { runPcapTroubleshootingAgent, type AgentIntentPlan } from "../agents/runtime.js";
 import { executeChain } from "./plannerService.js";
@@ -76,12 +77,6 @@ function statusPatch(graph: CaseGraph, status: string, error = ""): RuntimeStatu
   };
 }
 
-function emitAnswerInChunks(emit: StreamEmitter, answer: string) {
-  for (let index = 0; index < answer.length; index += 24) {
-    emit.delta(answer.slice(index, index + 24));
-  }
-}
-
 function llmKeyRequiredAnswer(): AgentAnswer {
   return {
     answer: "当前没有配置 LLM API Key，Agent 分析未启动。请先到“设置 → 模型配置”中填写 OpenAI 兼容的 Base URL、API Key 和模型名称，并完成连接测试后再继续分析。",
@@ -116,6 +111,10 @@ function shouldInterviewBeforeExecution(graph: CaseGraph, chainPlan: AnalysisCha
   if (intents.includes("mapping_hint_update")) return false;
   if (intents.includes("active_query_explain") || intents.includes("selected_session_diagnosis")) return false;
   if (graph.queryRuns.length && intents.every((intent) => intent === "llm_explain")) return false;
+  // 已上传 pcap 时，即使 Planner 带了 missingContext（如节点位置/抓包方向），也允许执行
+  // 确定性扫描类查询（protocol_event_query / tcp_session_query）+ llm_explain 综合解读。
+  // 这些查询不依赖节点角色或抓包方向即可产出证据；missingContext 只影响归因方向，不影响证据收集。
+  if (graph.captures.length && intents.every((intent) => intent === "protocol_event_query" || intent === "tcp_session_query" || intent === "llm_explain")) return false;
   return true;
 }
 
@@ -132,7 +131,9 @@ export function createAgentRuntimeService(deps: AgentRuntimeDependencies) {
       missingContext: []
     };
     try {
-      const result = await deps.executeChainStep(graph, request.question, "protocol_event_query", {});
+      // 显式带上 bypass 选中的 adapterId，让 protocolEventQueryService 直达目标 adapter，
+      // 绕过硬编码/学习模式正则匹配，确保 trace 日志声明的路由与实际执行一致
+      const result = await deps.executeChainStep(graph, request.question, "protocol_event_query", { adapterId: bypass.adapterId });
       if (!result) return null;
       const answer = deps.answerWithPlannerThought(result.answer, plan);
       deps.recordAnswerRun(graph.spec.caseId, request.question, plan, "learned_bypass", answer, Date.now() - startedAt);
@@ -165,7 +166,8 @@ export function createAgentRuntimeService(deps: AgentRuntimeDependencies) {
       question: deps.buildAgentQuestion(request),
       chatHistory: request.chatHistory,
       onTrace,
-      tools: deps.createAgentTools(graph.spec.caseId, request.question)
+      tools: deps.createAgentTools(graph.spec.caseId, request.question),
+      sessionDir: path.join(apiConfig.caseDataDir, graph.spec.caseId)
     });
     // 只学习有据可依的高置信回答，避免低质量回答固化成错误路由
     if ((answer.confidence === "high" || answer.confidence === "certain") && (answer.evidenceCards?.length || answer.packetIds.length)) {
@@ -247,7 +249,8 @@ export function createAgentRuntimeService(deps: AgentRuntimeDependencies) {
           question: `基于以下分析链结果，综合解读异常并给出诊断结论：\n${finalAnswer.answer}`,
           chatHistory: request.chatHistory,
           onTrace: emit ? (text) => emit.thought(text) : undefined,
-          tools: deps.createAgentTools(graph.spec.caseId, request.question)
+          tools: deps.createAgentTools(graph.spec.caseId, request.question),
+          sessionDir: path.join(apiConfig.caseDataDir, graph.spec.caseId)
         });
         answer = {
           ...finalAnswer,
@@ -279,16 +282,21 @@ export function createAgentRuntimeService(deps: AgentRuntimeDependencies) {
       deps.updateRuntimeStatus(statusPatch(graph, "llm_key_required", "missing llm api key"));
       return { status: "llm_key_required", answer };
     }
-    const bypassResult = await tryLearnedBypass(graph, request, startedAt);
-    if (bypassResult) return bypassResult;
+    // Agent 第一入口（P7）：用户问题直接进 Agent，不再经 chain planner 拦路、不再 learned bypass。
+    // Agent 自己决定何时调 pcapai_ 确定性工具、tshark MCP、实战库、RFC、Skills。
+    // chain planner / adapter / learned pattern 代码保留（专家直达通道 + Agent 工具），只是不再在外层拦截。
     const plannerStartedAt = Date.now();
-    const chainPlan = await deps.planChain(graph, request.question, undefined, request.chatHistory);
-    const durationMs = Date.now() - plannerStartedAt;
-    if (shouldInterviewBeforeExecution(graph, chainPlan)) {
-      return executeInterview(graph, request, chainPlan, durationMs, startedAt);
-    }
-    if (chainPlan.planKind === "chain") return executeChainPlan(graph, request, chainPlan, durationMs, startedAt);
-    return executeSingle(graph, request, singlePlanFromChain(chainPlan), durationMs, startedAt);
+    const agentPlan: AgentIntentPlan = {
+      intent: "llm_explain",
+      confidence: "high",
+      reason: "Agent 第一入口，自主推理",
+      missingContext: []
+    };
+    const result = await runLlmFallback(graph, request, agentPlan, undefined);
+    deps.recordAnswerRun(graph.spec.caseId, request.question, agentPlan, result.status, result.answer, Date.now() - plannerStartedAt);
+    deps.updateRuntimeStatus(statusPatch(graph, result.status));
+    deps.syncMemoryFromQueryRuns(deps.loadGraph(graph.spec.caseId));
+    return result;
   }
 
   async function stream(graph: CaseGraph, request: AgentChatRequest, emit: StreamEmitter) {
@@ -299,38 +307,26 @@ export function createAgentRuntimeService(deps: AgentRuntimeDependencies) {
       deps.recordAnswerRun(graph.spec.caseId, request.question, plan, "llm_key_required", answer, Date.now() - startedAt);
       deps.updateRuntimeStatus(statusPatch(graph, "llm_key_required", "missing llm api key"));
       emit.thought("未配置 LLM API Key，Agent 分析未启动。");
-      emitAnswerInChunks(emit, answer.answer);
+      emit.delta(answer.answer);
       emit.done(answer);
       return;
     }
-    const bypassResult = await tryLearnedBypass(graph, request, startedAt, (text) => emit.thought(text));
-    if (bypassResult) {
-      bypassResult.answer.thoughts?.forEach((thought) => emit.thought(thought));
-      emitAnswerInChunks(emit, bypassResult.answer.answer);
-      emit.done(bypassResult.answer);
-      return;
-    }
-    const plannerStartedAt = Date.now();
-    const chainPlan = await deps.planChain(graph, request.question, (text) => emit.thought(text), request.chatHistory);
-    const durationMs = Date.now() - plannerStartedAt;
-    const stepSummary = chainPlan.steps.map((step) => `${step.intent}(${step.purpose})`).join(" → ");
-    emit.thought(`规划完成：${chainPlan.planKind}（${chainPlan.confidence}）${stepSummary}${chainPlan.reason ? `，${chainPlan.reason}` : ""}`);
-    if (shouldInterviewBeforeExecution(graph, chainPlan)) {
-      emit.thought("上下文不足，先进入诊断访谈，不执行宽查询。");
-      const result = executeInterview(graph, request, chainPlan, durationMs, startedAt);
-      emitAnswerInChunks(emit, result.answer.answer);
-      emit.done(result.answer);
-      return;
-    }
-    if (chainPlan.planKind === "chain") {
-      const result = await executeChainPlan(graph, request, chainPlan, durationMs, startedAt, emit);
-      emit.delta(result.answer.answer);
-      emit.done(result.answer);
-      return;
-    }
-    const result = await executeSingle(graph, request, singlePlanFromChain(chainPlan), durationMs, startedAt, (text) => emit.thought(text));
+    // Agent 第一入口（P7）：直接进 Agent，由 Agent 自主调用工具并发起 SSE 事件。
+    // runPcapTroubleshootingAgent 内部 onTrace 回调映射到 emit.thought；
+    // 最终答案一次性 delta + done（Agent 内部已流式产出工具事件，这里不再二次切分）。
+    const agentPlan: AgentIntentPlan = {
+      intent: "llm_explain",
+      confidence: "high",
+      reason: "Agent 第一入口，自主推理",
+      missingContext: []
+    };
+    emit.thought("Agent 接管，开始自主排障（实战库 → 抓包 → RFC → 结论）。");
+    const result = await runLlmFallback(graph, request, agentPlan, (text) => emit.thought(text));
+    deps.recordAnswerRun(graph.spec.caseId, request.question, agentPlan, result.status, result.answer, Date.now() - startedAt);
+    deps.updateRuntimeStatus(statusPatch(graph, result.status));
+    deps.syncMemoryFromQueryRuns(deps.loadGraph(graph.spec.caseId));
     result.answer.thoughts?.forEach((thought) => emit.thought(thought));
-    emitAnswerInChunks(emit, result.answer.answer);
+    emit.delta(result.answer.answer);
     emit.done(result.answer);
   }
 

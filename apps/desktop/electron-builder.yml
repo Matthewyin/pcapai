@@ -24,8 +24,12 @@ extraResources:
       - apps/web/package.json
       - packages/shared/package.json
       - package.json
-      - RFC/**/*
-      - data/rfc-index/**/*
+      # 阶段 3a 双层库：只内置精简库（20MB），完整库（786MB）通过 GitHub Release 静默下载
+      # 不打包 RFC/ 语料（786MB 文本）和完整 rfc.db（786MB）—— 节省 ~1.5GB
+      - data/rfc-index/rfc-mini.db
+      # 实战笔记 + 技能 seeds（首次启动时 copy 到 userData 可写区）
+      - data/field-notes/seeds/**/*
+      - data/skills/**/*
 mac:
   category: public.app-category.developer-tools
   target:

@@ -26,6 +26,7 @@ import {
   queryPacketsWithMcp,
   type CaptureQueryInput
 } from "../mcp/tsharkQueryClient.js";
+import { classifyConversationHealth } from "./conversationHealth.js";
 
 type McpRunRecord = {
   target: string;
@@ -610,52 +611,59 @@ export function createQueryRunService(deps: {
     const evidenceSampleLimit = deps.evidencePacketSampleLimit;
     const transportSampleLimit = deps.transportEvidencePacketSampleLimit;
     const finSampleLimit = deps.finEvidencePacketSampleLimit;
-  
-    if (synPackets.length && synAckPackets.length && handshakeAckPackets.length) {
+
+    // 六维健康状态委托给 classifyConversationHealth 纯函数（与连接健康全景 adapter 同口径），
+    // 这里保留 buildQueryDiagnosis 独有的详细 summary / packetIds / nextSteps 构建。
+    const health = classifyConversationHealth(
+      { srcIp: conversation.srcIp, srcPort: conversation.srcPort, dstIp: conversation.dstIp, dstPort: conversation.dstPort, packets },
+      { retransmissionBurst: deps.retransmissionBurstThreshold }
+    );
+
+    if (health.handshake === "ok") {
       addCheck("handshake", "建连", "ok", `三次握手完整：SYN frame ${synPackets[0].frameNumber}，SYN-ACK frame ${synAckPackets[0].frameNumber}，ACK frame ${handshakeAckPackets[0].frameNumber}。`, [synPackets[0].packetId, synAckPackets[0].packetId, handshakeAckPackets[0].packetId]);
-    } else if (synPackets.length && synAckPackets.length) {
+    } else if (health.handshake === "warn") {
       addCheck("handshake", "建连", "warn", `看到 SYN 和 SYN-ACK，但当前样本内未确认第三次 ACK。`, [synPackets[0].packetId, synAckPackets[0].packetId], ["在 Wireshark 中查看握手后续 ACK，确认抓包窗口和方向是否覆盖完整建连。"]);
-    } else if (synPackets.length) {
+    } else if (health.handshake === "problem") {
       addCheck("handshake", "建连", "problem", "看到 SYN，但没有看到对应 SYN-ACK，建连可能未完成。", synPackets.slice(0, evidenceSampleLimit).map((packet) => packet.packetId), ["检查服务端回包路径、防火墙策略、服务监听状态和抓包方向。"]);
     } else {
       addCheck("handshake", "建连", "unknown", "当前样本没有看到完整建连起点，可能抓包开始时间晚于会话建立。");
     }
-  
-    if (rstPackets.length) {
+
+    if (health.rst === "problem") {
       const firstRst = rstPackets.sort((left, right) => left.timestamp - right.timestamp)[0];
       const direction = packetDirection(firstRst, conversation) === "forward" ? "访问方向" : packetDirection(firstRst, conversation) === "reverse" ? "返回方向" : "未知方向";
       addCheck("rst", "RST", "problem", `RST 首次出现在 ${nodeName(graph, firstRst.nodeId)}，${direction}，frame ${firstRst.frameNumber}。`, [firstRst.packetId], ["在 Wireshark 中查看 RST 前序包、序列号和 ACK，判断是端侧主动复位还是中间设备注入。"]);
     } else {
       addCheck("rst", "RST", "ok", "当前 TCP session 未看到 RST。");
     }
-  
-    if (forwardPackets.length && reversePackets.length) {
+
+    if (health.trafficDirection === "ok") {
       addCheck("traffic_direction", "双向流量", "ok", `双向均有流量：访问方向 ${forwardPackets.length} 个包，返回方向 ${reversePackets.length} 个包。`);
-    } else if (forwardPackets.length || reversePackets.length) {
+    } else if (health.trafficDirection === "problem") {
       addCheck("traffic_direction", "双向流量", "problem", `只看到${forwardPackets.length ? "访问方向" : "返回方向"}流量，未看到对端返回。`, (forwardPackets.length ? forwardPackets : reversePackets).slice(0, evidenceSampleLimit).map((packet) => packet.packetId), ["检查回程路由、ACL、防火墙会话表和抓包点方向。"]);
     } else {
       addCheck("traffic_direction", "双向流量", "unknown", "当前 session 没有可用于判断方向的包。");
     }
-  
-    if (retransmissionPackets.length >= deps.retransmissionBurstThreshold) {
+
+    if (health.retransmission === "problem") {
       addCheck("retransmission", "重传", "problem", `发现 ${retransmissionPackets.length} 个重传包，达到集中重传阈值。`, retransmissionPackets.slice(0, transportSampleLimit).map((packet) => packet.packetId), ["检查链路丢包、拥塞、路径 MTU 和中间设备丢弃。"]);
-    } else if (retransmissionPackets.length) {
+    } else if (health.retransmission === "warn") {
       addCheck("retransmission", "重传", "warn", `发现 ${retransmissionPackets.length} 个重传包，暂未达到集中重传阈值。`, retransmissionPackets.slice(0, transportSampleLimit).map((packet) => packet.packetId), ["结合业务失败时间点确认这些重传是否集中出现。"]);
     } else {
       addCheck("retransmission", "重传", "ok", "当前 TCP session 未看到 tshark 标记的重传。");
     }
-  
-    if (zeroWindowPackets.length) {
+
+    if (health.zeroWindow === "problem") {
       addCheck("zero_window", "窗口", "problem", `发现 ${zeroWindowPackets.length} 个 Zero Window。`, zeroWindowPackets.slice(0, transportSampleLimit).map((packet) => packet.packetId), ["检查接收端处理能力、应用读取速度和接收窗口恢复情况。"]);
     } else {
       addCheck("zero_window", "窗口", "ok", "当前 TCP session 未看到 Zero Window。");
     }
-  
-    if (rstPackets.length) {
+
+    if (health.closeState === "warn" && rstPackets.length) {
       addCheck("close_state", "关闭", "warn", "连接以 RST 相关行为结束或被复位，不能视为正常 FIN 关闭。", rstPackets.slice(0, evidenceSampleLimit).map((packet) => packet.packetId), ["结合 RST 方向判断是客户端、服务端还是中间设备触发复位。"]);
-    } else if (forwardFinPackets.length && reverseFinPackets.length) {
+    } else if (health.closeState === "ok") {
       addCheck("close_state", "关闭", "ok", `看到双侧 FIN：访问方向 ${forwardFinPackets.length} 个，返回方向 ${reverseFinPackets.length} 个。`, [forwardFinPackets[0].packetId, reverseFinPackets[0].packetId]);
-    } else if (forwardFinPackets.length || reverseFinPackets.length) {
+    } else if (health.closeState === "warn") {
       addCheck("close_state", "关闭", "warn", "连接关闭阶段只看到单侧 FIN，未看到对端完整关闭。", [...forwardFinPackets, ...reverseFinPackets].slice(0, finSampleLimit).map((packet) => packet.packetId), ["确认抓包窗口是否覆盖完整关闭阶段，检查对端是否异常退出或路径丢包。"]);
     } else {
       addCheck("close_state", "关闭", "unknown", "当前样本未看到 FIN/RST，可能抓包窗口没有覆盖关闭阶段。");

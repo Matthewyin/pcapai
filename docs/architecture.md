@@ -2,55 +2,65 @@
 
 ## 架构概览
 
-pcapAI 是 Agent SDK-first 本地浏览器工作台，用于离线分析网络故障。主流程以 `POST /api/cases/:caseId/agent/stream` 为准：用户上传 pcap 并提问 → HTTP 层进入 `AgentRuntimeService` → OpenAI Agents SDK runtime 规划问题和编排子 Agent → Packet Analysis Service 作为工具层运行 QueryRun / ProtocolAdapter / EvidenceCard / checks → 必要时通过 MCP 查询 tshark 或打开 Wireshark → SSE 输出证据链和诊断结论。
+pcapAI 是 Agent SDK-first 本地浏览器工作台，用于离线分析网络故障。**Agent 是唯一大脑（第一入口）**，用户上传 pcap 并提问后，直接进入 Leader Agent。Agent 操作**三层知识体系**完成排障：
 
-当前不引入 Codex Server App。pcapAI 的统一入口是 Web/API 后面的 OpenAI Agents SDK Runtime；Codex Server App 只作为未来可选外壳，不在当前主链路中。
+- **Skills 层（方法论）** `data/skills/*.md` — 可复用排障 SOP，Agent 可用 `create_skill` 自我进化
+- **实战知识库（案例）** `data/field-notes/` — 现象→真因→RFC 的沉淀，带飞轮权重（verifiedCount/disputedCount）
+- **抓包事实（数据）** tshark-query MCP — 原始包数据
+
+**RFC 是防幻觉边界**：根因结论（rootCauses）要么 `rfcVerified:true`（经 `get_rfc_section` 回读 RFC 原文并引用），要么 `rfcVerified:false`（明确标注"经验推测"）。跨轮上下文由 SDK `Session` 接口（SQLite-backed `SqliteSession`）管理，配应用层压缩。
+
+确定性 protocol adapters（TCP/DNS/TLS/HTTP/ICMP/UDP）和 chain planner **保留为 Agent 工具 / 专家直达通道**，但不再在 Agent 前面拦路。主流程以 `POST /api/cases/:caseId/agent/stream` 为准：用户问题 → AgentRuntimeService → runPcapTroubleshootingAgent → search_field_notes 先验 → tshark 取证 → RFC 验证 → 结构化结论 → SSE 输出。
 
 ## 系统架构图
 
 ```mermaid
 flowchart TB
   subgraph Web["apps/web — React 工作台"]
-    UI["聊天界面<br/>SSE 流式输出"]
+    UI["聊天界面 + 知识库管理页<br/>SSE 流式输出"]
   end
 
   subgraph API["apps/api — Express + Agent Runtime"]
-    Router["routes.ts<br/>REST + SSE 端点"]
-    RuntimeSvc["AgentRuntimeService<br/>统一对话编排入口"]
+    Router["routes.ts<br/>REST + SSE + per-case 锁<br/>+ field-notes/skills CRUD"]
+    Compose["composeServices.ts<br/>service 装配"]
+    RuntimeSvc["AgentRuntimeService<br/>Agent 第一入口（P7）"]
     InsightEng["Insight Engine<br/>29 个确定性分析器"]
     CaseStore["caseStore<br/>data/cases/:id/case.json"]
+    Session["SqliteSession<br/>跨轮持久化 + 压缩"]
   end
 
-  subgraph PacketService["Packet Analysis Service"]
-    Planner["Chain Planner<br/>(Agents SDK / 本地兜底)"]
-    ChainExec["executeChain<br/>链式执行引擎"]
-    Adapters["Protocol Adapters<br/>TCP/DNS/TLS/HTTP/ICMP/UDP"]
-    QueryRunSvc["QueryRun / EvidenceCard / checks"]
-    PatternLearner["Pattern Learner"]
-  end
-
-  subgraph LLM["LLM Provider"]
-    Model["OpenAI 兼容 API<br/>(MiniMax/DeepSeek/Ollama)"]
+  subgraph Knowledge["三层知识体系"]
+    FieldNotes["实战知识库<br/>SQLite + FTS5<br/>现象→真因→RFC + 飞轮权重"]
+    Skills["Skills 库<br/>data/skills/*.md<br/>可复用排障 SOP"]
+    RfcDb["RFC 全文库<br/>SQLite + FTS5<br/>786MB"]
+    FieldNotes -.->|"skillIds 关联"| Skills
   end
 
   subgraph AgentRuntime["Agent Runtime (OpenAI Agents SDK)"]
-    Leader["Leader Agent"]
-    Triage["DiagnosticInterview<br/>Agent"]
+    Leader["Leader Agent<br/>方法论驱动"]
     Hypo["Hypothesis<br/>Agent"]
     PathA["Path<br/>Agent"]
     Proto["Protocol<br/>Agent"]
-    Report["Report<br/>Agent"]
-    Leader --> Triage
+    Closer["AnswerCloserAgent<br/>回合超限收口"]
     Leader --> Hypo
     Leader --> PathA
     Leader --> Proto
-    Leader --> Report
+    Leader -.->|"maxTurns 超限"| Closer
+  end
+
+  subgraph Tools["Agent 工具箱（Agent 按需调用）"]
+    CaseGraph["case-graph 工具<br/>search_field_notes/get_skill/<br/>search_rfc/get_rfc_section/..."]
+    Adapters["Protocol Adapters<br/>pcapai_ 确定性工具"]
+    Planner["Chain Planner<br/>（保留，专家直达）"]
   end
 
   subgraph MCP["MCP Servers (stdio)"]
-    CG["case-graph MCP<br/>20 个工具"]
     TQ["tshark-query MCP<br/>19 个工具"]
     EO["evidence-opener MCP<br/>1 个工具"]
+  end
+
+  subgraph LLM["LLM Provider"]
+    Model["GLM-5.2（默认）/<br/>DeepSeek / Ollama"]
   end
 
   subgraph External["外部工具"]
@@ -59,39 +69,36 @@ flowchart TB
   end
 
   UI -->|"HTTP / SSE"| Router
-  Router -->|"agentRuntimeService.run/stream"| RuntimeSvc
-  RuntimeSvc -->|"planChain()"| Planner
-  Planner -->|"AnalysisChainPlan"| ChainExec
-  Planner --> LLM
-  ChainExec -->|"单步路由"| Adapters
-  ChainExec -->|"llm_explain"| AgentRuntime
-  RuntimeSvc -->|"agent fallback"| AgentRuntime
+  Router --> Compose
+  Compose -->|"run/stream"| RuntimeSvc
+  RuntimeSvc -->|"直接进 Agent<br/>（不经 planner 拦路）"| AgentRuntime
   AgentRuntime --> LLM
+  AgentRuntime -->|"session"| Session
 
+  AgentRuntime -->|"强制第一步"| FieldNotes
+  AgentRuntime -->|"get_skill"| Skills
+  AgentRuntime -->|"get_rfc_section"| RfcDb
+  AgentRuntime --> CaseGraph
+  AgentRuntime --> Adapters
+  AgentRuntime --> Planner
+
+  CaseGraph -->|"读写"| CaseStore
   Adapters -->|"tsharkQueryClient"| TQ
-  Adapters --> QueryRunSvc
-  AgentRuntime --> CG
-  AgentRuntime --> TQ
-  Router --> EO
-
+  Adapters -->|"写入 QueryRun"| CaseStore
   TQ --> Tshark
+  Router --> EO
   EO --> Wireshark
 
-  CG -->|"读取"| CaseStore
   Router -->|"loadGraphWithInsights"| InsightEng
   InsightEng -->|"写回 insights"| CaseStore
-  Adapters -->|"写入 QueryRun"| CaseStore
-  ChainExec -->|"reloadGraph"| CaseStore
 
-  RuntimeSvc -->|"agent 成功后"| PatternLearner
-  PatternLearner --> LLM
+  Router -->|"CRUD"| FieldNotes
+  Router -->|"CRUD"| Skills
 
-  Shared["packages/shared<br/>Zod Schema + TypeScript 类型"] -.-> API
+  Shared["packages/shared<br/>Zod Schema + 类型"] -.-> API
   Shared -.-> Web
-  Shared -.-> MCP
   Config["config/defaults.json<br/>PCAPAI_* 环境变量"] -.-> API
   Config -.-> Web
-  Config -.-> MCP
 ```
 
 ## 请求处理流程
@@ -100,47 +107,40 @@ flowchart TB
 用户提问
   ↓
 1. loadGraphWithInsights() — 懒运行 Insight Engine（29 个确定性分析器）
+   （/agent 和 /agent/stream 端点用 withCaseRunLock 串行化同 case 的并发 agent run）
   ↓
-2. routes.ts 只做 HTTP/SSE、profile 激活和参数校验，随后进入 AgentRuntimeService
+2. routes.ts 只做 HTTP/SSE、profile 激活和参数校验；通过 composeServices() 获取装配好的 service 实例
   ↓
-3. AgentRuntimeService 调用 Chain Planner (Agents SDK 或本地兜底) → AnalysisChainPlan
+3. AgentRuntimeService **直接进入 Leader Agent**（P7：不再经 chain planner / learned bypass 拦路）
   ↓
-4a. chain 路径 (planKind=chain):
-    executeChain → 逐步执行，每步后 reloadGraph
-    确定性步骤 → protocol adapter → tshark → evidenceCards
-    llm_explain 步骤 → Leader Agent → handoff subagent
-    无 llm_explain → 自动追加 LLM 综合解读
+4. Leader Agent 按 docs/agent-methodology.md 方法论自主推理：
+    第 0 步（强制）：search_field_notes 取实战库先验
+      ├─ 命中 → 候选真因 + 关联 skillIds → get_skill 读 SOP → 验证
+      └─ 不命中 → 自主推理
+    第 1-3 步：tshark 取证 → 跨文件关联 → search_rfc/get_rfc_section 验证
+    结论：rootCauses 分层（rfcVerified 或标注推测）
+    Agent 按需调用工具箱：pcapai_ 确定性工具 / tshark-query MCP / chain planner（专家直达）
   ↓
-4b. single 工具路径:
-    AgentToolRegistry 执行对应 `pcapai_` 工具
-    → protocol adapter 三层路由:
-      hardcoded regex → tshark 查询
-      learned pattern → tshark 查询
-      无匹配 → agent fallback (Leader Agent + case-graph + tshark-query MCP)
-    → evidenceCards + checks + protocolCorrelations → 写入 QueryRun
-  ↓
-4c. llm_explain 路径:
-    Leader Agent → handoff → subagent
-    → case-graph MCP 读取 case graph
-    → tshark-query MCP 查询原始包数据
-    → 诊断结论 + suggestedQueries
-  ↓
-5. SSE 流式输出 → Web 聊天气泡
+5. SSE 流式输出 → Web 聊天气泡；rootCauses 无 RFC 引用的标黄"经验推测"
 ```
+
+> P7 之前：用户问题 → chain planner（12 intent 拆分）→ adapter 拦路 → agent 兜底。
+> P7 之后：用户问题 → **Agent（唯一大脑）** → 三层知识体系。planner/adapter 退化为 Agent 工具，不再拦路。
 
 ## 组件详解
 
 ### `apps/api` — Express API + Agent Runtime
 
 #### HTTP 层 (`src/http/`)
-- **routes.ts** — REST 端点 + SSE 流式 agent 回答。对话入口只负责加载 case、校验请求、激活 LLM profile、写 SSE；不再直接抢答统计、RST、QueryRun 或多节点关联问题。
+- **routes.ts** — REST 端点 + SSE 流式 agent 回答。对话入口只负责加载 case、校验请求、激活 LLM profile、写 SSE；`/agent` 和 `/agent/stream` 用 per-case 锁（`withCaseRunLock`）串行化并发 agent run。
+- **composeServices.ts** — 服务装配层：组装 13 个 service + 2 个 answer builder + 6 个协议 adapter（TCP 含 7 个子 adapter）。从 routes.ts 抽离，接收 `loadGraph`/`cacheCase`/`agentRuntimeStatus` 共享状态，返回所有 service 实例和 helper（`formatBeijingTime`、`buildAgentQuestion`、`syncMemoryFromQueryRuns`、`updateMemory`）。
 - **caseStore.ts** — case 持久化：`data/cases/:caseId/case.json`
 - **capturePreprocess.ts** — 通过 `editcap -s` 裁剪 payload
 - **reportBuilder.ts** — 从 case graph 生成结构化 Markdown 报告
 - **llmSettings.ts** — LLM 配置文件管理（`.env` 中 `PCAPAI_LLM_PROFILE_*`）
 
 #### Agent Runtime Service (`src/services/agentRuntimeService.ts`)
-- **AgentRuntimeService** — Web/API 后面的统一对话编排入口：
+- **AgentRuntimeService** — Web/API 后面的统一对话编排入口。**P7 后 Agent 是第一入口**：`run()`/`stream()` 直接调 `runPcapTroubleshootingAgent`，不再经 chain planner / learned bypass 拦路。planner / adapter / patternLearner 代码保留（专家直达通道 + Agent 工具），只是不再在 Agent 前面拦截。
   1. 调用 `planChain()` 生成单步或多步计划
   2. `planKind=chain` 时调用 `executeChain()`，每步后刷新 case graph
   3. 单步计划调用 `executeAgentIntentPlan()`，由工具层执行 QueryRun、统计、协议 adapter、报告或上下文追问
@@ -153,23 +153,24 @@ flowchart TB
   - 统一注册 `list_protocols`、`get_network_statistics`、`create_query_run`、`query_protocol_events`、`diagnose_selected_session`、`correlate_captures`、`export_report` 等工具能力
   - `plannerService` 只产出 intent，不直接持有每个工具实现
   - `plannerService` 通过 registry 执行 intent
-  - `AgentRuntimeService` 会把 registry 转成 OpenAI Agents SDK function tools 注入 Leader Agent 和 5 个 subagent
+  - `AgentRuntimeService` 会把 registry 转成 OpenAI Agents SDK function tools 注入 Leader Agent 和 3 个 subagent
   - SDK tool 名称使用 `pcapai_` 前缀，避免和 `tshark-query MCP` 的底层工具同名冲突
   - 每次 registry 工具执行都会写入 `ToolRun(kind=tool)`；如果工具内部调用 MCP，下层 MCP 仍单独写入 `ToolRun(kind=mcp)`
 
 #### Agent 层 (`src/agents/`)
 - **runtime.ts** — OpenAI Agents SDK runtime：
-  - `runChainPlanner()` — 规划分析链，输出 `AnalysisChainPlan`
-  - `runIntentPlanner()` — 单步意图分类能力，保留给兼容路径和本地兜底；主对话入口优先使用 `runChainPlanner()`
-  - `runPcapTroubleshootingAgent()` — Leader Agent + 5 个 handoff subagent：
-    - **DiagnosticInterviewAgent** — 诊断访谈，收集故障现象、网络拓扑、抓包位置
+  - `runPcapTroubleshootingAgent()` — Leader Agent + 3 个 handoff subagent（`maxTurns` 可配置，默认 24）：
+    - Leader Agent 启动时加载 `docs/agent-methodology.md`（排障方法论）注入 instructions，开发期改文档即可调行为
     - **HypothesisAgent** — 假设验证，优先读取 insights，再按需调用 tshark-query MCP
     - **PathAgent** — 多节点路径分析和跨链路关联
     - **ProtocolAgent** — 协议级行为分析，可直接调用 tshark-query MCP 查询原始包数据
-    - **ReportAgent** — 生成结构化诊断报告
-  - Leader Agent 和所有 subagent 同时挂载 case-graph MCP、tshark-query MCP 和 `pcapai_` 本地工具；Chain Planner Agent 不使用 MCP
-  - MCP 连接方式：`MCPServerStdio`，每次 `runPcapTroubleshootingAgent` 调用时创建临时 case graph JSON 文件并通过 `PCAPAI_CASE_GRAPH_PATH` 环境变量传给 case-graph MCP
-  - 返回 `AgentAnswerWithToolCalls`，包含 tool call 名称用于 pattern learning
+    - Leader 自行处理诊断访谈追问和报告格式化（不 handoff）
+  - **AnswerCloserAgent** — 回合预算耗尽时的收口器：无工具，基于已收集的工具结果输出最终结论；自身失败时退化为纯文本（try/catch 兜底）
+  - **结论分层 rootCauses**（P6）：每个根因带 `rfcVerified`（经 get_rfc_section 回读 RFC）或明确标注"经验推测"
+  - **工具名容错**（P7 后追加）：MiniMax 等模型可能拼错 `pcapai_` 前缀，SDK 抛 "Tool not found" 时带纠正提示最多重试 3 次
+  - **SqliteSession**（P5）：实现 SDK `Session` 接口，跨轮持久化到 `data/cases/:id/session-*.db`；应用层压缩（条目超阈值时聚合早期工具调用为摘要，SDK 原生 compaction 依赖 OpenAI Responses API，第三方模型不支持）
+  - tshark-query MCP 为常驻单例（`tsharkQueryMcpRuntime.ts`），跨会话复用，connect 带重试
+  - **outputSchema 兼容探针**（`outputSchemaProbe.ts`）：检测当前 LLM 是否支持 SDK outputType（structured output），不支持则保留手写 JSON 解析 fallback
 
 #### Planner 层 (`src/services/`)
 - **plannerService.ts** — 分析链执行引擎：
@@ -191,16 +192,43 @@ flowchart TB
   - `learnFromAgentRun()` — agent fallback 后，用 LLM 生成 regex + adapterId；验证后持久化
   - 无硬编码 tool→adapter 映射，LLM 从问题上下文和 adapter 列表决定路由
 
+#### 三层知识体系（P1-P4 + P8）
+
+Agent 的核心知识资产，按抽象层级分三层：
+
+- **Skills 层（方法论，`src/services/skillsService.ts`）**
+  - 可复用排障 SOP，markdown + frontmatter（name/description/triggers/tools_required）格式，借鉴 Claude skills
+  - `list_skills` / `get_skill` / `create_skill` / `delete_skill` 注册为 Agent 工具
+  - Agent 用 `create_skill` 自我进化：把验证有效的操作流程固化为新 SOP
+  - 种子：`verify-tcp-options`、`analyze-retransmission-pattern`
+
+- **实战知识库（案例，`src/services/fieldNotesService.ts`）**
+  - SQLite + FTS5，存"现象→真因→RFC"的沉淀案例
+  - `extractPacketFeatures(graph)` 确定性提取抓包特征（observedFlags/missingFlags/analysisFlags），missingFlags 复用 MCP 的 handshakePhase
+  - `searchFieldNotes()` 三层检索：协议过滤 → 特征打分（missingFlag×3/analysisFlag×2/observedFlag×1）→ 飞轮权重（verifiedCount 提权/disputedCount 降权）
+  - FTS5 question 兜底：特征分=0 时用英文关键词全文检索
+  - candidateCause 带 `skillIds` 关联 Skills，命中实战库连带出操作 SOP
+  - 飞轮：`verify/dispute/create/delete` API + UI，用户确认驱动权重演进
+
+- **RFC 全文库（规范，`src/services/rfcRagService.ts` + `rfcCorpus.ts`）**
+  - 786MB SQLite + FTS5，按章节切分，bm25 排序 + 废弃文档降权
+  - `search_rfc` / `get_rfc_section` 注册为 Agent 工具（rfcTools.ts）
+  - **防幻觉边界**：根因结论引用 RFC 必须先 get_rfc_section 回读原文，不凭记忆引用
+
+- **索引构建**：`scripts/buildFieldNotesIndex.ts`（实战库）、`scripts/buildRfcIndex.ts`（RFC 库）
+- **HTTP API**：`/api/field-notes`（CRUD + verify/dispute）、`/api/skills`（CRUD）、`/api/rag/status`
+
 #### Protocol Adapters (`src/protocolAdapters/`)
-6 个确定性 adapter，作为 `pcapai_` 工具背后的确定性实现运行 tshark：
-- **tcp.ts** — RST session pairs、retransmission pairs、zero-window pairs、SYN-no-SYN/ACK、one-way traffic、TCP issues overview
+6 个确定性 adapter 模块（TCP/DNS/TLS/HTTP/ICMP/UDP），作为 `pcapai_` 工具背后的确定性实现运行 tshark：
+- **tcp.ts** — 7 个子 adapter：RST session pairs、retransmission pairs、zero-window pairs、SYN-no-SYN/ACK、one-way traffic、TCP issues overview（RST/重传/零窗口 3 类）、**TCP 连接健康全景**（全量枚举 + 逐条六维健康分类：正常/握手未建立/RST/重传突发/零窗口/单向）
 - **dns.ts** — DNS 失败/无响应事务，rcode 分组，多 check 输出
 - **tls.ts** — TLS 握手事件（ClientHello/ServerHello/Alert），握手完整性检查，多 check 输出
 - **http.ts** — HTTP 事务（4xx/5xx），请求/响应匹配，多 check 输出，跨连接关联
 - **icmp.ts** — ICMP Unreachable/TTL Exceeded/Fragmentation
 - **udp.ts** — UDP 流聚合
 - 共享逻辑在 `builders.ts`：packet pair 分组、evidence card 创建、L7→TCP protocol correlations（DNS→TCP、TLS SNI→TCP、HTTP Host→TCP、ICMP→TCP）以及 HTTP 跨连接关联（`http_to_http`，用于七层代理/SSL 卸载场景）
-- `types.ts` 中 `runProtocolAdapter()` 实现三层路由：hardcoded regex → learned patterns → null（由调用方 fallback 到 agent）
+- `types.ts` 中 `runProtocolAdapter()` 实现分层路由：hardcoded regex → learned patterns → null（由调用方 fallback 到 agent）；`protocolEventQueryService.ts` 的 `adapterIdFromParams()` 优先认 `params.adapterId`（结构化直通 / learned bypass）
+- **`conversationHealth.ts`**（`src/services/`）— 纯函数 `classifyConversationHealth`：单条会话六维健康分类（handshake/rst/trafficDirection/retransmission/zeroWindow/closeState），`buildQueryDiagnosis` 和连接健康全景 adapter 共用同一套判定口径
 
 #### Insight Engine (`src/services/insightEngine.ts`)
 29 个确定性分析器，在 `routes.ts` 的 `loadGraphWithInsights()` 中懒运行：仅在 `graph.packets.length > 0` 且当前 graph 没有 `insights` 时执行，结果写回 case graph。不在 `runtime.ts` 内部运行，不会在每次请求都强制重算。无阈值过滤，所有检测到的模式均报告：
@@ -257,7 +285,7 @@ Zod schema + TypeScript 类型，定义完整领域模型：
 - **Packet Analysis Service**（`tsharkQueryClient.ts`）：QueryRun、统计服务和 protocol adapter 调用 tshark 查询
 - **Agent Runtime**：Leader Agent 和 subagent 通过 MCP 协议调用，查询原始包数据
 
-工具：`build_display_filter`、`get_capture_time_range`、`list_protocols`、`get_network_statistics`、`list_tcp_conversations`、`query_packets`、`get_conversation_packets`、`get_tshark_packet_detail`、`list_tcp_resets`、`list_tcp_retransmissions`、`list_tcp_zero_window`、`list_icmp_events`、`list_dns_packets`、`list_udp_packets`、`list_tls_packets`、`list_http_packets`、`list_tcp_streams`、`follow_tcp_stream`、`get_expert_info`
+工具：`build_display_filter`、`get_capture_time_range`、`list_protocols`、`get_network_statistics`、`list_tcp_conversations`（支持 `limit` 参数，默认 100，连接健康全景 adapter 传 5000 做全量枚举）、`query_packets`、`get_conversation_packets`、`get_tshark_packet_detail`、`list_tcp_resets`、`list_tcp_retransmissions`、`list_tcp_zero_window`、`list_icmp_events`、`list_dns_packets`、`list_udp_packets`、`list_tls_packets`、`list_http_packets`、`list_tcp_streams`、`follow_tcp_stream`、`get_expert_info`
 
 #### `mcp/evidence-opener` — Wireshark 打开器（1 个工具）
 仅被 API 层（`evidenceOpenerClient.ts`）调用。用 pcap 路径 + display filter 打开本地 Wireshark。不分析数据包。
@@ -276,8 +304,12 @@ Zod schema + TypeScript 类型，定义完整领域模型：
 用户问题
   ↓
 1. loadGraphWithInsights() — 懒运行 Insight Engine
+   （withCaseRunLock 串行化同 case 的并发 agent run）
   ↓
 2. routes.ts 进入 AgentRuntimeService
+  ↓
+2b. learned bypass: 若命中高置信学习模式，跳过 Chain Planner，
+    直接执行 { adapterId } 指向的 adapter
   ↓
 3. Chain Planner 分类 → AnalysisChainPlan
   ↓
@@ -289,7 +321,8 @@ Zod schema + TypeScript 类型，定义完整领域模型：
   ↓
 4b. Single tool path:
     AgentToolRegistry 执行 `pcapai_` 工具
-    → protocol adapter 三层路由:
+    → protocol adapter 分层路由:
+      结构化直通 (params.adapterId) → tshark 查询
       hardcoded regex match → tshark 查询
       learned pattern match → tshark 查询
       无匹配 → agent fallback (case-graph + tshark-query MCP)
@@ -317,11 +350,12 @@ Zod schema + TypeScript 类型，定义完整领域模型：
 
 ## Protocol Adapter 自改进
 
-Protocol adapter 路由采用三层 fallback：
+Protocol adapter 路由采用分层 fallback：
 
-1. **Hardcoded regex** — 每个 adapter 有内置的 match 函数
-2. **Learned patterns** — `data/learned_patterns.json` 存储 `{regex, adapterId}` 对，由 LLM 在 agent fallback 后生成
-3. **Agent fallback** — leader agent 通过 tshark-query MCP 处理查询；成功后 `patternLearner` 用 LLM 生成新 regex pattern
+1. **结构化直通 / learned bypass** — `params.adapterId` 直接路由到目标 adapter，跳过 regex 推断。高置信学习模式（`hitCount >= learnedBypassMinHits`）通过 `tryLearnedBypass` 短路 Chain Planner，直接传 `{ adapterId }` 执行
+2. **Hardcoded regex** — 每个 adapter 有内置的 match 函数
+3. **Learned patterns** — `data/learned_patterns.json` 存储 `{regex, adapterId}` 对，由 LLM 在 agent fallback 后生成
+4. **Agent fallback** — leader agent 通过 tshark-query MCP 处理查询；成功后 `patternLearner` 用 LLM 生成新 regex pattern
 
 学习模块（`src/services/patternLearner.ts`）无硬编码 tool→adapter 映射。LLM 从问题上下文和可用 adapter 列表决定 regex 和 adapterId。
 
@@ -336,7 +370,7 @@ Protocol adapter 路由采用三层 fallback：
 | `network_statistics` | 确定性网络事件查询 |
 | `mapping_hint_update` | 更新 mapping hint 并重跑关联 |
 | `capture_correlation` | 多文件关联查询 |
-| `protocol_event_query` | 协议事件查询（三层路由 + agent fallback） |
+| `protocol_event_query` | 协议事件查询（分层路由 + agent fallback） |
 | `tcp_session_query` | TCP session 查询 |
 | `selected_session_diagnosis` | 当前 session 诊断追问 |
 | `active_query_explain` | 当前 QueryRun 解释 |

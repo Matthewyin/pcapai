@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-pcapAI is an Agent-first packet troubleshooting chat workbench. Its primary unit is a **QueryRun** inside a chat session: uploaded pcap + user question -> chain planner -> single-step or multi-step analysis -> evidence cards -> Wireshark opener. A Chain Planner classifies questions into single-step or multi-step plans, deterministic protocol adapters handle structured queries (TCP metrics, DNS, TLS, HTTP, ICMP, UDP), and a leader agent with subagents handles open-ended analysis. Protocol adapter routing has a three-tier fallback: hardcoded regex → learned patterns → agent with tshark-query MCP. The chain execution engine (`executeChain`) runs multi-step plans with parameter binding between steps. UI and API text are in Chinese.
+pcapAI is an Agent-first packet troubleshooting chat workbench. Its primary unit is a **QueryRun** inside a chat session: uploaded pcap + user question -> chain planner -> single-step or multi-step analysis -> evidence cards -> Wireshark opener. A Chain Planner classifies questions into single-step or multi-step plans, deterministic protocol adapters handle structured queries (TCP metrics, DNS, TLS, HTTP, ICMP, UDP), and a leader agent with 3 handoff subagents (Hypothesis/Path/Protocol) handles open-ended analysis. Protocol adapter routing follows a tiered fallback: structured direct (`params.adapterId` / high-confidence learned bypass) → hardcoded regex → learned patterns → agent with tshark-query MCP. The chain execution engine (`executeChain`) runs multi-step plans with parameter binding between steps. UI and API text are in Chinese.
 
 ## Commands
 
@@ -57,15 +57,16 @@ All runtime defaults live here: API host/port (default `30022`), CORS origins, M
   - `GET /api/cases/:caseId/tcp-streams/:streamIndex/content?format=ascii&nodeId=xxx` — gets TCP stream content
   - `POST /api/cases/:caseId/evidence/open` — opens pcap evidence in local Wireshark via evidence-opener MCP
   - `GET /api/cases/:caseId/report` — Markdown report from case graph via `reportBuilder.ts`
-  - `POST /api/cases/:caseId/agent`, `POST /api/cases/:caseId/agent/stream` — SSE streaming agent answers
+  - `POST /api/cases/:caseId/agent`, `POST /api/cases/:caseId/agent/stream` — SSE streaming agent answers. Both wrapped in per-case mutex (`withCaseRunLock`) serializing concurrent agent runs.
+- **`src/http/composeServices.ts`** — service composition layer: wires 13 services + 2 answer builders + protocol adapters into `composeServices(deps)`. Extracted from routes.ts.
 - **`src/http/caseStore.ts`** — case persistence: `data/cases/:caseId/case.json`, analysis run snapshots in `analysis-runs/`, captures in `captures/`
 - **`src/http/capturePreprocess.ts`** — strips packet payload via `editcap -s` before parsing
 - **`src/http/reportBuilder.ts`** — generates structured Markdown report from case graph: sections for query, data sources, evidence, L7 correlations, access objects, multi-node path, diagnosis checks, and Wireshark filters
 - **`src/http/llmSettings.ts`** — LLM profile management in `.env` file (profiles stored as `PCAPAI_LLM_PROFILE_*` env vars)
 - **`src/protocolAdapters/`** — deterministic protocol-specific query subsystem:
-  - `types.ts` — `ProtocolAdapter` interface and `runProtocolAdapter()` dispatcher; three-tier routing: hardcoded regex → learned patterns → agent fallback
+  - `types.ts` — `ProtocolAdapter` interface and `runProtocolAdapter()` dispatcher; tiered routing: structured direct (`params.adapterId` / learned bypass) → hardcoded regex → learned patterns → agent fallback
   - `builders.ts` — shared logic: packet pair grouping, evidence card creation, `QueryRun` construction, L7-to-TCP protocol correlations (DNS→TCP, TLS SNI→TCP, HTTP Host→TCP, ICMP→TCP), and HTTP cross-connection correlation (`http_to_http` for L7 proxy/SSL offload)
-  - `tcp.ts` — RST session pairs, retransmission pairs, zero-window pairs, SYN-no-SYN/ACK pairs, one-way traffic pairs, TCP issues overview
+  - `tcp.ts` — RST session pairs, retransmission pairs, zero-window pairs, SYN-no-SYN/ACK pairs, one-way traffic pairs, TCP issues overview (RST/retransmission/zero-window), TCP connection health matrix (full enumeration + per-connection six-dimension classification)
   - `dns.ts` — DNS failure/unresponsive transactions with rcode grouping
   - `tls.ts` — TLS handshake events (ClientHello, ServerHello, alerts) with handshake completeness checks
   - `http.ts` — HTTP transactions with status code filtering (4xx/5xx), request/response matching, and cross-connection correlation
@@ -75,7 +76,8 @@ All runtime defaults live here: API host/port (default `30022`), CORS origins, M
 - **`src/services/rfcCorpus.ts` / `rfcRagService.ts` / `src/agents/rfcTools.ts`** — RFC 规范知识库（无嵌入的词法方案）：`scripts/buildRfcIndex.ts`（npm run rag:build）把 `RFC/` 下 9700+ 篇官方 txt 按章节切分入 SQLite FTS5（`data/rfc-index/rfc.db`，全量构建约 10 秒）；检索服务做 BM25 + HISTORIC/被废弃降权 + 同篇去重；Agent 侧两个进程内工具：`search_rfc`（英文关键词定位条文）与 `get_rfc_section`（精读章节原文，结论引用必须经此回读，带 RFC 编号与 §section）。hypothesisPlaybook 每行带 rfcRefs 规范锚点。REST 调试入口：`GET /api/rag/search?q=`、`GET /api/rag/status`
 - **`src/services/insightEngine.ts`** — 30 deterministic analyzers: TCP lifecycle/ACK gap/timing/window trend/RST direction/handshake retry/delayed ACK/connection flood/segment anomaly/keepalive/throughput/TCP options, ICMP echo pair, HTTP status chain/header anomaly/timing/advanced, TLS handshake/advanced, DNS anomaly/advanced, cross-protocol chain, UDP, ICMP advanced, QUIC, NTP, SSH, L7 proxy detection (Via/XFF/SSL offload/TCP split), NAT heuristic (multi-target/ISN/orphan SYN). Entry point: `runLevel1Insights(graph)` returns `PacketInsight[]`. No thresholds — reports all detected patterns.
 - **`src/services/tcpPreprocessor.ts`** — TCP anomaly preprocessor: extracts only anomalous TCP packets (RST, retransmission, zero window, duplicate ACK, lost segment, failed handshakes) via targeted tshark queries. Uses mapping hints to focus on relevant flows. Runs before the insight engine to keep the analysis dataset small.
-- **`src/mcp/tsharkQueryClient.ts`** — stdio MCP client for tshark-query; wraps 18 tool calls (including `list_tcp_streams`, `follow_tcp_stream`, `get_expert_info`)
+- **`src/services/conversationHealth.ts`** — pure `classifyConversationHealth` function for single-conversation six-dimension TCP health classification (handshake/rst/trafficDirection/retransmission/zeroWindow/closeState). Shared between `buildQueryDiagnosis` and the `tcp_connection_health_matrix` adapter.
+- **`src/mcp/tsharkQueryClient.ts`** — stdio MCP client for tshark-query; wraps 18 tool calls (including `list_tcp_conversations`, `list_tcp_streams`, `follow_tcp_stream`, `get_expert_info`). `listTcpConversationsWithMcp` accepts optional `limit` (default 100; health matrix adapter passes 5000 for full enumeration).
 - **`src/mcp/evidenceOpenerClient.ts`** — stdio MCP client for evidence-opener
 - **`src/agents/runtime.ts`** — OpenAI Agents SDK runtime with three phases:
   1. **Chain planner** (`runChainPlanner`) — plans single-step or multi-step analysis chains; outputs `AnalysisChainPlan` with ordered steps, each referencing one of 12 intents. Requires an LLM key (requests fail fast with `llm_key_required` otherwise).
@@ -100,7 +102,7 @@ Single-file React 19 app (`src/main.tsx`). Chat-first layout with session histor
 
 ### `mcp/*` — MCP servers
 Two stdio-based MCP servers using `@modelcontextprotocol/sdk`:
-- **`tshark-query`** — reads capture metadata with `capinfos`, builds display filters, and runs `tshark` for conversations, packet queries, packet details, TCP resets/retransmissions/zero-window, ICMP events, DNS packets, UDP flows, TLS events, HTTP packets, protocol listing, and network statistics. 18 tools (including `list_tcp_streams`, `follow_tcp_stream`, `get_expert_info`, `get_tshark_packet_detail`).
+- **`tshark-query`** — reads capture metadata with `capinfos`, builds display filters, and runs `tshark` for conversations, packet queries, packet details, TCP resets/retransmissions/zero-window, ICMP events, DNS packets, UDP flows, TLS events, HTTP packets, protocol listing, and network statistics. 19 tools (including `list_tcp_conversations`, `list_tcp_streams`, `follow_tcp_stream`, `get_expert_info`, `get_tshark_packet_detail`).
 - **`evidence-opener`** — opens local Wireshark for a pcap path and display filter. It does not analyze packets.
 
 ## Query Pipeline
@@ -122,10 +124,11 @@ Two stdio-based MCP servers using `@modelcontextprotocol/sdk`:
 
 ## Protocol Adapter Self-Improvement
 
-Protocol adapter routing follows a three-tier fallback:
-1. **Hardcoded regex** — each adapter has built-in match functions
-2. **Learned patterns** — `data/learned_patterns.json` stores `{regex, adapterId}` pairs generated by LLM after agent fallback
-3. **Agent fallback** — leader agent with tshark-query MCP handles the query; after success, `patternLearner` uses LLM to generate a new regex pattern
+Protocol adapter routing follows a tiered fallback:
+1. **Structured direct / learned bypass** — `params.adapterId` routes directly to the target adapter. High-confidence learned patterns short-circuit the Chain Planner via `tryLearnedBypass`.
+2. **Hardcoded regex** — each adapter has built-in match functions
+3. **Learned patterns** — `data/learned_patterns.json` stores `{regex, adapterId}` pairs generated by LLM after agent fallback
+4. **Agent fallback** — leader agent with tshark-query MCP handles the query; after success, `patternLearner` uses LLM to generate a new regex pattern
 
 The learning module has no hardcoded tool→adapter mapping. The LLM determines both the regex pattern and the target adapterId from the question context and available adapter list.
 

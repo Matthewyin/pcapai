@@ -31,8 +31,32 @@
     "rag": {
       "rfcDir": "RFC",
       "indexPath": "data/rfc-index/rfc.db",
+      "curatedIndexPath": "data/rfc-index/rfc-mini.db",
       "topK": 6,
-      "sectionCharLimit": 12000
+      "sectionCharLimit": 12000,
+      "download": {
+        "url": "https://github.com/matthewyin/pcapAI/releases/download/rfc-data/rfc.db",
+        "targetFilename": "rfc.db",
+        "chunkSize": 1048576,
+        "timeoutMs": 300000
+      }
+    },
+    "fieldNotes": {
+      "seedsDir": "data/field-notes/seeds",
+      "indexPath": "data/field-notes/field-notes.db",
+      "topK": 3,
+      "scores": {
+        "missingFlag": 3,
+        "analysisFlag": 2,
+        "observedFlag": 1
+      }
+    },
+    "skills": {
+      "dir": "data/skills"
+    },
+    "session": {
+      "compressThreshold": 40,
+      "keepRecent": 12
     },
     "diagnosis": {
       "shortConversationPacketThreshold": 2,

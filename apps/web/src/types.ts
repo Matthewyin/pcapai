@@ -343,6 +343,14 @@ export type LlmRuntimeStatus = {
   };
 };
 
+export type McpServerInfo = {
+  id: string;
+  name: string;
+  description: string;
+  toolCount: number;
+  kind: string;
+};
+
 export type CaptureDraft = {
   file: File;
   nodeId: string;
@@ -359,6 +367,21 @@ export type DiagnosticHypothesis = {
   status: "pending" | "testing" | "confirmed" | "ruled_out";
   evidenceFor: string[];
   evidenceAgainst: string[];
+};
+
+/**
+ * 根因条目（阶段 2 数据契约补全）。区分"RFC 验证结论"与"经验推测"，
+ * 右栏诊断档案 Tab 据此用 verified / speculative 颜色分层（防幻觉边界）。
+ */
+export type RootCauseEntry = {
+  id: string;
+  description: string;
+  confidence: "certain" | "high" | "low" | "needs_context";
+  /** 是否经 RFC 章节验证（false = 推测，需在卡片上明确标注） */
+  rfcVerified: boolean;
+  rfcSection?: string;
+  evidenceCardIds: string[];
+  packetIds: string[];
 };
 
 export type ChatMessage = {
@@ -382,4 +405,9 @@ export type ChatMessage = {
   diagnosticPhase?: "interview" | "hypothesis" | "testing" | "conclusion";
   hypotheses?: DiagnosticHypothesis[];
   stepEvidence?: Record<number, { purpose: string; evidenceCards: EvidenceCard[] }>;
+  /**
+   * 根因列表（阶段 2 数据契约补全）。每条带 rfcVerified 区分"RFC 验证结论"与"经验推测"，
+   * 右栏诊断档案 Tab 据此用 verified / speculative 颜色分层（防幻觉边界）。
+   */
+  rootCauses?: RootCauseEntry[];
 };

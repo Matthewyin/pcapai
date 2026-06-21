@@ -791,11 +791,41 @@ function summarizeConversations(packets: Array<z.infer<typeof PacketSchema>>, ba
     groups.set(key, [...(groups.get(key) || []), packet]);
   }
   return [...groups.values()].map((items, index) => {
+    // 会话端点由首个包确定；按时间排序保证握手时序判定可靠（多 capture 合并后顺序可能乱）。
     const first = items[0];
-    const last = items[items.length - 1];
-    const byteCount = items.reduce((sum, packet) => sum + (packet.length || 0), 0);
-    const flags = [...new Set(items.flatMap((packet) => packet.tcpFlags))];
+    const ordered = [...items].sort((left, right) => left.timestamp - right.timestamp);
+    const last = ordered[ordered.length - 1];
+    const byteCount = ordered.reduce((sum, packet) => sum + (packet.length || 0), 0);
+    const flags = [...new Set(ordered.flatMap((packet) => packet.tcpFlags))];
     const conversationFilter = tupleFilter(first);
+
+    // 方向级统计：forward = src→dst（与会话端点一致），reverse = dst→src。
+    // tcpFlags 是去重并集，无法据此判握手/方向；方向级字段让会话级判定对齐包级 classifyConversationHealth。
+    const isForward = (packet: z.infer<typeof PacketSchema>) =>
+      packet.srcIp === first.srcIp && packet.srcPort === first.srcPort && packet.dstIp === first.dstIp && packet.dstPort === first.dstPort;
+    const isReverse = (packet: z.infer<typeof PacketSchema>) =>
+      packet.srcIp === first.dstIp && packet.srcPort === first.dstPort && packet.dstIp === first.srcIp && packet.dstPort === first.srcPort;
+    const hasFlag = (packet: z.infer<typeof PacketSchema>, flag: string) => packet.tcpFlags.includes(flag);
+    const forwardPackets = ordered.filter(isForward);
+    const reversePackets = ordered.filter(isReverse);
+    const forwardSyn = forwardPackets.find((packet) => hasFlag(packet, "SYN") && !hasFlag(packet, "ACK"));
+    const reverseSynAck = reversePackets.find((packet) => hasFlag(packet, "SYN") && hasFlag(packet, "ACK"));
+    // 第三次握手 ACK：forward 方向、在 SYN-ACK 之后、纯 ACK（无 SYN）
+    const forwardHandshakeAck = reverseSynAck
+      ? forwardPackets.find((packet) => packet.timestamp >= reverseSynAck.timestamp && hasFlag(packet, "ACK") && !hasFlag(packet, "SYN"))
+      : undefined;
+    // 握手进展四态，与包级 classifyConversationHealth 的 handshake ok/warn/problem 对齐：
+    // complete → ok；syn_ack → warn（看到 SYN+SYN-ACK 但样本内无第三次 ACK）；syn → problem；none → unknown
+    const handshakePhase: "complete" | "syn_ack" | "syn" | "none" = forwardSyn && reverseSynAck && forwardHandshakeAck
+      ? "complete"
+      : forwardSyn && reverseSynAck
+        ? "syn_ack"
+        : forwardSyn
+          ? "syn"
+          : "none";
+    const hasForwardPayload = forwardPackets.some((packet) => (packet.tcpPayloadLength ?? 0) > 0);
+    const hasReversePayload = reversePackets.some((packet) => (packet.tcpPayloadLength ?? 0) > 0);
+
     return {
       conversationId: `conv-${index + 1}`,
       nodeId: first.nodeId,
@@ -807,12 +837,17 @@ function summarizeConversations(packets: Array<z.infer<typeof PacketSchema>>, ba
       dstPort: first.dstPort,
       startTime: first.timestamp,
       endTime: last.timestamp,
-      packetCount: items.length,
+      packetCount: ordered.length,
       byteCount,
       tcpFlags: flags,
-      rstCount: items.filter((packet) => packet.tcpFlags.includes("RST")).length,
-      retransmissionCount: items.filter((packet) => packet.tcpAnalysis.retransmission || packet.tcpAnalysis.fastRetransmission).length,
-      zeroWindowCount: items.filter((packet) => packet.tcpAnalysis.zeroWindow).length,
+      rstCount: ordered.filter((packet) => packet.tcpFlags.includes("RST")).length,
+      retransmissionCount: ordered.filter((packet) => packet.tcpAnalysis.retransmission || packet.tcpAnalysis.fastRetransmission).length,
+      zeroWindowCount: ordered.filter((packet) => packet.tcpAnalysis.zeroWindow).length,
+      handshakePhase,
+      forwardPacketCount: forwardPackets.length,
+      reversePacketCount: reversePackets.length,
+      hasForwardPayload,
+      hasReversePayload,
       displayFilter: [baseFilter, conversationFilter].filter(Boolean).join(" && ")
     };
   }).sort((left, right) => left.startTime - right.startTime);
@@ -919,14 +954,15 @@ server.registerTool(
   "list_tcp_conversations",
   {
     title: "List TCP conversations",
-    description: "Run tshark over captures and return matching TCP conversations.",
+    description: "Run tshark over captures and return matching TCP conversations. Default limit 100; set limit explicitly for full enumeration.",
     inputSchema: {
       capturesJson: z.string(),
-      displayFilter: z.string()
+      displayFilter: z.string(),
+      limit: z.number().int().optional()
     }
   },
-  async ({ capturesJson, displayFilter }) => {
-    const { packets, truncated } = await queryCaptures(capturesJson, displayFilter);
+  async ({ capturesJson, displayFilter, limit }) => {
+    const { packets, truncated } = await queryCaptures(capturesJson, displayFilter, limit);
     return { content: [{ type: "text", text: JSON.stringify({ conversations: summarizeConversations(packets, displayFilter), packetCount: packets.length, truncated }) }] };
   }
 );

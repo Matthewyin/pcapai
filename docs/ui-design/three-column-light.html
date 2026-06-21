@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>pcapAI 三栏布局原型(亮色)</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg: #ffffff;
+    --surface: #f6f8fa;
+    --surface-2: #eef1f4;
+    --border: #d0d7de;
+    --border-soft: #e3e8ed;
+    --text: #1f2328;
+    --text-dim: #656d76;
+    --text-muted: #8c959f;
+    --accent: #0969da;
+    --accent-soft: #ddf4ff;
+    --green: #1a7f37;
+    --green-soft: #dafbe1;
+    --green-border: #aceebb;
+    --amber: #9a6700;
+    --amber-soft: #fff8c5;
+    --amber-border: #f4e3a1;
+    --red: #cf222e;
+    --purple: #8250df;
+    --purple-soft: #f1e1ff;
+  }
+  body { font-family: -apple-system, "PingFang SC", "Segoe UI", sans-serif; background: var(--bg); color: var(--text); font-size: 13px; line-height: 1.55; overflow: hidden; }
+
+  /* 三栏可拖拽:用 flex + JS 控制宽度,不用 grid 固定列 */
+  .app { display: flex; height: 100vh; }
+  .sidebar { width: 220px; min-width: 180px; max-width: 320px; flex-shrink: 0; }
+  .main { flex: 1; min-width: 360px; }
+  .agent-panel { width: 340px; min-width: 280px; max-width: 480px; flex-shrink: 0; }
+
+  /* 拖拽手柄 */
+  .resizer { width: 5px; cursor: col-resize; background: transparent; flex-shrink: 0; position: relative; transition: background 0.15s; }
+  .resizer:hover, .resizer.dragging { background: var(--accent); }
+  .resizer::after { content: ""; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 3px; height: 28px; background: var(--border); border-radius: 2px; }
+  .resizer:hover::after, .resizer.dragging::after { background: var(--accent); }
+
+  /* ===== 左栏:历史 ===== */
+  .sidebar { background: var(--surface); border-right: 1px solid var(--border); display: flex; flex-direction: column; }
+  .sidebar-header { padding: 14px 16px; border-bottom: 1px solid var(--border-soft); }
+  .sidebar-header .logo { font-weight: 700; font-size: 15px; color: var(--text); display: flex; align-items: center; gap: 6px; }
+  .sidebar-header .logo .dot { width: 8px; height: 8px; background: var(--accent); border-radius: 50%; }
+  .new-btn { margin: 10px 16px; padding: 7px; background: var(--accent); color: #fff; border: none; border-radius: 6px; font-size: 12px; cursor: pointer; font-weight: 500; }
+  .new-btn:hover { background: #0860ca; }
+  .history-list { flex: 1; overflow-y: auto; padding: 4px 8px; }
+  .history-item { padding: 8px 10px; border-radius: 6px; cursor: pointer; margin-bottom: 2px; }
+  .history-item:hover { background: var(--surface-2); }
+  .history-item.active { background: var(--accent-soft); }
+  .history-item .title { font-size: 12px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 500; }
+  .history-item .meta { font-size: 10px; color: var(--text-muted); margin-top: 2px; }
+  .sidebar-footer { padding: 10px 16px; border-top: 1px solid var(--border-soft); display: flex; gap: 12px; font-size: 11px; color: var(--text-dim); }
+  .sidebar-footer a { color: var(--text-dim); text-decoration: none; cursor: pointer; }
+  .sidebar-footer a:hover { color: var(--accent); }
+  .sidebar-footer a.active { color: var(--accent); font-weight: 600; }
+
+  /* ===== 中栏:交互(不动现有) ===== */
+  .main { display: flex; flex-direction: column; background: var(--bg); }
+  .main-header { padding: 12px 20px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 10px; }
+  .main-header .case-title { font-size: 14px; font-weight: 600; }
+  .main-header .case-tag { font-size: 10px; padding: 2px 7px; background: var(--surface-2); border-radius: 4px; color: var(--text-dim); }
+  .main-header .model-pill { margin-left: auto; font-size: 11px; padding: 3px 9px; background: var(--purple-soft); color: var(--purple); border-radius: 10px; }
+  .messages { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 16px; }
+  .msg { max-width: 78%; padding: 11px 14px; border-radius: 12px; font-size: 13px; }
+  .msg.user { align-self: flex-end; background: var(--accent); color: #fff; }
+  .msg.agent { align-self: flex-start; background: var(--surface); border: 1px solid var(--border-soft); }
+  .msg.agent .agent-label { font-size: 10px; color: var(--text-muted); margin-bottom: 4px; display: flex; align-items: center; gap: 4px; }
+  .msg.agent strong { color: var(--text); }
+  .msg.agent .hint { font-size: 11px; color: var(--text-dim); margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--border-soft); }
+  .msg.agent .hint b { color: var(--accent); }
+  .composer { padding: 14px 20px; border-top: 1px solid var(--border); }
+  .composer-box { display: flex; gap: 8px; align-items: flex-end; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; }
+  .composer-box textarea { flex: 1; border: none; background: transparent; resize: none; font-size: 13px; font-family: inherit; outline: none; color: var(--text); min-height: 22px; max-height: 120px; line-height: 1.5; }
+  .composer-actions { display: flex; gap: 6px; }
+  .composer-actions button { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; font-size: 11px; color: var(--text-dim); cursor: pointer; }
+  .composer-actions .send { background: var(--accent); color: #fff; border-color: var(--accent); padding: 4px 12px; }
+
+  /* ===== 右栏:Agent 个性化(核心差异化) ===== */
+  .agent-panel { background: var(--surface); border-left: 1px solid var(--border); display: flex; flex-direction: column; }
+  .panel-tabs { display: flex; border-bottom: 1px solid var(--border-soft); }
+  .panel-tab { flex: 1; padding: 11px 4px; text-align: center; font-size: 11px; color: var(--text-dim); cursor: pointer; border-bottom: 2px solid transparent; font-weight: 500; }
+  .panel-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+  .panel-tab .count { font-size: 9px; background: var(--surface-2); padding: 0 4px; border-radius: 8px; margin-left: 2px; }
+  .panel-body { flex: 1; overflow-y: auto; padding: 14px; }
+  .panel-section { margin-bottom: 16px; }
+  .panel-section-title { font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; font-weight: 600; display: flex; align-items: center; gap: 4px; }
+
+  /* 实战库命中卡 */
+  .fn-hit { background: var(--bg); border: 1px solid var(--border-soft); border-left: 3px solid var(--accent); border-radius: 6px; padding: 10px 12px; margin-bottom: 8px; }
+  .fn-hit .fn-title { font-size: 12px; font-weight: 600; color: var(--text); }
+  .fn-hit .fn-meta { font-size: 10px; color: var(--text-dim); margin-top: 3px; display: flex; gap: 8px; align-items: center; }
+  .fn-hit .fn-verified { color: var(--green); }
+  .fn-hit .fn-score { background: var(--accent-soft); color: var(--accent); padding: 1px 6px; border-radius: 3px; }
+
+  /* Skill 卡 */
+  .skill-card { background: var(--bg); border: 1px solid var(--border-soft); border-radius: 6px; padding: 9px 11px; margin-bottom: 6px; }
+  .skill-card .sk-name { font-size: 12px; font-weight: 600; color: var(--purple); font-family: monospace; }
+  .skill-card .sk-desc { font-size: 11px; color: var(--text-dim); margin-top: 2px; }
+  .skill-card .sk-steps { font-size: 10px; color: var(--text-muted); margin-top: 4px; }
+
+  /* RFC 引用 */
+  .rfc-ref { display: flex; align-items: center; gap: 6px; background: var(--bg); border: 1px solid var(--border-soft); border-radius: 6px; padding: 7px 10px; margin-bottom: 5px; }
+  .rfc-ref .rfc-num { font-size: 11px; font-weight: 700; color: var(--accent); font-family: monospace; }
+  .rfc-ref .rfc-section { font-size: 10px; color: var(--text-dim); }
+  .rfc-ref .rfc-verified { margin-left: auto; font-size: 10px; color: var(--green); }
+
+  /* 根因卡(右栏简化版) */
+  .rc-mini { background: var(--bg); border-radius: 6px; padding: 9px 11px; margin-bottom: 6px; border-left: 3px solid; }
+  .rc-mini.verified { border-color: var(--green); background: var(--green-soft); }
+  .rc-mini.spec { border-color: var(--amber); background: var(--amber-soft); }
+  .rc-mini .rc-tag { font-size: 9px; padding: 1px 6px; border-radius: 3px; font-weight: 600; }
+  .rc-mini.verified .rc-tag { background: var(--green); color: #fff; }
+  .rc-mini.spec .rc-tag { background: var(--amber); color: #fff; }
+  .rc-mini .rc-text { font-size: 12px; color: var(--text); margin-top: 4px; }
+
+  /* 推理轨迹 */
+  .trace-step { display: flex; gap: 7px; padding: 5px 0; font-size: 11px; border-bottom: 1px solid var(--border-soft); }
+  .trace-step:last-child { border-bottom: none; }
+  .trace-step .ts-icon { width: 14px; flex-shrink: 0; }
+  .trace-step .ts-tool { color: var(--accent); font-family: monospace; font-size: 10px; }
+  .trace-step .ts-result { color: var(--text-dim); font-size: 10px; }
+  .trace-step .ts-time { margin-left: auto; color: var(--text-muted); font-size: 9px; }
+
+  /* 飞轮反馈 */
+  .flywheel { background: var(--bg); border: 1px solid var(--border-soft); border-radius: 6px; padding: 10px 12px; margin-top: 4px; }
+  .flywheel .fw-q { font-size: 11px; color: var(--text); margin-bottom: 6px; }
+  .flywell-btns { display: flex; gap: 6px; }
+  .fw-btn { flex: 1; padding: 5px; border: 1px solid var(--border); border-radius: 5px; font-size: 11px; cursor: pointer; background: var(--bg); color: var(--text-dim); }
+  .fw-btn.yes { color: var(--green); border-color: var(--green-border); }
+  .fw-btn.no { color: var(--red); border-color: #f4a8b0; }
+
+  /* 不确定性 */
+  .uncertainty-mini { background: var(--amber-soft); border: 1px solid var(--amber-border); border-radius: 6px; padding: 9px 11px; }
+  .uncertainty-mini .u-title { font-size: 11px; color: var(--amber); font-weight: 600; margin-bottom: 4px; }
+  .uncertainty-mini ul { padding-left: 16px; font-size: 10px; color: var(--text-dim); }
+  .uncertainty-mini li { margin-bottom: 2px; }
+
+  .empty-hint { text-align: center; color: var(--text-muted); font-size: 11px; padding: 30px 16px; }
+  .empty-hint .big { font-size: 24px; margin-bottom: 8px; }
+
+  /* 证据卡(右栏,点击新页面/Wireshark) */
+  .evidence-card { background: var(--bg); border: 1px solid var(--border-soft); border-radius: 6px; padding: 9px 11px; margin-bottom: 6px; }
+  .evidence-card .ev-title { font-size: 12px; font-weight: 600; color: var(--text); }
+  .evidence-card .ev-meta { font-size: 10px; color: var(--text-dim); margin-top: 2px; font-family: monospace; }
+  .evidence-card .ev-actions { margin-top: 6px; display: flex; gap: 10px; }
+  .ev-link { font-size: 11px; color: var(--accent); cursor: pointer; text-decoration: none; }
+  .ev-link:hover { text-decoration: underline; }
+  .ev-link.ws { color: var(--green); }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- ============ 左栏:历史 ============ -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-header">
+      <div class="logo"><span class="dot"></span> pcapAI</div>
+    </div>
+    <button class="new-btn">+ 新建诊断会话</button>
+    <div class="history-list">
+      <div class="history-item active">
+        <div class="title">TCP 重传根因分析</div>
+        <div class="meta">GLM-5.2 · 刚刚</div>
+      </div>
+      <div class="history-item">
+        <div class="title">SYN 无响应排查</div>
+        <div class="meta">DeepSeek · 2 小时前</div>
+      </div>
+      <div class="history-item">
+        <div class="title">DNS 解析超时</div>
+        <div class="meta">GLM-5.2 · 昨天</div>
+      </div>
+      <div class="history-item">
+        <div class="title">TLS 握手失败</div>
+        <div class="meta">GLM-5.2 · 3 天前</div>
+      </div>
+      <div class="history-item">
+        <div class="title">跨节点延迟对齐</div>
+        <div class="meta">DeepSeek · 1 周前</div>
+      </div>
+    </div>
+    <div class="sidebar-footer">
+      <a class="active">历史</a>
+      <a>知识库</a>
+      <a>配置</a>
+      <a>帮助</a>
+    </div>
+  </aside>
+
+  <div class="resizer" data-target="sidebar"></div>
+
+  <!-- ============ 中栏:交互(保持现有) ============ -->
+  <main class="main">
+    <div class="main-header">
+      <div class="case-title">TCP 重传根因分析</div>
+      <div class="case-tag">20260127newnew01.pcap · 62k 包</div>
+      <div class="model-pill">GLM-5.2</div>
+    </div>
+
+    <div class="messages">
+      <div class="msg user">这个抓包里为什么有这么多 TCP 重传?根因是什么?</div>
+
+      <div class="msg agent">
+        <div class="agent-label">🤖 Agent · 27 步 · 42s</div>
+        本抓包共 <strong>62162</strong> 个包,检测到 <strong>234</strong> 个 TCP 重传、<strong>8</strong> 个 RST、<strong>11</strong> 个零窗口。重传集中在连接 4.24.11.248:443。<br><br>
+        重传呈<b>指数退避</b>特征:首个重传约 200ms,随后 400ms、800ms、1600ms 倍增,符合 RFC 6298 定义的 RTO 退避行为。<br><br>
+        我识别出 <strong>3 个根因</strong>(其中 1 个已用 RFC 验证,2 个为经验推测),详见右侧 <b>诊断档案</b> 栏。<br><br>
+        <strong>核心结论:</strong>后端节点无响应触发 RTO 指数退避重传(RFC 6298§5.4-5.6 已验证),F5 健康检查失效可能放大了重传(经验推测,建议核查 F5 配置)。<br><br>
+        <strong>建议:</strong>① 检查后端服务健康状态;② 核查 F5 健康检查;③ 客户端/服务端双端抓包确认丢包位置。
+        <div class="hint">💡 本次诊断参考了实战知识库案例「TCP 重传指数退避」并使用了技能 <b>analyze-retransmission-pattern</b>。详情见右侧栏 →</div>
+      </div>
+    </div>
+
+    <div class="composer">
+      <div class="composer-box">
+        <textarea placeholder="输入追问,或拖入新的 pcap 对比...">那如果换成服务端视角,会看到什么不同?</textarea>
+        <div class="composer-actions">
+          <button>📎 上传</button>
+          <button class="send">发送</button>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <div class="resizer" data-target="agent-panel"></div>
+
+  <!-- ============ 右栏:Agent 个性化(核心差异化) ============ -->
+  <aside class="agent-panel" id="agent-panel">
+    <div class="panel-tabs">
+      <div class="panel-tab active">知识脉络 <span class="count">3</span></div>
+      <div class="panel-tab">推理轨迹 <span class="count">27</span></div>
+      <div class="panel-tab">诊断档案</div>
+    </div>
+    <div class="panel-body">
+
+      <!-- Tab 1: 知识脉络(默认,三层知识体系的可见性) -->
+      <div class="panel-section">
+        <div class="panel-section-title">🎯 命中的实战案例</div>
+        <div class="fn-hit">
+          <div class="fn-title">TCP 重传呈指数退避模式(200/400/800ms)</div>
+          <div class="fn-meta">
+            <span class="fn-score">匹配度 5</span>
+            <span class="fn-verified">✓ 已被验证</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel-section">
+        <div class="panel-section-title">🔧 使用的技能 Skills</div>
+        <div class="skill-card">
+          <div class="sk-name">analyze-retransmission-pattern</div>
+          <div class="sk-desc">统计重传间隔,识别 RTO 退避 vs 快速重传</div>
+          <div class="sk-steps">5 步 SOP · 取重传包→统计间隔→区分模式→验证对端→对照 RFC</div>
+        </div>
+      </div>
+
+      <div class="panel-section">
+        <div class="panel-section-title">📖 引用的 RFC(防幻觉锚)</div>
+        <div class="rfc-ref">
+          <span class="rfc-num">RFC 6298</span>
+          <span class="rfc-section">§5.4-5.6 RTO 退避</span>
+          <span class="rfc-verified">✓ 已回读原文</span>
+        </div>
+      </div>
+
+      <div class="panel-section">
+        <div class="panel-section-title">🧠 Agent 自我进化</div>
+        <div class="skill-card" style="border-left:3px solid var(--green);">
+          <div class="sk-name" style="color:var(--green);">+ 新技能建议</div>
+          <div class="sk-desc">本次识别 F5 健康检查失效的模式可复用,Agent 建议沉淀为新 Skill「detect-lb-healthcheck-failure」</div>
+          <div class="sk-steps"><a style="color:var(--accent);cursor:pointer;">采纳并创建 →</a></div>
+        </div>
+      </div>
+
+      <div class="panel-section">
+        <div class="panel-section-title">🔎 证据卡片(点击新页面查看)</div>
+        <div class="evidence-card">
+          <div class="ev-title">RST 通信对 · #4.24.11.248:443</div>
+          <div class="ev-meta">8 个 RST · 包 #23501-#26701</div>
+          <div class="ev-actions">
+            <a class="ev-link">📄 新页面查看</a>
+            <a class="ev-link ws">🦎 Wireshark</a>
+          </div>
+        </div>
+        <div class="evidence-card">
+          <div class="ev-title">重传序列 · 指数退避</div>
+          <div class="ev-meta">5 次重传 200/400/800/1600/3200ms</div>
+          <div class="ev-actions">
+            <a class="ev-link">📄 新页面查看</a>
+            <a class="ev-link ws">🦎 Wireshark</a>
+          </div>
+        </div>
+        <div class="evidence-card">
+          <div class="ev-title">零窗口事件</div>
+          <div class="ev-meta">11 个 zero window probe</div>
+          <div class="ev-actions">
+            <a class="ev-link">📄 新页面查看</a>
+            <a class="ev-link ws">🦎 Wireshark</a>
+          </div>
+        </div>
+      </div>
+
+      <!-- Tab 3 预览:诊断档案的核心 -->
+      <div class="panel-section">
+        <div class="panel-section-title">⚡ 快速反馈(飞轮)</div>
+        <div class="flywheel">
+          <div class="fw-q">这个诊断结论对你有帮助吗?</div>
+          <div class="flywell-btns">
+            <button class="fw-btn yes">✓ 正确,沉淀</button>
+            <button class="fw-btn no">✗ 不对,纠正</button>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </aside>
+
+</div>
+
+<script>
+  // 三栏拖拽调节(带最小/最大值约束)
+  const limits = {
+    "sidebar": { min: 180, max: 320 },
+    "agent-panel": { min: 280, max: 480 }
+  };
+  document.querySelectorAll(".resizer").forEach(resizer => {
+    resizer.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      const target = resizer.dataset.target;
+      const panel = document.getElementById(target);
+      const lim = limits[target];
+      resizer.classList.add("dragging");
+      const startX = e.clientX;
+      const startW = panel.offsetWidth;
+      // 右栏往左拖增大,左栏往右拖增大
+      const dir = target === "agent-panel" ? -1 : 1;
+      const onMove = (ev) => {
+        let w = startW + (ev.clientX - startX) * dir;
+        w = Math.max(lim.min, Math.min(lim.max, w));
+        panel.style.width = w + "px";
+      };
+      const onUp = () => {
+        resizer.classList.remove("dragging");
+        document.removeEventListener("mousemove", onMove);
+        document.removeEventListener("mouseup", onUp);
+      };
+      document.addEventListener("mousemove", onMove);
+      document.addEventListener("mouseup", onUp);
+    });
+  });
+
+  // 右栏 Tab 切换
+  document.querySelectorAll(".panel-tab").forEach(tab => {
+    tab.addEventListener("click", () => {
+      document.querySelectorAll(".panel-tab").forEach(t => t.classList.remove("active"));
+      tab.classList.add("active");
+      // 原型演示:点击非默认 tab 提示(实际实现会切换内容)
+      if (!tab.classList.contains("active") || tab.textContent.includes("推理轨迹")) {
+        // 实际实现切换 panel-body 内容
+      }
+    });
+  });
+</script>
+</body>
+</html>

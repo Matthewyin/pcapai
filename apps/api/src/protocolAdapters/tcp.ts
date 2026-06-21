@@ -1,4 +1,7 @@
 import type { ProtocolAdapter, ProtocolAdapterContext, ProtocolPairGroup, ProtocolPacket } from "./types.js";
+import type { Conversation } from "../../../../packages/shared/src/index.js";
+import { listTcpConversationsWithMcp } from "../mcp/tsharkQueryClient.js";
+import { classifyConversationHealthFromSummary, type ConversationHealth } from "../services/conversationHealth.js";
 
 function shouldListResetSessionPairs(question: string) {
   return /(?:RST|reset|Reset|复位|重置)/i.test(question) && /(?:session|pair|会话|通信对|通讯对|事件|列表|查询|包|异常|个数|数量|统计)/i.test(question);
@@ -23,7 +26,14 @@ function shouldListOneWayPairs(question: string) {
 function shouldListTcpIssues(question: string) {
   const isOtherProtocol = /(?:dns|解析|域名|icmp|unreachable|不可达|ttl|跳数|tls|ssl|sni|证书|alert|握手|http|状态码|udp)/i.test(question);
   if (isOtherProtocol) return false;
-  return /(?:tcp|传输层|连接|异常|问题|故障|session|会话|通信)/i.test(question) && !shouldListResetSessionPairs(question) && !shouldListRetransmissionSessionPairs(question) && !shouldListZeroWindowSessionPairs(question) && !shouldListSynNoSynAckPairs(question) && !shouldListOneWayPairs(question);
+  return /(?:tcp|传输层|连接|异常|问题|故障|session|会话|通信)/i.test(question) && !shouldListResetSessionPairs(question) && !shouldListRetransmissionSessionPairs(question) && !shouldListZeroWindowSessionPairs(question) && !shouldListSynNoSynAckPairs(question) && !shouldListOneWayPairs(question) && !shouldListConnectionHealthMatrix(question);
+}
+
+function shouldListConnectionHealthMatrix(question: string) {
+  // 匹配"全景/全部连接/所有连接/正常/连接清单/健康状况"等，需同时含连接类词
+  const isConnectionQuery = /(?:tcp|连接|session|会话|通信|connection)/i.test(question);
+  if (!isConnectionQuery) return false;
+  return /(?:全景|全貌|全部连接|所有连接|每个连接|每条连接|正常|连接清单|健康状况|健康|health|matrix|总览.*连接|连接.*总览|正常.*异常|异常.*正常)/i.test(question);
 }
 
 async function resetSessionPairsAnswer(ctx: ProtocolAdapterContext, graph: Parameters<ProtocolAdapter["run"]>[0], question: string) {
@@ -268,6 +278,196 @@ async function tcpIssuesOverviewAnswer(ctx: ProtocolAdapterContext, graph: Param
   });
 }
 
+// TCP 连接健康全景：全量枚举会话，逐条标注正常/重传/RST/握手未建立/零窗口/单向。
+// 与 tcp_issues_overview（只看 RST/重传/零窗口 3 类、不标正常）互补，给出完整连接清单。
+// 全量枚举用 limit=5000 保护上限，避免极端 pcap 撑爆内存；truncated 时声明覆盖范围。
+const HEALTH_MATRIX_PACKET_LIMIT = 5000;
+const HEALTH_MATRIX_RETRANSMISSION_BURST = 3; // 与 config diagnosis.retransmissionBurstThreshold 一致
+
+// 单条会话健康分类：委托给 classifyConversationHealthFromSummary（基于 MCP 方向级摘要字段），
+// 与 query-run 深诊断的包级 classifyConversationHealth 同口径，保证两处结论一致。
+function classifyConversationBySummary(conv: Conversation): ConversationHealth {
+  return classifyConversationHealthFromSummary(conv, { retransmissionBurst: HEALTH_MATRIX_RETRANSMISSION_BURST });
+}
+
+async function connectionHealthMatrixAnswer(ctx: ProtocolAdapterContext, graph: Parameters<ProtocolAdapter["run"]>[0], question: string) {
+  const captures = ctx.captureQueryInputs(graph);
+  if (!captures.length) return ctx.noCaptureAnswer();
+  const query = await ctx.displayFilterFromQuestion(graph, question);
+  const result = await listTcpConversationsWithMcp({ captures, displayFilter: query.displayFilter, limit: HEALTH_MATRIX_PACKET_LIMIT });
+  const conversations = result.conversations;
+  const queryRunId = `tcp-health-${Date.now()}`;
+  const now = Date.now();
+
+  if (!conversations.length) {
+    return ctx.protocolQueryAnswer({
+      graph,
+      queryRunId,
+      queryInput: query.input,
+      displayFilter: query.displayFilter,
+      protocol: "tcp",
+      title: "TCP 连接健康全景",
+      packets: [],
+      noResult: "当前查询范围内未发现 TCP 连接。",
+      thoughts: ["识别为 TCP 连接健康全景查询。", `构造 display filter：${query.displayFilter}`, "全量枚举 TCP 会话，未匹配到任何连接。"],
+      evidenceCards: [],
+      protocolCorrelations: [],
+      checks: [],
+      suggestedActions: ["调整时间范围或 IP/端口过滤条件后重试。"],
+      handoffAgent: "HypothesisAgent"
+    });
+  }
+
+  // 逐条分类
+  const classified = conversations.map((conv) => ({ conv, health: classifyConversationBySummary(conv) }));
+  // 三态划分：摘要级判定已基于 MCP 方向级字段，能精确标 problem/warn，但握手 none（抓包晚于建连）
+  // 和流量方向无包等场景仍为 unknown，需单独成桶避免误并入 normal。
+  // - abnormal：有 problem/warn 项（握手未建立/RST/重传/零窗口/单向等确定性异常）
+  // - undecided：无确定性异常，但存在 unknown 维度（握手起点或方向无法判定）
+  // - normal：所有维度都是 ok（不含 unknown）
+  const DIMENSIONS = (h: ReturnType<typeof classifyConversationBySummary>) =>
+    [h.handshake, h.rst, h.trafficDirection, h.retransmission, h.zeroWindow] as const;
+  const abnormalConnections = classified.filter((item) => item.health.issues.length > 0);
+  const undecidedConnections = classified.filter((item) => item.health.issues.length === 0 && DIMENSIONS(item.health).some((s) => s === "unknown"));
+  const normalConnections = classified.filter((item) => item.health.issues.length === 0 && !DIMENSIONS(item.health).some((s) => s === "unknown"));
+
+  // 按异常类型统计。握手/流量方向现在基于 MCP 方向级字段（handshakePhase/forward-reversePacketCount），
+  // 能精确标 problem，与包级 classifyConversationHealth 同口径。
+  const handshakeProblems = classified.filter((item) => item.health.handshake === "problem");
+  const handshakeWarn = classified.filter((item) => item.health.handshake === "warn");
+  const handshakeUnknown = classified.filter((item) => item.health.handshake === "unknown");
+  const rstProblems = classified.filter((item) => item.health.rst === "problem");
+  const retransProblems = classified.filter((item) => item.health.retransmission === "problem");
+  const zeroWinProblems = classified.filter((item) => item.health.zeroWindow === "problem");
+  const oneWayProblems = classified.filter((item) => item.health.trafficDirection === "problem");
+  const directionUnknown = classified.filter((item) => item.health.trafficDirection === "unknown");
+
+  const total = conversations.length;
+  const normalCount = normalConnections.length;
+  const abnormalCount = abnormalConnections.length;
+  const undecidedCount = undecidedConnections.length;
+
+  // 证据卡：异常连接逐条（上限 20），正常连接 1 张汇总卡
+  const evidenceCards = [];
+  abnormalConnections.slice(0, 20).forEach((item, index) => {
+    evidenceCards.push({
+      cardId: `tcp-health-${now}-abnormal-${index + 1}`,
+      kind: "conversation" as const,
+      title: `${index + 1}. ${item.conv.srcIp}:${item.conv.srcPort} -> ${item.conv.dstIp}:${item.conv.dstPort}（${item.health.issues.join("、")}）`,
+      summary: `${item.health.issues.join("、")}，${item.conv.packetCount} 包，时间 ${ctx.formatBeijingTime(item.conv.startTime)} - ${ctx.formatBeijingTime(item.conv.endTime)}。`,
+      pcapFilename: item.conv.pcapFilename,
+      displayFilter: item.conv.displayFilter,
+      actions: ["open_wireshark" as const, "copy_filter" as const]
+    });
+  });
+  if (normalCount) {
+    evidenceCards.push({
+      cardId: `tcp-health-${now}-normal-summary`,
+      kind: "conversation" as const,
+      title: `正常连接（${normalCount} 条）`,
+      summary: `${normalCount} 条连接未检测到异常。点击可查看代表性正常连接的 display filter。`,
+      displayFilter: normalConnections[0]?.conv.displayFilter,
+      actions: ["copy_filter" as const]
+    });
+  }
+  if (undecidedCount) {
+    evidenceCards.push({
+      cardId: `tcp-health-${now}-undecided-summary`,
+      kind: "conversation" as const,
+      title: `待确认连接（${undecidedCount} 条）`,
+      summary: `${undecidedCount} 条连接未检出确定性异常，但握手起点或流量方向在摘要层无法判定（可能抓包晚于建连）。点击可查看代表性连接的 display filter。`,
+      displayFilter: undecidedConnections[0]?.conv.displayFilter,
+      actions: ["copy_filter" as const]
+    });
+  }
+
+  // 全局 checks：每维度标注正常/异常条数。握手与流量方向在摘要层存在 unknown，需三态表达。
+  const checks: Array<{ key: "handshake" | "rst" | "retransmission" | "zero_window" | "traffic_direction"; label: string; status: "ok" | "warn" | "problem" | "unknown"; summary: string; packetIds: string[]; nextSteps: string[] }> = [
+    {
+      key: "handshake",
+      label: "握手完整性",
+      status: handshakeProblems.length ? "problem" : handshakeWarn.length ? "warn" : handshakeUnknown.length ? "unknown" : "ok",
+      summary: handshakeProblems.length
+        ? `${handshakeProblems.length} 条连接握手未建立（SYN 无 SYN-ACK）`
+        : handshakeWarn.length
+          ? `${handshakeWarn.length} 条连接握手不完整（SYN+SYN-ACK 但样本内无第三次 ACK）`
+          : handshakeUnknown.length
+            ? `${handshakeUnknown.length}/${total} 条连接握手状态无法判定（未观察到 SYN 起点，可能抓包晚于建连）`
+            : `${total} 条连接握手均完整`,
+      packetIds: [],
+      nextSteps: handshakeProblems.length ? ['用 "查看 SYN 无 SYN-ACK 通信对" 查看握手异常详情。'] : []
+    },
+    {
+      key: "rst",
+      label: "TCP RST",
+      status: rstProblems.length ? "problem" : "ok",
+      summary: rstProblems.length ? `${rstProblems.length} 条连接含 RST` : `${total} 条连接无 RST`,
+      packetIds: [],
+      nextSteps: rstProblems.length ? ['用 "查看 RST 通信对" 查看 RST 详情。'] : []
+    },
+    {
+      key: "retransmission",
+      label: "TCP 重传",
+      status: retransProblems.length ? "problem" : "ok",
+      summary: retransProblems.length ? `${retransProblems.length} 条连接重传突发（≥${HEALTH_MATRIX_RETRANSMISSION_BURST}）` : `${total} 条连接无重传突发`,
+      packetIds: [],
+      nextSteps: retransProblems.length ? ['用 "查看重传通信对" 查看重传详情。'] : []
+    },
+    {
+      key: "zero_window",
+      label: "Zero Window",
+      status: zeroWinProblems.length ? "problem" : "ok",
+      summary: zeroWinProblems.length ? `${zeroWinProblems.length} 条连接含 Zero Window` : `${total} 条连接无 Zero Window`,
+      packetIds: [],
+      nextSteps: zeroWinProblems.length ? ['用 "查看 Zero Window 通信对" 查看详情。'] : []
+    },
+    {
+      key: "traffic_direction",
+      label: "流量方向",
+      status: oneWayProblems.length ? "problem" : directionUnknown.length ? "unknown" : "ok",
+      summary: oneWayProblems.length
+        ? `${oneWayProblems.length} 条连接单向（仅一个方向有包）`
+        : directionUnknown.length
+          ? `${directionUnknown.length}/${total} 条连接方向无法判定（forward/reverse 均无包）`
+          : `${total} 条连接均双向`,
+      packetIds: [],
+      nextSteps: oneWayProblems.length ? ['用 "查看单向通信对" 确认单向详情。'] : []
+    }
+  ];
+
+  const coverageNote = result.truncated
+    ? `注意：基于采样 ${result.packetCount} 包（已达上限 ${HEALTH_MATRIX_PACKET_LIMIT}，非全量），实际连接数可能更多。`
+    : "";
+
+  return ctx.protocolQueryAnswer({
+    graph,
+    queryRunId,
+    queryInput: query.input,
+    displayFilter: query.displayFilter,
+    protocol: "tcp",
+    title: `TCP 连接健康全景：共 ${total} 条，正常 ${normalCount} 条，异常 ${abnormalCount} 条${undecidedCount ? `，待确认 ${undecidedCount} 条` : ""}`,
+    packets: [],
+    noResult: "当前查询范围内未发现 TCP 连接。",
+    thoughts: [
+      "识别为 TCP 连接健康全景查询。",
+      `构造 display filter：${query.displayFilter}`,
+      `全量枚举 TCP 会话（limit ${HEALTH_MATRIX_PACKET_LIMIT}），共 ${total} 条。`,
+      `逐条判定：正常 ${normalCount} 条，异常 ${abnormalCount} 条${undecidedCount ? `，待确认 ${undecidedCount} 条（握手起点或方向在摘要层无法判定）` : ""}。`,
+      ...(coverageNote ? [coverageNote] : [])
+    ],
+    evidenceCards,
+    protocolCorrelations: [],
+    checks,
+    suggestedActions: [
+      coverageNote,
+      ...(abnormalCount ? ["点击异常连接证据卡片在 Wireshark 中查看具体 session。"] : []),
+      ...(undecidedCount ? [`${undecidedCount} 条连接握手起点或方向待确认，建议对代表性连接执行 query-run 深诊断。`] : []),
+      ...(normalCount ? [`正常连接 ${normalCount} 条，可用 display filter 进一步筛选。`] : [])
+    ].filter(Boolean),
+    handoffAgent: "HypothesisAgent"
+  });
+}
+
 export function createTcpAdapters(ctx: ProtocolAdapterContext): ProtocolAdapter[] {
   return [
     { id: "tcp_rst_pairs", protocol: "tcp", status: "deterministic_rst_pairs", errorPrefix: "RST 通信对查询失败", match: shouldListResetSessionPairs, run: (graph, question) => resetSessionPairsAnswer(ctx, graph, question) },
@@ -275,6 +475,7 @@ export function createTcpAdapters(ctx: ProtocolAdapterContext): ProtocolAdapter[
     { id: "tcp_zero_window_pairs", protocol: "tcp", status: "deterministic_zero_window_pairs", errorPrefix: "Zero Window 通信对查询失败", match: shouldListZeroWindowSessionPairs, run: (graph, question) => zeroWindowSessionPairsAnswer(ctx, graph, question) },
     { id: "tcp_syn_no_synack_pairs", protocol: "tcp", status: "deterministic_syn_no_synack_pairs", errorPrefix: "SYN 无 SYN-ACK 查询失败", match: shouldListSynNoSynAckPairs, run: (graph, question) => synNoSynAckSessionPairsAnswer(ctx, graph, question) },
     { id: "tcp_one_way_pairs", protocol: "tcp", status: "deterministic_one_way_pairs", errorPrefix: "单向通信对查询失败", match: shouldListOneWayPairs, run: (graph, question) => oneWaySessionPairsAnswer(ctx, graph, question) },
-    { id: "tcp_issues_overview", protocol: "tcp", status: "deterministic_tcp_overview", errorPrefix: "TCP 异常总览查询失败", match: shouldListTcpIssues, run: (graph, question) => tcpIssuesOverviewAnswer(ctx, graph, question) }
+    { id: "tcp_issues_overview", protocol: "tcp", status: "deterministic_tcp_overview", errorPrefix: "TCP 异常总览查询失败", match: shouldListTcpIssues, run: (graph, question) => tcpIssuesOverviewAnswer(ctx, graph, question) },
+    { id: "tcp_connection_health_matrix", protocol: "tcp", status: "deterministic_connection_health_matrix", errorPrefix: "TCP 连接健康全景查询失败", match: shouldListConnectionHealthMatrix, run: (graph, question) => connectionHealthMatrixAnswer(ctx, graph, question) }
   ];
 }

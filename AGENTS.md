@@ -4,7 +4,7 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 
 ## Project Overview
 
-pcapAI is an Agent SDK-first packet troubleshooting chat workbench. Its primary unit is a **QueryRun** inside a chat session: uploaded pcap + user question -> AgentRuntimeService -> chain planner -> AgentToolRegistry / pcapai_ tools -> QueryRun / evidence cards / checks -> Wireshark opener. A Chain Planner classifies questions into single-step or multi-step plans (2-5 steps). The shared AgentToolRegistry is used by both planner execution and OpenAI Agents SDK function tools. Deterministic protocol adapters handle structured queries (TCP/DNS/TLS/HTTP/ICMP/UDP) behind those tools, while a leader agent with 5 subagents handles open-ended analysis. Protocol adapter routing follows a three-tier fallback: hardcoded regex → learned patterns → agent with tshark-query MCP. The chain execution engine (`executeChain`) runs multi-step plans with parameter binding between steps via `paramsFrom` JSON path expressions and graph reload between steps. UI and API text are in Chinese.
+pcapAI is an Agent SDK-first packet troubleshooting chat workbench. Its primary unit is a **QueryRun** inside a chat session: uploaded pcap + user question → **Agent (first entry)** → QueryRun / evidence cards / root causes / Wireshark opener. The Agent is the sole brain (no chain planner / learned pattern interception in front of it). It operates over a **three-layer knowledge system**: Skills (methodology layer, reusable troubleshooting SOPs in `data/skills/*.md`) → Field Notes (case layer, symptom→cause→RFC in `data/field-notes/`) → packet facts (data layer via tshark-query MCP). The leader agent with 3 handoff subagents (Hypothesis/Path/Protocol) handles open-ended analysis. RFC is the anti-hallucination boundary: root cause conclusions must either reference an RFC section (verified via `get_rfc_section`) or be explicitly marked as speculation (`rfcVerified: false`). Cross-turn context is managed by the SDK `Session` interface (SQLite-backed, `apps/api/src/agents/sqliteSession.ts`) with application-layer compaction. Deterministic protocol adapters (TCP/DNS/TLS/HTTP/ICMP/UDP) and the chain planner are retained as Agent tools / expert direct channels, but no longer intercept the user query. UI and API text are in Chinese.
 
 ## Commands
 
@@ -52,15 +52,16 @@ All runtime defaults live here: API host/port (default `30022`), CORS origins, M
   - `GET /api/cases/:caseId/tcp-streams/:streamIndex/content?format=ascii&nodeId=xxx` — gets TCP stream content
   - `POST /api/cases/:caseId/evidence/open` — opens pcap evidence in local Wireshark via evidence-opener MCP
   - `GET /api/cases/:caseId/report` — Markdown report from case graph via `reportBuilder.ts`
-  - `POST /api/cases/:caseId/agent`, `POST /api/cases/:caseId/agent/stream` — SSE streaming agent answers with chain execution
+  - `POST /api/cases/:caseId/agent`, `POST /api/cases/:caseId/agent/stream` — SSE streaming agent answers with chain execution. Both agent endpoints are wrapped in a per-case mutex (`withCaseRunLock`) that serializes concurrent agent runs for the same case, preventing read-modify-write races on the in-memory graph cache (QueryRun/insights clobbering).
+- **`src/http/composeServices.ts`** — service composition layer extracted from routes.ts. Wires 13 services + 2 answer builders + protocol adapters into a single `composeServices(deps)` factory receiving `loadGraph`/`cacheCase`/`agentRuntimeStatus` as shared state. Also owns `formatBeijingTime`, `buildAgentQuestion`, `syncMemoryFromQueryRuns`, and `updateMemory`. routes.ts stays a thin HTTP handler → service method mapping.
 - **`src/http/caseStore.ts`** — case persistence: `data/cases/:caseId/case.json`, analysis run snapshots in `analysis-runs/`, captures in `captures/`
 - **`src/http/capturePreprocess.ts`** — strips packet payload via `editcap -s` before parsing
 - **`src/http/reportBuilder.ts`** — generates structured Markdown report from case graph
 - **`src/http/llmSettings.ts`** — LLM profile management in `.env` file (profiles stored as `PCAPAI_LLM_PROFILE_*` env vars)
 - **`src/protocolAdapters/`** — 6 deterministic protocol-specific query subsystems used behind AgentToolRegistry / `pcapai_` tools:
-  - `types.ts` — `ProtocolAdapter` interface and `runProtocolAdapter()` dispatcher; three-tier routing: hardcoded regex match → learned patterns from `data/learned_patterns.json` → agent fallback
+  - `types.ts` — `ProtocolAdapter` interface and `runProtocolAdapter()` dispatcher; tiered routing: structured direct (`params.adapterId` / learned bypass) → hardcoded regex match → learned patterns from `data/learned_patterns.json` → agent fallback
   - `builders.ts` — shared logic: packet pair grouping, evidence card creation, `QueryRun` construction, L7-to-TCP protocol correlations (DNS→TCP, TLS SNI→TCP, HTTP Host→TCP, ICMP→TCP) and HTTP cross-connection correlation (`http_to_http` for L7 proxy/SSL offload scenarios)
-  - `tcp.ts` — RST session pairs, retransmission pairs, zero-window pairs, SYN-no-SYN/ACK pairs, one-way traffic pairs, TCP issues overview
+  - `tcp.ts` — RST session pairs, retransmission pairs, zero-window pairs, SYN-no-SYN/ACK pairs, one-way traffic pairs, TCP issues overview (RST/retransmission/zero-window), TCP connection health matrix (full conversation enumeration with per-connection six-dimension health classification: normal/handshake-failed/RST/retransmission-burst/zero-window/one-way)
   - `dns.ts` — DNS failure/unresponsive transactions with rcode grouping and multi-check output
   - `tls.ts` — TLS handshake events (ClientHello, ServerHello, alerts) with handshake completeness checks and multi-check output
   - `http.ts` — HTTP transactions with status code filtering (4xx/5xx), request/response matching, multi-check output, and cross-connection correlation via `buildHttpCrossConnectionCorrelation()`
@@ -68,6 +69,7 @@ All runtime defaults live here: API host/port (default `30022`), CORS origins, M
   - `udp.ts` — UDP flow aggregation by endpoint pair
 - **`src/services/insightEngine.ts`** — 29 deterministic analyzers run lazily through `loadGraphWithInsights()` when current graph has packet samples and no existing insights: TCP lifecycle/ACK gap/timing/window trend/RST direction/handshake retry/delayed ACK/connection flood/segment anomaly/keepalive/throughput/TCP options, ICMP echo pair, HTTP status chain/header anomaly/timing/advanced, TLS handshake/advanced, DNS anomaly/advanced, cross-protocol chain, UDP, ICMP advanced, QUIC, NTP, SSH, L7 proxy detection (Via/XFF/SSL offload/TCP connection split), NAT heuristic (multi-target/ISN jump/orphan SYN). No threshold filtering — all detected patterns are reported.
 - **`src/services/tcpPreprocessor.ts`** — TCP anomaly preprocessor that replaces full-packet fetching. Extracts only anomalous TCP packets (RST, retransmission, zero window, duplicate ACK, lost segment, failed handshakes) via targeted tshark queries. Uses mapping hints to focus on relevant flows when available. This keeps the analysis dataset small (hundreds vs tens of thousands of packets) so the insight engine and LLM agent don't exceed context limits.
+- **`src/services/conversationHealth.ts`** — pure `classifyConversationHealth` function for single-conversation six-dimension TCP health classification (handshake/rst/trafficDirection/retransmission/zeroWindow/closeState). Shared between `buildQueryDiagnosis` (query-run deep diagnosis) and the `tcp_connection_health_matrix` adapter so both use the same verdict criteria.
 - **`src/services/patternLearner.ts`** — self-improvement module for protocol adapter routing:
   - `loadLearnedPatterns()` — loads learned regex→adapterId pairs from `data/learned_patterns.json`
   - `learnFromAgentRun()` — after agent handles a fallback query, uses LLM to generate a regex pattern and target adapterId; validates and persists to JSON
@@ -75,12 +77,12 @@ All runtime defaults live here: API host/port (default `30022`), CORS origins, M
 - **`src/services/agentToolRegistryService.ts`** — shared deterministic tool registry for planner execution and OpenAI Agents SDK function tools. Tool names use the `pcapai_` prefix and every registry execution writes `ToolRun(kind=tool)`.
 - **`src/services/protocolEventQueryService.ts`** — protocol adapter orchestration, including adapter disambiguation, learned pattern fallback, agent fallback, and multi-protocol answer merging.
 - **`src/services/queryRunApiService.ts`** — QueryRun HTTP orchestration for create/get/activate/select/packet list/open Wireshark, keeping `routes.ts` focused on HTTP status and JSON conversion.
-- **`src/mcp/tsharkQueryClient.ts`** — stdio MCP client for tshark-query; wraps 18 tool calls (including `list_tcp_streams`, `follow_tcp_stream`, `get_expert_info`)
+- **`src/mcp/tsharkQueryClient.ts`** — stdio MCP client for tshark-query; wraps 18 tool calls (including `list_tcp_conversations`, `list_tcp_streams`, `follow_tcp_stream`, `get_expert_info`). `listTcpConversationsWithMcp` accepts an optional `limit` (default 100 from MCP; the health matrix adapter passes 5000 for full enumeration).
 - **`src/mcp/evidenceOpenerClient.ts`** — stdio MCP client for evidence-opener
 - **`src/agents/runtime.ts`** — OpenAI Agents SDK runtime with three phases:
   1. **Chain planner** (`runChainPlanner`) — plans single-step or multi-step analysis chains; outputs `AnalysisChainPlan` with ordered steps, each referencing one of 12 intents. Requires an LLM key (requests fail fast with `llm_key_required` otherwise).
   2. **Deterministic tools** — AgentToolRegistry executes structured capabilities without asking the LLM to infer packet facts. The chain execution engine (`executeChain` in `plannerService.ts`) orchestrates multi-step plans with parameter binding via `paramsFrom` JSON path expressions and graph reload between steps.
-  3. **Agent conversation** (`runPcapTroubleshootingAgent`) — uses in-process case graph tools (`src/agents/caseGraphTools.ts`, reads live graph from caseStore; memory/topology writes persist), a persistent `tshark-query MCP` singleton (`src/mcp/tsharkQueryMcpRuntime.ts`), and injects `pcapai_` local tools. Leader agent with 3 handoff subagents (Hypothesis, Path, Protocol); the leader handles interview follow-ups and report formatting itself. Protocol agent can call tshark-query tools directly for packet data. Returns `AgentAnswerWithToolCalls` including extracted tool call names for pattern learning. Uses `OpenAIProvider` with configurable base URL/model. `maxTurns: 16`.
+  3. **Agent conversation** (`runPcapTroubleshootingAgent`) — uses in-process case graph tools (`src/agents/caseGraphTools.ts`, reads live graph from caseStore; memory/topology writes persist), a persistent `tshark-query MCP` singleton (`src/mcp/tsharkQueryMcpRuntime.ts` with connect retry), and injects `pcapai_` local tools. Leader agent with 3 handoff subagents (Hypothesis, Path, Protocol); the leader handles interview follow-ups and report formatting itself. Protocol agent can call tshark-query tools directly for packet data. Returns `AgentAnswerWithToolCalls` including extracted tool call names for pattern learning. Uses `OpenAIProvider` with configurable base URL/model. `maxTurns` is config-driven (default 24 via `config/defaults.json` `llm.maxTurns`). On turn-budget exhaustion, a no-tool `AnswerCloserAgent` synthesizes a final answer from collected tool results (with a try/catch fallback to plain text if the closer itself fails).
 - **`src/services/plannerService.ts`** — planner service factory: `planChain` calls the chain planner, `executeChainStep` delegates a single step intent to AgentToolRegistry via `executeToolIntent`, `executeChain` runs multi-step plans with SSE callbacks, graph reload, and parameter binding. Falls back to local pattern matching when no LLM key.
 
 ### `apps/web` — React workbench (`@pcapai/web`)
@@ -123,10 +125,11 @@ Two stdio-based MCP servers using `@modelcontextprotocol/sdk`:
 
 ## Protocol Adapter Self-Improvement
 
-Protocol adapter routing follows a three-tier fallback:
-1. **Hardcoded regex** — each adapter has built-in match functions
-2. **Learned patterns** — `data/learned_patterns.json` stores `{regex, adapterId}` pairs generated by LLM after agent fallback
-3. **Agent fallback** — leader agent with tshark-query MCP handles the query; after success, `patternLearner` uses LLM to generate a new regex pattern
+Protocol adapter routing follows a tiered fallback:
+1. **Structured direct / learned bypass** — `params.adapterId` routes directly to the target adapter, skipping regex inference. High-confidence learned patterns (`hitCount >= learnedBypassMinHits`) short-circuit the Chain Planner entirely via `tryLearnedBypass`, passing `{ adapterId }` to `executeChainStep`.
+2. **Hardcoded regex** — each adapter has built-in match functions
+3. **Learned patterns** — `data/learned_patterns.json` stores `{regex, adapterId}` pairs generated by LLM after agent fallback
+4. **Agent fallback** — leader agent with tshark-query MCP handles the query; after success, `patternLearner` uses LLM to generate a new regex pattern
 
 The learning module (`src/services/patternLearner.ts`) has no hardcoded tool→adapter mapping. The LLM determines both the regex pattern and the target adapterId from the question context and available adapter list.
 
@@ -138,7 +141,7 @@ The learning module (`src/services/patternLearner.ts`) has no hardcoded tool→a
 - **No hardcoded business data or environment values in code** — defaults live in `config/defaults.json`, sample data lives in `data/fixtures`.
 - **Confidence levels**: `certain`, `high`, `low`, `needs_context`. No evidence = no confident conclusion. Missing observations must state coverage scope.
 - The chain planner classifies into single-step or multi-step plans (2-5 steps). Each step uses one of 12 intents. Steps can bind parameters from previous step results via `paramsFrom` JSON path expressions. No hard-coded scenarios — plans are dynamically generated from the case graph.
-- The leader agent hands off to exactly one subagent per question. `maxTurns: 16`.
+- The leader agent hands off to exactly one subagent per question. `maxTurns` is config-driven (default 24).
 - MCP servers communicate over stdio. API-to-MCP calls go through client wrappers under `apps/api/src/mcp`.
 - Case data persists as JSON files under `data/cases/:caseId/`. In-memory `Map<string, CaseGraph>` caches recently loaded graphs.
 - LLM profiles are stored as `PCAPAI_LLM_PROFILE_*` entries in `.env`. The active profile is tracked via `PCAPAI_LLM_ACTIVE_PROFILE`.

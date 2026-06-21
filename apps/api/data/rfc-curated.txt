@@ -1,0 +1,156 @@
+# pcapAI 精选 RFC 列表（双层库的精简层，~200 篇高频协议排障必备）
+# 格式：每行一个 RFC 编号（# 开头为注释）
+# 覆盖：TCP/UDP/IP/ICMP 核心、TLS/SSL、HTTP/1-2-3、DNS、QUIC、WebSocket、代理/负载均衡相关
+# 用途：Mac app 内置精简库（~30-50MB），完整 786MB 库通过 GitHub Release 静默下载
+
+# ===== TCP/IP 核心协议族 =====
+791     # IP v4
+792     # ICMP
+793     # TCP（被 9293 取代但仍是基础参考）
+9293    # TCP 修订版
+950     # ICMP 子网掩码
+1018    # ICMP 不可达细化
+1122    # TCP/IP 主机要求（通信层）
+1123    # TCP/IP 主机要求（应用层）
+1191    # Path MTU Discovery
+1812    # IPv4 路由器要求
+1981    # IPv6 Path MTU Discovery
+2460    # IPv6
+4291    # IPv6 编址架构
+4443    # ICMPv6
+4821    # Packetization Layer Path MTU Discovery
+8200    # IPv6（修订）
+8484    # IPv6 编址（修订）
+
+# ===== TCP 行为与拥塞控制 =====
+896     # Nagle 算法（禁用建议参考）
+1122    # TCP 实现要求
+1323    # TCP 扩展选项（Timestamps/SACK/WSCALE）
+2018    # TCP SACK 选项
+2581    # TCP 拥塞控制（被 5681 更新）
+2883    # TCP SACK 扩展（重复 SACK）
+2988    # TCP RTO 计算（V Retransmission Timer）
+3168    # ECN（显式拥塞通知）
+3390    # TCP 初始窗口
+3517    # TCP SACK-based Loss Recovery
+5681    # TCP 拥塞控制（修订，取代 2581）
+5682    # TCP RTO 计算（修订，取代 2988）
+6298    # TCP RTO 计算（标准，取代 2988/5682）
+6582    # TCP NewReno 修订
+6675    # TCP SACK-based Loss Recovery（修订）
+6928    # TCP Initial Window（10 segments）
+7323    # TCP Timestamps 修订
+7661    # TCP 减少伪重传
+8312    # CUBIC 拥塞控制
+9000    # TCP 拥塞控制（更新）
+
+# ===== UDP 与实时 =====
+768     # UDP
+8085    # UDP 使用指南
+8860    # QUIC 之上的 UDP
+
+# ===== TLS / SSL =====
+5246    # TLS 1.2
+8446    # TLS 1.3
+6066    # TLS 扩展（SNI）
+6961    # TLS OCSP Stapling 多证书
+7633    # TLS OCSP Stapling 扩展
+7627    # TLS Session Hash
+7841    # TLS 1.3 传输
+8446    # TLS 1.3（核心）
+9000    # TLS 1.3 修订
+8701    # TLS 应用层流量机密
+
+# ===== HTTP =====
+1945    # HTTP/1.0
+2068    # HTTP/1.1（被 7230 系列取代）
+2616    # HTTP/1.1（被 7230 系列取代）
+7230    # HTTP/1.1 消息语法（被 9110 取代）
+7231    # HTTP/1.1 语义（被 9110 取代）
+7232    # HTTP 条件请求
+7233    # HTTP 范围请求
+7234    # HTTP 缓存
+7235    # HTTP 认证
+7540    # HTTP/2
+7541    # HTTP 缓存头（被 9111 取代）
+8441    # HTTP/2 Bootstrap via WebSocket
+9110    # HTTP 语义
+9112    # HTTP/1.1（修订，取代 7230）
+9113    # HTTP/2（修订，取代 7540）
+9114    # HTTP 语义
+9204    # HTTP/3 QPACK
+9205    # HTTP 头部压缩
+9218    # HTTP 可扩展优先级
+9298    # HTTP CONNECT-UDP
+9303    # HTTP 状态码补充
+
+# ===== DNS =====
+1034    # DNS 概念（被 1065 系列更新）
+1035    # DNS 实现
+1123    # DNS 主机要求
+2181    # DNS 修订
+2308    # DNS 负缓存
+3596    # DNS 扩展（EDNS0）
+4033    # DNSSEC 安全扩展
+4034    # DNSSEC 记录类型
+4035    # DNSSEC 协议修改
+4592    # DNS 通配符
+5452    # DNS 权威服务器限制
+6724    # IPv6 DNS 发现
+6891    # EDNS0 修订
+7766    # TCP 上的 DNS
+7858    # DNS over TLS
+8482    # DNS 提供本地服务
+8499    # DNS 术语
+8877    # DNS QUIC
+9255    # DNS 安全考虑
+
+# ===== QUIC =====
+8999    # QUIC 版本独立属性
+9000    # QUIC v1 传输
+9001    # QUIC 之上的 TLS
+9002    # QUIC 丢检测与拥塞控制
+9221    # QUIC DATAGRAM
+9287    # QUIC v2
+
+# ===== WebSocket / 实时 =====
+6455    # WebSocket 协议
+7692    # WebSocket 压缩扩展
+8441    # HTTP/2 之上 WebSocket
+
+# ===== 代理 / 负载均衡 / 转发 =====
+7230    # HTTP 代理（消息语法）
+7235    # HTTP 代理认证
+7239    # Forwarded HTTP 头（X-Forwarded-For 替代）
+7838    # HTTP CONNECT-IP 扩展
+9298    # UDP 代理
+9110    # HTTP 代理语义
+
+# ===== NAT / 穿越 =====
+3022    # NAT-PT（已废弃但参考）
+5389    # STUN
+5766    # TURN
+8489    # ICE 修订
+8445    # ICE
+
+# ===== 其他排障高频 =====
+1858    # MD5（哈希，TLS 参考）
+3174    # AES（密码套件参考）
+4301    # IPSec 架构
+4302    # AH（IPSec）
+4303    # ESP（IPSec）
+4306    # IKEv2（被 7296 取代）
+7296    # IKEv2 修订
+5869    # IPv6 直连（NAT64）
+7915    # Stateless IP/ICMP Translation
+7685    # IPv6 配置
+4193    # IPv6 本地单播
+7216    # IPv6 隐私扩展
+4941    # IPv6 隐私扩展（修订）
+8981    # IPv6 SLAAC（修订）
+
+# ===== 实战高频补充 =====
+6824    # MPTCP
+8684    # MPTCP 修订
+8444    # MPTCP API
+8976    # MPTCP 路径管理

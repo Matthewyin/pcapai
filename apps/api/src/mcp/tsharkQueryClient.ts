@@ -174,10 +174,11 @@ export async function getCaptureTimeRangeWithMcp(input: { capture: CaptureQueryI
   return callTsharkQueryTool("get_capture_time_range", { captureJson: JSON.stringify(input.capture) }, CaptureTimeRangeResultSchema);
 }
 
-export async function listTcpConversationsWithMcp(input: { captures: CaptureQueryInput[]; displayFilter: string }) {
+export async function listTcpConversationsWithMcp(input: { captures: CaptureQueryInput[]; displayFilter: string; limit?: number }) {
   return callTsharkQueryTool("list_tcp_conversations", {
     capturesJson: JSON.stringify(input.captures),
-    displayFilter: input.displayFilter
+    displayFilter: input.displayFilter,
+    ...(input.limit ? { limit: input.limit } : {})
   }, ListConversationsResultSchema);
 }
 

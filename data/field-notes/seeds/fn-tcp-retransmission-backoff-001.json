@@ -1,0 +1,23 @@
+{
+  "id": "fn-tcp-retransmission-backoff-001",
+  "title": "TCP 重传呈指数退避模式（200/400/800ms）",
+  "summary": "TCP 重传间隔呈倍数增长（典型 200→400→800ms），是 RFC 6298 定义的标准退避行为，说明对端未 ACK 触发了 RTO 重传。",
+  "protocols": ["TCP"],
+  "symptoms": ["重传", "RTO 超时重传", "对端无响应"],
+  "packetFeatures": {
+    "observedFlags": ["SYN", "ACK", "PSH"],
+    "analysisFlags": ["retransmission"],
+    "protocols": ["TCP"]
+  },
+  "candidateCauses": [
+    {
+      "cause": "对端无响应触发 RTO 指数退避重传（RFC 6298）",
+      "rfcDocId": 6298,
+      "rfcSection": "2",
+      "likelihood": "high",
+      "howToVerify": "统计重传包时间间隔，验证是否呈 2 倍增长；检查对端是否回 ACK",
+      "skillIds": ["analyze-retransmission-pattern"]
+    }
+  ],
+  "source": "seed"
+}

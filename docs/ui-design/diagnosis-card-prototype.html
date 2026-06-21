@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>pcapAI 诊断卡片 UI 原型</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, "PingFang SC", sans-serif; background: #0d1117; color: #c9d1d9; padding: 24px; line-height: 1.6; }
+  .container { max-width: 820px; margin: 0 auto; }
+  h1 { font-size: 14px; color: #8b949e; margin-bottom: 16px; font-weight: normal; }
+
+  /* 用户消息 */
+  .user-msg { background: #1f2937; border-radius: 12px; padding: 12px 16px; margin-bottom: 20px; max-width: 70%; align-self: flex-end; }
+  .user-msg .label { font-size: 11px; color: #8b949e; margin-bottom: 4px; }
+
+  /* Agent 诊断容器 */
+  .diagnosis { background: #161b22; border: 1px solid #30363d; border-radius: 12px; overflow: hidden; }
+  .diagnosis-header { background: #1f2937; padding: 12px 16px; border-bottom: 1px solid #30363d; display: flex; align-items: center; gap: 8px; }
+  .diagnosis-header .avatar { width: 24px; height: 24px; background: #2f81f7; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 12px; }
+  .diagnosis-header .title { font-size: 14px; font-weight: 600; color: #e6edf3; }
+  .diagnosis-header .meta { margin-left: auto; font-size: 11px; color: #8b949e; }
+  .diagnosis-header .confidence { padding: 2px 8px; border-radius: 10px; font-size: 11px; }
+  .confidence-high { background: #1a4731; color: #56d364; }
+  .confidence-low { background: #4a3608; color: #d29922; }
+
+  /* 推理轨迹折叠区 */
+  .trace { border-bottom: 1px solid #30363d; }
+  .trace-summary { padding: 10px 16px; cursor: pointer; display: flex; align-items: center; gap: 8px; font-size: 12px; color: #8b949e; }
+  .trace-summary:hover { background: #1f2937; }
+  .trace-steps { padding: 8px 16px 12px; display: none; border-top: 1px solid #21262d; }
+  .trace.open .trace-steps { display: block; }
+  .trace-step { display: flex; gap: 8px; padding: 4px 0; font-size: 12px; align-items: baseline; }
+  .trace-step .icon { width: 16px; text-align: center; }
+  .trace-step .tool { color: #79c0ff; font-family: monospace; }
+  .trace-step .result { color: #8b949e; }
+  .trace-step .rfc { color: #56d364; }
+
+  /* 上下文记忆提示 */
+  .memory-hint { padding: 8px 16px; background: #161b22; border-bottom: 1px solid #30363d; font-size: 11px; color: #8b949e; display: flex; align-items: center; gap: 6px; }
+  .memory-hint .brain { color: #d29922; }
+
+  /* 实战库命中提示 */
+  .fieldnote-hit { margin: 12px 16px; padding: 10px 12px; background: #1a1f2e; border: 1px solid #2d4a8a; border-radius: 8px; font-size: 12px; }
+  .fieldnote-hit .badge { display: inline-block; background: #2d4a8a; color: #79c0ff; padding: 1px 6px; border-radius: 4px; font-size: 10px; margin-right: 6px; }
+  .fieldnote-hit .verified { color: #56d364; font-size: 11px; }
+  .fieldnote-hit .actions { margin-top: 6px; display: flex; gap: 8px; }
+
+  /* 正文(事实/模式) */
+  .diagnosis-body { padding: 16px; font-size: 13px; }
+  .diagnosis-body h4 { color: #e6edf3; margin: 12px 0 6px; font-size: 13px; }
+  .diagnosis-body h4:first-child { margin-top: 0; }
+  .diagnosis-body p { margin-bottom: 8px; }
+  .diagnosis-body code { background: #21262d; padding: 1px 5px; border-radius: 3px; font-size: 12px; color: #f0883e; }
+
+  /* 根因卡片(核心) */
+  .rootcauses { padding: 0 16px 16px; }
+  .rootcauses-title { font-size: 13px; color: #e6edf3; margin-bottom: 10px; font-weight: 600; border-top: 1px solid #30363d; padding-top: 14px; }
+  .rootcause-card { border-radius: 8px; padding: 12px 14px; margin-bottom: 8px; border-left: 3px solid; }
+  .rc-verified { background: #0d1f0d; border-color: #56d364; }
+  .rc-speculative { background: #1f1a0d; border-color: #d29922; }
+  .rc-header { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+  .rc-tag { font-size: 10px; padding: 1px 7px; border-radius: 4px; font-weight: 600; }
+  .rc-tag-verified { background: #1a4731; color: #56d364; }
+  .rc-tag-spec { background: #4a3608; color: #d29922; }
+  .rc-confidence { font-size: 11px; color: #8b949e; }
+  .rc-cause { font-size: 13px; color: #e6edf3; font-weight: 500; }
+  .rfc-chip { display: inline-flex; align-items: center; gap: 3px; background: #0c2d6b; color: #79c0ff; padding: 2px 8px; border-radius: 4px; font-size: 11px; cursor: pointer; margin-top: 4px; }
+  .rfc-chip:hover { background: #1152a8; }
+  .rc-evidence { margin-top: 6px; font-size: 11px; color: #8b949e; }
+  .rc-evidence a { color: #58a6ff; }
+  .skill-chip { display: inline-block; background: #3b2a4a; color: #d2a8ff; padding: 1px 7px; border-radius: 4px; font-size: 11px; margin-top: 4px; margin-right: 4px; }
+
+  /* 不确定性 */
+  .uncertainty { margin: 0 16px 16px; padding: 10px 12px; background: #1c1208; border: 1px solid #4a3608; border-radius: 8px; font-size: 12px; }
+  .uncertainty .title { color: #d29922; font-weight: 600; margin-bottom: 4px; }
+  .uncertainty ul { padding-left: 18px; color: #8b949e; }
+
+  /* 底部操作 */
+  .diagnosis-footer { padding: 10px 16px; border-top: 1px solid #30363d; display: flex; gap: 8px; flex-wrap: wrap; }
+  .footer-btn { font-size: 12px; padding: 4px 12px; border-radius: 6px; border: 1px solid #30363d; background: #21262d; color: #c9d1d9; cursor: pointer; }
+  .footer-btn:hover { border-color: #58a6ff; }
+  .footer-btn.primary { background: #1f6feb; border-color: #1f6feb; color: #fff; }
+  .feedback-row { margin-left: auto; display: flex; gap: 6px; }
+  .feedback-btn { font-size: 12px; padding: 4px 10px; border-radius: 6px; cursor: pointer; }
+  .feedback-yes { background: #1a4731; color: #56d364; border: none; }
+  .feedback-no { background: #4a1f1f; color: #f85149; border: none; }
+
+  /* 对比区 */
+  .compare { margin-top: 32px; }
+  .compare h2 { font-size: 13px; color: #8b949e; margin-bottom: 12px; }
+  .compare-label { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 4px; margin-bottom: 8px; }
+  .old { background: #4a1f1f; color: #f85149; }
+  .old-block { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 14px; font-size: 13px; color: #8b949e; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>pcapAI 诊断卡片 UI 原型 — P0 分层诊断展示（基于 GLM-5.2 真实输出）</h1>
+
+  <!-- 用户提问 -->
+  <div class="user-msg">
+    <div class="label">用户</div>
+    <div>这个抓包里为什么有这么多 TCP 重传？根因是什么？</div>
+  </div>
+
+  <!-- Agent 诊断卡片 -->
+  <div class="diagnosis">
+    <div class="diagnosis-header">
+      <div class="avatar">🤖</div>
+      <div class="title">Agent 诊断</div>
+      <div class="meta">GLM-5.2 · 27 步 · 42s</div>
+      <div class="confidence confidence-high">置信度: high</div>
+    </div>
+
+    <!-- 上下文记忆 -->
+    <div class="memory-hint">
+      <span class="brain">🧠</span> 上下文：基于前 1 轮对话（关于 4.24.11.248 的连接分析），已启用持久化记忆
+    </div>
+
+    <!-- 推理轨迹(默认折叠) -->
+    <div class="trace" onclick="this.classList.toggle('open')">
+      <div class="trace-summary">
+        <span>▶</span> <b>推理过程</b>（27 步工具调用，点击展开）
+        <span style="margin-left:auto; color:#56d364;">📖 RFC 回读 2 次</span>
+      </div>
+      <div class="trace-steps" onclick="event.stopPropagation()">
+        <div class="trace-step"><span class="icon">🔍</span><span class="tool">search_field_notes</span><span class="result">→ 命中：TCP 重传指数退避 (score=5)</span></div>
+        <div class="trace-step"><span class="icon">📋</span><span class="tool">get_skill</span><span class="result">→ analyze-retransmission-pattern</span></div>
+        <div class="trace-step"><span class="icon">🔧</span><span class="tool">list_tcp_retransmissions</span><span class="result">→ 234 条</span></div>
+        <div class="trace-step"><span class="icon">🔧</span><span class="tool">list_tcp_resets</span><span class="result">→ 8 条</span></div>
+        <div class="trace-step"><span class="icon">📖</span><span class="tool">get_rfc_section(6298, "2")</span><span class="result rfc">→ §5.4/§5.5 原文已回读</span></div>
+        <div class="trace-step"><span class="icon">📝</span><span class="tool">update_case_memory</span><span class="result">→ 沉淀发现</span></div>
+        <div class="trace-step" style="color:#8b949e; padding-left:24px;">... 还有 21 步，展开全部</div>
+      </div>
+    </div>
+
+    <!-- 实战库命中提示 -->
+    <div class="fieldnote-hit">
+      <span class="badge">实战库命中</span>
+      本次诊断参考了已知案例：<b>「TCP 重传呈指数退避模式（200/400/800ms）」</b>
+      <span class="verified">· ✓ 已被验证</span>
+      <div class="actions">
+        <button class="footer-btn" style="font-size:11px;padding:2px 8px;">查看案例详情</button>
+        <button class="footer-btn" style="font-size:11px;padding:2px 8px;">用到的技能: analyze-retransmission-pattern</button>
+      </div>
+    </div>
+
+    <!-- 事实/模式正文 -->
+    <div class="diagnosis-body">
+      <h4>📌 观察到的事实</h4>
+      <p>本抓包共 <code>62162</code> 个包，其中检测到 <code>234</code> 个 TCP 重传、<code>8</code> 个 RST、<code>11</code> 个零窗口。重传集中在连接 4.24.11.248:443 ↔ 客户端。</p>
+
+      <h4>📊 识别到的模式</h4>
+      <p>重传呈<b>指数退避</b>特征：首个重传约 200ms，随后 400ms、800ms、1600ms 倍增，符合 RFC 6298 定义的 RTO 退避行为，说明对端未 ACK 触发了超时重传（而非快速重传）。</p>
+    </div>
+
+    <!-- 根因卡片(核心,P6 防幻觉的可视化) -->
+    <div class="rootcauses">
+      <div class="rootcauses-title">🎯 根因结论</div>
+
+      <!-- 根因 A:RFC 验证 -->
+      <div class="rootcause-card rc-verified">
+        <div class="rc-header">
+          <span class="rc-tag rc-tag-verified">✓ RFC 验证</span>
+          <span class="rc-confidence">置信度 high</span>
+        </div>
+        <div class="rc-cause">后端节点无响应触发 RTO 指数退避重传</div>
+        <div class="rfc-chip">📖 RFC 6298 §5.4-5.6 <span style="opacity:0.7">· 点击查看原文</span></div>
+        <div class="skill-chip">🔧 analyze-retransmission-pattern</div>
+        <div class="rc-evidence">证据包：<a>#23501</a> <a>#24643</a> <a>#25522</a> <a>#26701</a> · <a>在 Wireshark 查看 →</a></div>
+      </div>
+
+      <!-- 根因 B:经验推测 -->
+      <div class="rootcause-card rc-speculative">
+        <div class="rc-header">
+          <span class="rc-tag rc-tag-spec">⚠ 经验推测</span>
+          <span class="rc-confidence">置信度 low · 无 RFC 依据</span>
+        </div>
+        <div class="rc-cause">F5 负载均衡器（SNAT IP 4.24.11.248）健康检查失效，持续向宕机节点分配连接放大了重传</div>
+        <div class="rc-evidence" style="color:#d29922;">此根因无 RFC 条文支撑，基于运维经验推断，建议结合 F5 配置进一步确认。</div>
+      </div>
+
+      <!-- 根因 C:经验推测 -->
+      <div class="rootcause-card rc-speculative">
+        <div class="rc-header">
+          <span class="rc-tag rc-tag-spec">⚠ 经验推测</span>
+          <span class="rc-confidence">置信度 low</span>
+        </div>
+        <div class="rc-cause">中间链路存在间歇性丢包（部分数据重传间隔短，呈快速重传特征）</div>
+      </div>
+    </div>
+
+    <!-- 建议 -->
+    <div class="diagnosis-body" style="padding-top:0;">
+      <h4>💡 建议</h4>
+      <p>1. 检查后端服务健康状态（根因 A 指向的节点）<br>
+      2. 核查 F5 健康检查配置，确认是否会摘除故障节点（根因 B）<br>
+      3. 若可重现，在客户端和服务端同时抓包对比，确认丢包位置（根因 C）</p>
+    </div>
+
+    <!-- 不确定性 -->
+    <div class="uncertainty">
+      <div class="title">⚠️ 以下信息缺失会提升结论置信度</div>
+      <ul>
+        <li>后端服务实际状态（是否宕机）</li>
+        <li>F5 负载均衡健康检查配置</li>
+        <li>网络路径中间设备（是否有丢包）</li>
+        <li>抓包点的网络位置（客户端侧/服务端侧/中间）</li>
+      </ul>
+    </div>
+
+    <!-- 底部操作 -->
+    <div class="diagnosis-footer">
+      <button class="footer-btn primary">📄 导出诊断报告</button>
+      <button class="footer-btn">🔍 查看证据详情</button>
+      <button class="footer-btn">🔗 在 Wireshark 打开</button>
+      <div class="feedback-row">
+        <span style="font-size:11px;color:#8b949e;align-self:center;">这个结论有帮助吗？</span>
+        <button class="feedback-btn feedback-yes">✓ 正确</button>
+        <button class="feedback-btn feedback-no">✗ 纠正</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 对比:当前(旧)的展示方式 -->
+  <div class="compare">
+    <h2>⬇ 对比：当前的展示方式（一坨 markdown 文本塞气泡）</h2>
+    <span class="compare-label old">现状</span>
+    <div class="old-block">本抓包共 62162 个包，检测到 234 个 TCP 重传、8 个 RST、11 个零窗口。重传集中在连接 4.24.11.248:443。
+
+重传呈指数退避特征：首个重传约 200ms，随后 400ms、800ms、1600ms 倍增，符合 RFC 6298 定义的 RTO 退避行为...
+
+根因：后端节点无响应触发 RTO 指数退避重传（RFC 6298§5.4-5.6）。此外推测 F5 负载均衡器健康检查失效...
+
+建议：检查后端服务状态...
+
+（用户无法区分哪个结论有 RFC 兜底、哪个是 Agent 猜的，rootCauses 的 rfcVerified 防幻觉机制完全不可见）</div>
+  </div>
+</div>
+</body>
+</html>

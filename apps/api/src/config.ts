@@ -54,9 +54,40 @@ const defaults = JSON.parse(readFileSync(configPath, "utf8")) as {
     caseCacheLimit: number;
     rag: {
       rfcDir: string;
+      /** 完整库路径（userData 内静默下载，750MB，双层库上层） */
       indexPath: string;
+      /** 精简库路径（Resources 内置，~20MB，双层库降级层） */
+      curatedIndexPath: string;
       topK: number;
       sectionCharLimit: number;
+      /** 完整库下载配置（GitHub Release 静默下载） */
+      download: {
+        /** 下载源 URL（GitHub Release 资产直链） */
+        url: string;
+        /** 下载到 userData 的目标文件名 */
+        targetFilename: string;
+        /** 断点续传分片大小（字节，默认 1MB） */
+        chunkSize: number;
+        /** 下载超时（毫秒，默认 5 分钟） */
+        timeoutMs: number;
+      };
+    };
+    fieldNotes: {
+      seedsDir: string;
+      indexPath: string;
+      topK: number;
+      scores: {
+        missingFlag: number;
+        analysisFlag: number;
+        observedFlag: number;
+      };
+    };
+    skills: {
+      dir: string;
+    };
+    session: {
+      compressThreshold: number;
+      keepRecent: number;
     };
     diagnosis: {
       shortConversationPacketThreshold: number;
@@ -158,8 +189,36 @@ export const apiConfig = {
     indexPath: process.env.PCAPAI_RAG_INDEX_PATH
       ? path.resolve(process.env.PCAPAI_RAG_INDEX_PATH)
       : path.resolve(workspaceRoot, defaults.api.rag.indexPath),
+    curatedIndexPath: process.env.PCAPAI_RAG_CURATED_INDEX_PATH
+      ? path.resolve(process.env.PCAPAI_RAG_CURATED_INDEX_PATH)
+      : path.resolve(workspaceRoot, defaults.api.rag.curatedIndexPath),
     topK: numberFromEnv(process.env.PCAPAI_RAG_TOP_K, defaults.api.rag.topK),
-    sectionCharLimit: numberFromEnv(process.env.PCAPAI_RAG_SECTION_CHAR_LIMIT, defaults.api.rag.sectionCharLimit)
+    sectionCharLimit: numberFromEnv(process.env.PCAPAI_RAG_SECTION_CHAR_LIMIT, defaults.api.rag.sectionCharLimit),
+    download: {
+      url: process.env.PCAPAI_RAG_DOWNLOAD_URL ?? defaults.api.rag.download.url,
+      targetFilename: defaults.api.rag.download.targetFilename,
+      chunkSize: numberFromEnv(process.env.PCAPAI_RAG_DOWNLOAD_CHUNK_SIZE, defaults.api.rag.download.chunkSize),
+      timeoutMs: numberFromEnv(process.env.PCAPAI_RAG_DOWNLOAD_TIMEOUT_MS, defaults.api.rag.download.timeoutMs)
+    }
+  },
+  fieldNotes: {
+    seedsDir: process.env.PCAPAI_FIELD_NOTES_SEEDS_DIR
+      ? path.resolve(process.env.PCAPAI_FIELD_NOTES_SEEDS_DIR)
+      : path.resolve(workspaceRoot, defaults.api.fieldNotes.seedsDir),
+    indexPath: process.env.PCAPAI_FIELD_NOTES_INDEX_PATH
+      ? path.resolve(process.env.PCAPAI_FIELD_NOTES_INDEX_PATH)
+      : path.resolve(workspaceRoot, defaults.api.fieldNotes.indexPath),
+    topK: numberFromEnv(process.env.PCAPAI_FIELD_NOTES_TOP_K, defaults.api.fieldNotes.topK),
+    scores: defaults.api.fieldNotes.scores
+  },
+  skills: {
+    dir: process.env.PCAPAI_SKILLS_DIR
+      ? path.resolve(process.env.PCAPAI_SKILLS_DIR)
+      : path.resolve(workspaceRoot, defaults.api.skills.dir)
+  },
+  session: {
+    compressThreshold: numberFromEnv(process.env.PCAPAI_SESSION_COMPRESS_THRESHOLD, defaults.api.session.compressThreshold),
+    keepRecent: numberFromEnv(process.env.PCAPAI_SESSION_KEEP_RECENT, defaults.api.session.keepRecent)
   },
   diagnosis: {
     shortConversationPacketThreshold: numberFromEnv(process.env.PCAPAI_SHORT_CONVERSATION_PACKET_THRESHOLD, defaults.api.diagnosis.shortConversationPacketThreshold),

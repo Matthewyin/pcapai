@@ -31,8 +31,8 @@ pcapAI 是一个 Agent-first 本地浏览器工作台，用于离线分析网络
 - Chain Planner 动态生成 1-5 步分析链（不硬编码任何故障场景）
 - 6 个确定性 protocol adapter（TCP/DNS/TLS/HTTP/ICMP/UDP）
 - 29 个确定性 insight 分析器（TCP/ICMP/HTTP/TLS/DNS/UDP/QUIC/NTP/SSH + L7 代理检测 + NAT 启发式检测），无阈值过滤，完整报告所有检测到的模式
-- Protocol adapter 自改进：三层路由（hardcoded regex → learned patterns → agent fallback）
-- Leader Agent + 5 个 handoff subagent（Triage/Evidence/Path/Protocol/Report）
+- Protocol adapter 自改进：分层路由（结构化直通 / learned bypass → hardcoded regex → learned patterns → agent fallback）
+- Leader Agent + 3 个 handoff subagent（Hypothesis/Path/Protocol）；Leader 自行处理诊断访谈追问和报告格式化
 - Agent 同时使用 case-graph MCP 和 tshark-query MCP
 - TCP Stream 跟踪（`tshark -z follow,tcp`）+ 客户端/服务端双列展示
 - 跨协议瀑布图（纯 SVG）+ 网络拓扑图（纯 SVG）
@@ -80,7 +80,7 @@ pcapAI 是一个 Agent-first 本地浏览器工作台，用于离线分析网络
 ## 分析原则
 
 - **确定性优先**：protocol adapter 运行 tshark 直接产出证据，不依赖 LLM。
-- **三层路由**：hardcoded regex → learned patterns（`data/learned_patterns.json`）→ agent fallback（tshark-query MCP）。
+- **分层路由**：结构化直通（`params.adapterId` / learned bypass）→ hardcoded regex → learned patterns（`data/learned_patterns.json`）→ agent fallback（tshark-query MCP）。高置信学习模式短路 Chain Planner。
 - **HTTP 跨连接关联**：HTTP adapter 同时生成 L7→TCP 和 `http_to_http` 跨连接关联，用于识别同一请求出现在两条不同 TCP 连接（客户端→代理 / 代理→后端）的场景。
 - **自改进**：agent fallback 后 LLM 生成 regex pattern + adapterId，持久化供下次确定性路由使用。无硬编码映射。
 - **链式编排**：Chain Planner 动态规划多步计划，步骤间通过 `paramsFrom` JSON 路径表达式传递参数，不硬编码场景。

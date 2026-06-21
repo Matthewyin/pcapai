@@ -8,7 +8,7 @@ Agent-first packet troubleshooting chat workbench. Upload pcap files, ask questi
 User uploads pcap + asks question
   → Chain Planner classifies intent, produces single-step or multi-step plan
   → Deterministic protocol adapters run tshark queries (TCP/DNS/TLS/HTTP/ICMP/UDP)
-  → Three-tier routing: hardcoded regex → learned patterns → agent with tshark-query MCP
+  → Tiered routing: structured direct (adapterId / learned bypass) → hardcoded regex → learned patterns → agent with tshark-query MCP
   → Evidence cards shown in new browser tab, text analysis in chat bubble
   → Agent explains findings and suggests follow-up queries
   → User clicks any card → local Wireshark opens with the exact filter
@@ -54,9 +54,9 @@ POST /agent/stream
   planChain()         → single-step or multi-step AnalysisChainPlan
   executeChain()      → runs steps sequentially, binds params between steps
   per step:
-    deterministic?    → protocol adapter three-tier routing:
-                         hardcoded regex → learned patterns → agent fallback
-    open-ended?       → leader agent hands off to Triage/Evidence/Path/Protocol/Report subagents
+    deterministic?    → protocol adapter tiered routing:
+                         structured direct (params.adapterId / learned bypass) → hardcoded regex → learned patterns → agent fallback
+    open-ended?       → leader agent hands off to Hypothesis/Path/Protocol subagents
   aggregate result    → AgentAnswer with evidence cards, checks, suggested queries
 ```
 
@@ -65,6 +65,7 @@ POST /agent/stream
 | Adapter | Triggers on | Checks produced |
 |---------|-------------|-----------------|
 | TCP | RST, retransmission, zero-window, SYN, one-way traffic | Session pair health |
+| TCP (health matrix) | "全景/全部连接/所有连接/正常/连接清单/健康状况" queries | Full conversation enumeration with per-connection classification (normal vs. handshake-failed/RST/retransmission-burst/zero-window/one-way) |
 | DNS | DNS queries, NXDOMAIN, SERVFAIL | Rcode distribution, unanswered queries |
 | TLS | ClientHello, ServerHello, alerts, SNI | Handshake status, SNI distribution, version mix |
 | HTTP | Status codes, request/response pairing | Status distribution, latency outliers, host distribution |
@@ -85,7 +86,7 @@ No hardcoded tool→adapter mapping — LLM determines both regex and adapterId.
 
 ### Agent architecture
 
-Leader agent with 5 handoff subagents (Triage, Evidence, Path, Protocol, Report), all sharing case-graph MCP and tshark-query MCP. Agents can query raw packet data via tshark-query tools but never parse pcap files or execute shell commands. They can suggest follow-up queries via `suggest_next_query`, but the user decides whether to execute them.
+Leader agent with 3 handoff subagents (Hypothesis, Path, Protocol), all sharing case-graph MCP and tshark-query MCP. Agents can query raw packet data via tshark-query tools but never parse pcap files or execute shell commands. They can suggest follow-up queries via `suggest_next_query`, but the user decides whether to execute them. On turn-budget exhaustion, a no-tool closer agent synthesizes a final answer from collected tool results.
 
 ## Commands
 
@@ -101,7 +102,7 @@ npm run test               # run tests (apps/api + mcp/tshark-query)
 ## Documentation
 
 - [Design document](docs/design.md) — scope, data model, analysis principles, self-improvement
-- [Architecture](docs/architecture.md) — QueryRun pipeline, agent boundaries, three-tier adapter routing
+- [Architecture](docs/architecture.md) — QueryRun pipeline, agent boundaries, tiered adapter routing
 
 ## Tech stack
 

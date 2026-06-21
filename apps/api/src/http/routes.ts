@@ -12,39 +12,44 @@ import {
   type EvidenceCard,
   type QueryRun,
 } from "../../../../packages/shared/src/index.js";
-import { runAgentCompatibilityCheck, runPcapTroubleshootingAgent } from "../agents/runtime.js";
-import { createCaseGraphTools } from "../agents/caseGraphTools.js";
-import { createRfcTools } from "../agents/rfcTools.js";
+import { runAgentCompatibilityCheck } from "../agents/runtime.js";
 import { rfcIndexStatus, searchRfc } from "../services/rfcRagService.js";
-import { deleteLearnedPattern, findBypassPattern, incrementHitCount, learnFromAgentRun, listLearnedPatterns, loadLearnedPatterns } from "../services/patternLearner.js";
+import { startDownload, getDownloadStatus, cancelDownload, deleteDownloadedDb } from "../services/rfcDownloadService.js";
+import { fieldNotesIndexStatus, listAllFieldNotes, getFieldNote, verifyFieldNote, disputeFieldNote, createFieldNote, deleteFieldNote, extractPacketFeatures, searchFieldNotes } from "../services/fieldNotesService.js";
+import { listSkills, getSkill, createSkill, deleteSkill, skillsIndexStatus } from "../services/skillsService.js";
+import { deleteLearnedPattern, listLearnedPatterns } from "../services/patternLearner.js";
 import { apiConfig } from "../config.js";
-import { getCaptureTimeRangeWithMcp, getConversationPacketsWithMcp, listDnsPacketsWithMcp, listHttpPacketsWithMcp, listIcmpEventsWithMcp, listTcpResetsWithMcp, listTcpRetransmissionsWithMcp, listTcpStreamsWithMcp, followTcpStreamWithMcp, listTcpZeroWindowWithMcp, listTlsPacketsWithMcp, listUdpPacketsWithMcp, queryPacketsWithMcp } from "../mcp/tsharkQueryClient.js";
-import { createPacketPairAnswer, createProtocolQueryAnswer, groupPacketPairs, noCaptureAnswer, pairGroupFromPackets, pairKey, protocolPacketCard } from "../protocolAdapters/builders.js";
-import { createDnsAdapter } from "../protocolAdapters/dns.js";
-import { createHttpAdapter } from "../protocolAdapters/http.js";
-import { createIcmpAdapter } from "../protocolAdapters/icmp.js";
-import { createTcpAdapters } from "../protocolAdapters/tcp.js";
-import { createTlsAdapter } from "../protocolAdapters/tls.js";
-import { type ProtocolAdapter, type ProtocolAdapterContext } from "../protocolAdapters/types.js";
-import { createUdpAdapter } from "../protocolAdapters/udp.js";
+import { getCaptureTimeRangeWithMcp, listTcpStreamsWithMcp, followTcpStreamWithMcp } from "../mcp/tsharkQueryClient.js";
 import { stripPayload } from "./capturePreprocess.js";
 import { addCapture, capturesDirectory, caseDirectory, createEmptyCase, deleteCases, listCaseSummaries, readAnalysisRunSnapshot, readCaseGraph, safePathPart, writeCaseGraph } from "./caseStore.js";
 import { activateLlmProfile, deleteLlmProfiles, getLlmSettings, listLlmProfiles, parseProviderData, saveLlmProfile, saveLlmSettings } from "./llmSettings.js";
 import { buildCaseReportMarkdown } from "./reportBuilder.js";
-import { createAgentAnswerService } from "../services/agentAnswerService.js";
-import { createEvidenceOpenService } from "../services/evidenceOpenService.js";
-import { runLevel1Insights } from "../services/insightEngine.js";
 import { extractProtocolAnomalies } from "../services/tcpPreprocessor.js";
-import { createAgentToolRegistryService } from "../services/agentToolRegistryService.js";
-import { createPlannerService } from "../services/plannerService.js";
-import { createAgentRuntimeService } from "../services/agentRuntimeService.js";
-import { createProtocolEventQueryService } from "../services/protocolEventQueryService.js";
-import { createQueryRunApiService } from "../services/queryRunApiService.js";
-import { createQueryRunService } from "../services/queryRunService.js";
-import { createStatisticsQueryService } from "../services/statisticsQueryService.js";
-import { createToolRunService } from "../services/toolRunService.js";
+import { composeServices } from "./composeServices.js";
 
 const cases = new Map<string, CaseGraph>();
+
+// per-case 互斥锁：agent 运行会跨多次 read-modify-write（含 chain step 间的 reloadGraph 和
+// 末尾 syncMemoryFromQueryRuns），整个运行周期是一个逻辑临界区。并发 agent run（用户连发两条
+// 消息、或 SSE 还在跑时又发一条）会在各自的 reloadGraph 互相覆盖 QueryRun。
+// 仅串行化 agent run 入口，不覆盖同步 handler（PUT hints 等）——它们快且改不同字段，风险低。
+const caseRunLocks = new Map<string, Promise<unknown>>();
+function withCaseRunLock<T>(caseId: string, task: () => Promise<T>): Promise<T> {
+  const previous = caseRunLocks.get(caseId) || Promise.resolve();
+  const next = previous.then(task, task);
+  caseRunLocks.set(caseId, next);
+  // 用 then(_, cleanup) 而非 finally(cleanup)：前者不产生额外 Promise，
+  // 后者返回的新 Promise 会继承 next 的 rejection，task 一旦 reject 会触发 unhandledRejection。
+  next.then(
+    () => {
+      if (caseRunLocks.get(caseId) === next) caseRunLocks.delete(caseId);
+    },
+    () => {
+      if (caseRunLocks.get(caseId) === next) caseRunLocks.delete(caseId);
+    }
+  );
+  return next;
+}
 
 // 简化 LRU：重新插入刷新热度，超过上限淘汰最久未写入的 case，防止长期运行内存无限增长
 function cacheCase(caseId: string, graph: CaseGraph) {
@@ -130,90 +135,34 @@ function loadGraph(caseId: string) {
   return graph;
 }
 
-const toolRunService = createToolRunService({
-  readGraph: loadGraph,
-  writeGraph: writeCaseGraph,
-  setGraph: (caseId, graph) => cacheCase(caseId, graph)
-});
-const { recordToolRun, recordPlannerRun, recordAnswerRun, recordErrorRun, recordMcpRun, recordQueryRunMcp } = toolRunService;
-const evidenceOpenService = createEvidenceOpenService({
-  capturesDirectory,
-  writeGraph: writeCaseGraph,
-  setGraph: (caseId, graph) => cacheCase(caseId, graph),
-  recordMcpRun
-});
-const agentAnswerService = createAgentAnswerService({
-  evidencePacketSampleLimit: apiConfig.diagnosis.evidencePacketSampleLimit
-});
+// ── Service 装配：13 个 service + 2 builder + 协议适配器 wiring 全部抽到 composeServices.ts ──
+const composed = composeServices({ loadGraph, cacheCase, agentRuntimeStatus });
 const {
-  queryRunAnswer,
-  selectedSessionProblemAnswer,
-  usageHelpAnswer,
-  activeQueryRunAnswer,
-  troubleshootingScopeAnswer,
-  diagnosticInterviewAnswer,
-  reportAnswer,
-  answerWithPlannerThought
-} = agentAnswerService;
-const queryRunService = createQueryRunService({
-  candidateGroupLimit: apiConfig.query.candidateGroupLimit,
-  queryPacketLimit: apiConfig.query.queryPacketLimit,
-  conversationPacketLimit: apiConfig.query.conversationPacketLimit,
-  retainedQueryRunLimit: apiConfig.query.retainedQueryRunLimit,
-  shortConversationPacketThreshold: apiConfig.diagnosis.shortConversationPacketThreshold,
-  retransmissionBurstThreshold: apiConfig.diagnosis.retransmissionBurstThreshold,
-  duplicateAckBurstThreshold: apiConfig.diagnosis.duplicateAckBurstThreshold,
-  evidencePacketSampleLimit: apiConfig.diagnosis.evidencePacketSampleLimit,
-  transportEvidencePacketSampleLimit: apiConfig.diagnosis.transportEvidencePacketSampleLimit,
-  finEvidencePacketSampleLimit: apiConfig.diagnosis.finEvidencePacketSampleLimit,
-  timeOverlapToleranceSeconds: apiConfig.pathCorrelation.timeOverlapToleranceSeconds,
-  fallbackPatterns: apiConfig.planner.fallbackPatterns,
-  capturesDirectory,
-  writeCaseGraph,
-  setGraph: (caseId, graph) => cacheCase(caseId, graph),
-  recordQueryRunMcp,
-  recordMcpRun,
-  formatBeijingTime
-});
-const {
+  agentRuntimeService,
+  queryRunApiService,
+  evidenceOpenService,
+  agentToolRegistryService,
+  statisticsQueryService,
+  protocolEventQueryService,
+  queryRunService,
+  toolRunService,
   captureQueryInputs,
-  buildAccessCandidateGroups,
   buildQueryPath,
-  buildQueryDiagnosis,
   inferQueryRunInput,
-  requestedLimit,
-  displayFilterFromQuestion,
-  createQueryRun,
-  selectConversation,
-  createCaptureCorrelationQueryRun,
-  applyCorrelationContextAndRerun,
-  activeCorrelationNeedsContext,
-  shouldApplyCorrelationContext,
-  shouldCorrelateCaptures,
-  shouldCreateQueryRun
-} = queryRunService;
-const queryRunApiService = createQueryRunApiService({
-  loadGraph,
-  writeCaseGraph,
-  setGraph: (caseId, graph) => cacheCase(caseId, graph),
-  capturesDirectory,
-  conversationPacketLimit: apiConfig.query.conversationPacketLimit,
-  inferQueryRunInput,
-  createQueryRun,
-  selectConversation,
-  getConversationPackets: getConversationPacketsWithMcp,
-  evidenceOpenService
-});
-const statisticsQueryService = createStatisticsQueryService({
-  retainedQueryRunLimit: apiConfig.query.retainedQueryRunLimit,
-  captureQueryInputs,
-  writeCaseGraph,
-  setGraph: (caseId, graph) => cacheCase(caseId, graph),
+  isProtocolStatisticsQuestion,
+  deterministicStatisticsAnswer,
+  reportAnswer,
+  answerWithPlannerThought,
+  formatBeijingTime,
+  buildAgentQuestion,
+  syncMemoryFromQueryRuns,
+  updateMemory,
+  createCaseGraphToolsFor,
+  recordToolRun,
   recordMcpRun,
   recordQueryRunMcp,
-  formatBeijingTime
-});
-const { deterministicStatisticsAnswer, isProtocolStatisticsQuestion } = statisticsQueryService;
+  runLevel1Insights
+} = composed;
 
 function parseCaptureMetadata(raw: unknown) {
   if (typeof raw !== "string") return null;
@@ -395,194 +344,9 @@ async function loadGraphWithInsights(caseId: string): Promise<CaseGraph> {
   return graph;
 }
 
-const setCaseGraph = (caseId: string, graph: CaseGraph) => cacheCase(caseId, graph);
-
-// case graph 进程内工具：读内存 graph，写操作直接持久化到 caseStore
-function createCaseGraphToolsFor(caseId: string) {
-  return createCaseGraphTools({
-    loadGraph: () => loadGraph(caseId),
-    saveGraph: (graph) => {
-      writeCaseGraph(graph);
-      cacheCase(graph.spec.caseId, graph);
-    }
-  });
-}
-
-// 从 QueryRuns 自动提取 findings 到 memory
-function syncMemoryFromQueryRuns(graph: CaseGraph): CaseGraph {
-  const existingIds = new Set((graph.memory?.findings || []).map((f) => f.queryRunId).filter(Boolean));
-  const newFindings = graph.queryRuns
-    .filter((qr) => !existingIds.has(qr.queryRunId))
-    .map((qr) => {
-      const problems = qr.selectedDiagnosis?.checks?.filter((c) => c.status === "problem").map((c) => c.summary || c.label) || [];
-      const conclusion = problems.length ? problems.join("；") : qr.selectedDiagnosis?.summary || "完成分析";
-      return { query: qr.question, conclusion, queryRunId: qr.queryRunId };
-    });
-  if (!newFindings.length) return graph;
-  const memory = { ...graph.memory, findings: [...(graph.memory?.findings || []), ...newFindings].slice(-20) };
-  const nextGraph = { ...graph, memory };
-  writeCaseGraph(nextGraph);
-  cacheCase(graph.spec.caseId, nextGraph);
-  return nextGraph;
-}
-
-function updateMemory(graph: CaseGraph, patch: Partial<{ topology: string; userNotes: string[] }>): CaseGraph {
-  const memory = {
-    ...graph.memory,
-    ...patch,
-    userNotes: patch.userNotes ? [...(graph.memory?.userNotes || []), ...patch.userNotes] : graph.memory?.userNotes
-  };
-  const nextGraph = { ...graph, memory };
-  writeCaseGraph(nextGraph);
-  cacheCase(graph.spec.caseId, nextGraph);
-  return nextGraph;
-}
-const packetPairAnswer = createPacketPairAnswer({
-  conversationPacketLimit: apiConfig.query.conversationPacketLimit,
-  retainedQueryRunLimit: apiConfig.query.retainedQueryRunLimit,
-  captureQueryInputs,
-  getConversationPackets: getConversationPacketsWithMcp,
-  buildAccessCandidateGroups,
-  buildQueryPath,
-  buildQueryDiagnosis,
-  writeCaseGraph,
-  setCaseGraph,
-  formatBeijingTime
-});
-const protocolQueryAnswer = createProtocolQueryAnswer({
-  retainedQueryRunLimit: apiConfig.query.retainedQueryRunLimit,
-  writeCaseGraph,
-  setCaseGraph
-});
-
-const protocolAdapterContext: ProtocolAdapterContext = {
-  queryPacketLimit: apiConfig.query.queryPacketLimit,
-  captureQueryInputs,
-  requestedLimit,
-  displayFilterFromQuestion,
-  noCaptureAnswer,
-  packetPairAnswer,
-  protocolPacketCard,
-  protocolQueryAnswer,
-  groupPacketPairs,
-  pairKey,
-  pairGroupFromPackets,
-  formatBeijingTime,
-  queryPackets: queryPacketsWithMcp,
-  listTcpResets: listTcpResetsWithMcp,
-  listTcpRetransmissions: listTcpRetransmissionsWithMcp,
-  listTcpZeroWindow: listTcpZeroWindowWithMcp,
-  listIcmpEvents: listIcmpEventsWithMcp,
-  listDnsPackets: listDnsPacketsWithMcp,
-  listUdpPackets: listUdpPacketsWithMcp,
-  listTlsPackets: listTlsPacketsWithMcp,
-  listHttpPackets: listHttpPacketsWithMcp
-};
-
-const protocolAdapters: ProtocolAdapter[] = [
-  ...createTcpAdapters(protocolAdapterContext),
-  createDnsAdapter(protocolAdapterContext),
-  createIcmpAdapter(protocolAdapterContext),
-  createUdpAdapter(protocolAdapterContext),
-  createTlsAdapter(protocolAdapterContext),
-  createHttpAdapter(protocolAdapterContext)
-];
-const protocolEventQueryService = createProtocolEventQueryService({
-  adapters: protocolAdapters,
-  hasLlmApiKey: () => Boolean(apiConfig.llm.apiKey),
-  loadLearnedPatterns,
-  learnFromAgentRun: (question, toolCalls, adapterIds) => {
-    learnFromAgentRun(question, toolCalls, adapterIds).catch(() => {});
-  },
-  incrementHitCount,
-  createCaseGraphTools: (caseId) => [...createCaseGraphToolsFor(caseId), ...createRfcTools()]
-});
-const agentToolRegistryService = createAgentToolRegistryService({
-  usageHelpAnswer,
-  deterministicStatisticsAnswer,
-  activeCorrelationNeedsContext,
-  applyCorrelationContextAndRerun,
-  createCaptureCorrelationQueryRun,
-  runProtocolEventQuery: protocolEventQueryService.run,
-  inferQueryRunInput,
-  createQueryRun,
-  queryRunAnswer,
-  selectedSessionProblemAnswer,
-  activeQueryRunAnswer,
-  reportAnswer,
-  troubleshootingScopeAnswer,
-  loadGraph,
-  recordToolRun,
-  runLlmExplain: async (graph, question) => {
-    // leader 提示词依赖 get_case_memory/load_case_graph 等 case graph 工具，必须随调用注入
-    const answer = await runPcapTroubleshootingAgent({ graph, question, chatHistory: undefined, tools: [...createCaseGraphToolsFor(graph.spec.caseId), ...createRfcTools()] });
-    return answer;
-  }
-});
-const plannerService = createPlannerService({
-  hasLlmApiKey: () => Boolean(apiConfig.llm.apiKey),
-  executeToolIntent: agentToolRegistryService.execute
-});
-const {
-  planChain,
-  executeAgentIntentPlan,
-  executeChainStep
-} = plannerService;
-
-const agentRuntimeService = createAgentRuntimeService({
-  planChain,
-  executeAgentIntentPlan,
-  executeChainStep,
-  loadGraph,
-  buildAgentQuestion,
-  answerWithPlannerThought,
-  diagnosticInterviewAnswer,
-  syncMemoryFromQueryRuns,
-  recordPlannerRun,
-  recordAnswerRun,
-  recordErrorRun,
-  updateRuntimeStatus: (patch) => Object.assign(agentRuntimeStatus, patch),
-  adapterIds: protocolEventQueryService.adapterIds,
-  createAgentTools: (caseId, question) => [...createCaseGraphToolsFor(caseId), ...createRfcTools(), ...agentToolRegistryService.createSdkTools(caseId, question)],
-  learnFromAgentRun: (question, toolCalls, adapterIds) => {
-    learnFromAgentRun(question, toolCalls, adapterIds).catch(() => {});
-  },
-  findLearnedBypass: (question) => findBypassPattern(question, apiConfig.planner.learnedBypassMinHits)
-});
-
 export const pathCorrelationTestHooks = {
   buildQueryPath
 };
-
-function formatBeijingTime(epochSeconds: number) {
-  return new Date(epochSeconds * 1000).toLocaleString("zh-CN", {
-    timeZone: "Asia/Shanghai",
-    hour12: false,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit"
-  });
-}
-
-
-function buildAgentQuestion(input: z.infer<typeof AgentRequestSchema>) {
-  const depthInstruction = [
-    input.thinkingDepth ? `思考深度：${input.thinkingDepth}` : "",
-    input.reasoningDepth ? `推理深度：${input.reasoningDepth}` : ""
-  ].filter(Boolean).join("；");
-  const history = input.chatHistory.slice(-12)
-    .filter((message) => message.content.trim())
-    .map((message) => `${message.role === "user" ? "用户" : "Agent"}：${message.content.trim().slice(0, 1200)}`)
-    .join("\n\n");
-  return [
-    history ? `以下是当前案例下最近的聊天上下文，只用于理解指代和延续问题，不得覆盖 case graph 证据：\n${history}` : "",
-    `用户当前问题：${input.question}`,
-    depthInstruction ? `本次回答控制：${depthInstruction}` : ""
-  ].filter(Boolean).join("\n\n");
-}
 
 function writeStreamEvent(res: { write: (chunk: string) => void }, event: string, data: unknown) {
   res.write(`event: ${event}\n`);
@@ -631,6 +395,35 @@ export function createAgentRouter() {
 
   router.get("/health", (_req, res) => {
     res.json({ status: "ok", runtime: "node", agents: "openai-agents-js" });
+  });
+
+  // MCP Server 清单（静态元数据，仅展示用途、工具数和运行方式，不含启停/状态）
+  router.get("/settings/mcp", (_req, res) => {
+    res.json({
+      servers: [
+        {
+          id: "tshark-query",
+          name: "tshark-query-mcp",
+          description: "读取 pcap 元数据并运行 tshark 查询：会话枚举、包查询、RST / 重传 / 零窗口 / DNS / TLS / HTTP / ICMP / UDP 事件、TCP stream follow、expert info 等。",
+          toolCount: 19,
+          kind: "stdio 常驻单例"
+        },
+        {
+          id: "evidence-opener",
+          name: "evidence-opener-mcp",
+          description: "用本地 Wireshark 打开 pcap 文件并应用 display filter，供证据卡下钻查看。",
+          toolCount: 1,
+          kind: "stdio 按需启动"
+        },
+        {
+          id: "case-graph",
+          name: "case-graph-mcp",
+          description: "Agent 读写 case graph：QueryRun / 证据卡 / 诊断 / 路径 / 拓扑 / 记忆 / 洞察 / 报告等 22 个工具。",
+          toolCount: 22,
+          kind: "进程内调用"
+        }
+      ]
+    });
   });
 
   router.get("/settings/llm", (_req, res) => {
@@ -699,6 +492,145 @@ export function createAgentRouter() {
     } catch (error) {
       return res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
     }
+  });
+
+  // 阶段 3a：完整 RFC 库静默下载（双层库上层）
+  router.get("/rag/download/status", (_req, res) => {
+    return res.json(getDownloadStatus());
+  });
+
+  router.post("/rag/download/start", async (_req, res) => {
+    try {
+      const status = await startDownload();
+      return res.json(status);
+    } catch (error) {
+      return res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  router.post("/rag/download/cancel", (_req, res) => {
+    return res.json(cancelDownload());
+  });
+
+  router.delete("/rag/download", (_req, res) => {
+    return res.json(deleteDownloadedDb());
+  });
+
+  // 实战知识库：列表/详情 + 沉淀闭环（verify/dispute/create）
+  router.get("/field-notes", (_req, res) => {
+    try {
+      return res.json({ notes: listAllFieldNotes(), status: fieldNotesIndexStatus() });
+    } catch (error) {
+      return res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  router.get("/field-notes/status", (_req, res) => {
+    try {
+      return res.json(fieldNotesIndexStatus());
+    } catch (error) {
+      return res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  router.get("/field-notes/:id", (req, res) => {
+    const note = getFieldNote(String(req.params.id));
+    if (!note) return res.status(404).json({ error: "field note not found" });
+    return res.json(note);
+  });
+
+  router.post("/field-notes/:id/verify", (req, res) => {
+    const result = verifyFieldNote(String(req.params.id));
+    if (!result.updated) return res.status(404).json({ error: "field note not found" });
+    return res.json(result.note);
+  });
+
+  router.post("/field-notes/:id/dispute", (req, res) => {
+    const correction = typeof req.body?.correction === "string" ? req.body.correction : undefined;
+    const result = disputeFieldNote(String(req.params.id), correction);
+    if (!result.updated) return res.status(404).json({ error: "field note not found" });
+    return res.json(result.note);
+  });
+
+  const CreateFieldNoteSchema = z.object({
+    id: z.string().min(1),
+    title: z.string().min(1),
+    summary: z.string().min(1),
+    protocols: z.array(z.string()).default([]),
+    symptoms: z.array(z.string()).default([]),
+    packetFeatures: z.object({
+      observedFlags: z.array(z.string()).optional(),
+      missingFlags: z.array(z.string()).optional(),
+      analysisFlags: z.array(z.string()).optional(),
+      protocols: z.array(z.string()).optional()
+    }),
+    candidateCauses: z.array(z.object({
+      cause: z.string(),
+      rfcDocId: z.number().int().optional(),
+      rfcSection: z.string().optional(),
+      likelihood: z.enum(["high", "medium", "low"]),
+      howToVerify: z.string(),
+      skillIds: z.array(z.string()).optional()
+    })),
+    source: z.string().default("user")
+  });
+
+  router.post("/field-notes", (req, res) => {
+    const parsed = CreateFieldNoteSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+    try {
+      const result = createFieldNote(parsed.data);
+      if (!result.created) return res.status(409).json({ error: result.reason });
+      return res.status(201).json(result.note);
+    } catch (error) {
+      return res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  router.delete("/field-notes/:id", (req, res) => {
+    try {
+      deleteFieldNote(String(req.params.id));
+      return res.json({ deleted: true });
+    } catch (error) {
+      return res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  // Skills：列表/详情/创建/删除
+  router.get("/skills", (_req, res) => {
+    try {
+      return res.json({ skills: listSkills(), status: skillsIndexStatus() });
+    } catch (error) {
+      return res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  router.get("/skills/:name", (req, res) => {
+    const skill = getSkill(String(req.params.name));
+    if (!skill) return res.status(404).json({ error: "skill not found" });
+    return res.json(skill);
+  });
+
+  const CreateSkillSchema = z.object({
+    name: z.string().min(1),
+    description: z.string().min(1),
+    triggers: z.array(z.string()).optional(),
+    toolsRequired: z.array(z.string()).optional(),
+    body: z.string().min(1),
+    overwrite: z.boolean().optional()
+  });
+
+  router.post("/skills", (req, res) => {
+    const parsed = CreateSkillSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+    const result = createSkill(parsed.data);
+    if (!result.created) return res.status(409).json({ error: result.reason });
+    return res.status(201).json({ name: parsed.data.name, filePath: result.filePath });
+  });
+
+  router.delete("/skills/:name", (req, res) => {
+    const result = deleteSkill(String(req.params.name));
+    return res.json(result);
   });
 
   router.get("/settings/learned-patterns", (_req, res) => {
@@ -1066,14 +998,123 @@ export function createAgentRouter() {
     }
   });
 
-  router.post("/cases/:caseId/agent", async (req, res) => {
-    let graph: CaseGraph;
+  // 飞轮反馈（阶段 2d）：用户确认/纠正当前诊断 → 沉淀/标记实战笔记
+  // verify：把当前 case 的根因 + packetFeatures 沉淀为新 field-note
+  // dispute：标记某条根因为错误（可选 correction 文本），若有 noteId 则 dispute 该笔记
+  router.post("/cases/:caseId/flywheel", (req, res) => {
+    const caseId = String(req.params.caseId);
+    const action = req.body?.action as "verify" | "dispute" | undefined;
+    if (action !== "verify" && action !== "dispute") {
+      return res.status(400).json({ error: "action 必须是 verify 或 dispute" });
+    }
     try {
-      graph = await loadGraphWithInsights(String(req.params.caseId));
+      const graph = loadGraph(caseId);
+      const rootCauses = Array.isArray(req.body?.rootCauses) ? req.body.rootCauses : [];
+      const noteId = typeof req.body?.noteId === "string" ? req.body.noteId : undefined;
+      const correction = typeof req.body?.correction === "string" ? req.body.correction.trim() : "";
+
+      if (action === "dispute" && noteId) {
+        // dispute 已有笔记
+        const result = disputeFieldNote(noteId, correction || undefined);
+        if (!result.updated) return res.status(404).json({ error: "field note not found" });
+        return res.json({ action: "dispute", note: result.note });
+      }
+
+      // verify（或 dispute 无 noteId）：用当前 case graph + rootCauses 创建新笔记
+      const packetFeatures = extractPacketFeatures(graph);
+      const protocols = Array.from(new Set([
+        ...(packetFeatures.protocols || []),
+        ...rootCauses.flatMap((c: { evidenceCardIds?: string[] }) => [])
+      ])).filter(Boolean) as string[];
+      const candidateCauses = rootCauses.map((cause: {
+        id: string; description: string; rfcVerified?: boolean; rfcSection?: string; confidence?: string;
+      }) => ({
+        cause: cause.description,
+        rfcSection: cause.rfcSection,
+        likelihood: cause.confidence === "certain" || cause.confidence === "high" ? "high" as const
+          : cause.confidence === "low" ? "low" as const : "medium" as const,
+        howToVerify: cause.rfcVerified ? "已用 RFC 章节验证" : "建议补充抓包或 RFC 引用核实",
+      }));
+      const stamp = new Date().toISOString().replace(/[-:.]/g, "").slice(0, 14);
+      const noteInput = {
+        id: `fn-flywheel-${caseId.slice(-12)}-${stamp}`,
+        title: rootCauses[0]?.description?.slice(0, 60) || `诊断反馈 ${stamp}`,
+        summary: rootCauses.map((c: { description: string; rfcVerified?: boolean }) =>
+          `${c.rfcVerified ? "[验证]" : "[推测]"} ${c.description}`
+        ).join("\n") + (action === "dispute" && correction ? `\n[用户纠正] ${correction}` : ""),
+        protocols,
+        symptoms: [],
+        packetFeatures,
+        candidateCauses,
+        source: action === "verify" ? "flywheel-verify" : "flywheel-dispute",
+      };
+      const result = createFieldNote(noteInput);
+      if (!result.created) {
+        // 笔记已存在（同 case 同时间戳重复反馈）→ verify 则 +1，dispute 则 +1
+        if (result.note) {
+          const updated = action === "verify"
+            ? verifyFieldNote(result.note.id)
+            : disputeFieldNote(result.note.id, correction || undefined);
+          return res.json({ action, note: updated.note, deduplicated: true });
+        }
+        return res.status(409).json({ error: result.reason });
+      }
+      // verify 新笔记时也记一次 verified
+      if (action === "verify" && result.note) {
+        verifyFieldNote(result.note.id);
+      }
+      return res.status(201).json({ action, note: getFieldNote(noteInput.id) });
+    } catch (error) {
+      return res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  // 知识脉络（阶段 3）：返回当前 case 的三层知识体系快照 —— 实战库命中 + Skills + RFC 引用
+  // 供右栏知识脉络 Tab 展示 Agent 排障时调用的知识层。
+  router.get("/cases/:caseId/knowledge", (req, res) => {
+    try {
+      const graph = loadGraph(String(req.params.caseId));
+      // 1. 实战库命中：用当前 case 的 packetFeatures 检索
+      let fieldNoteHits: Array<{ id: string; title: string; summary: string; featureScore: number; verifiedCount: number; disputedCount: number }> = [];
+      try {
+        const features = extractPacketFeatures(graph);
+        const hits = searchFieldNotes(features, apiConfig.fieldNotes.topK);
+        fieldNoteHits = hits.map((h) => ({
+          id: h.note.id,
+          title: h.note.title,
+          summary: h.note.summary,
+          featureScore: h.featureScore,
+          verifiedCount: h.note.verifiedCount,
+          disputedCount: h.note.disputedCount
+        }));
+      } catch {
+        // 知识库未构建时降级为空数组
+      }
+      // 2. RFC 引用：从 activeQueryRun 的 rootCauses（如果有）+ candidateCauses 提取
+      const activeQueryRun = graph.queryRuns?.find((r) => r.queryRunId === graph.activeQueryRunId) || graph.queryRuns?.[0];
+      const rfcRefs: Array<{ docId?: number; section?: string; title?: string }> = [];
+      // 从 toolRuns 里提取 Agent 调用过的 RFC（get_rfc_section 留下的痕迹）
+      for (const run of graph.toolRuns || []) {
+        const rfcMatch = run.summary?.match(/RFC\s*(\d+)/i);
+        if (rfcMatch) {
+          rfcRefs.push({ docId: Number(rfcMatch[1]), title: run.summary.slice(0, 80) });
+        }
+      }
+      return res.json({
+        fieldNoteHits,
+        skills: listSkills().map((s) => ({ name: s.name, description: s.description })),
+        rfcRefs: rfcRefs.slice(0, 6),
+        rfcTier: (() => {
+          try { return rfcIndexStatus().tier; } catch { return "none"; }
+        })()
+      });
     } catch {
       return res.status(404).json({ error: "case not found" });
     }
+  });
 
+  router.post("/cases/:caseId/agent", async (req, res) => {
+    const caseId = String(req.params.caseId);
     const parsedRequest = AgentRequestSchema.safeParse(req.body || {});
     if (!parsedRequest.success) return res.status(400).json({ error: parsedRequest.error.flatten() });
     const requestedProfileId = parsedRequest.data.profileId;
@@ -1082,26 +1123,34 @@ export function createAgentRouter() {
     }
 
     try {
-      const result = await agentRuntimeService.run(graph, parsedRequest.data);
+      // 整个 agent 运行周期包在 per-case 锁内：loadGraphWithInsights → run → syncMemory 全程串行，
+      // 避免并发 agent run 互相覆盖 QueryRun 和 insights
+      const result = await withCaseRunLock(caseId, async () => {
+        const graph = await loadGraphWithInsights(caseId);
+        return agentRuntimeService.run(graph, parsedRequest.data);
+      });
       return res.json(result.answer);
     } catch (error) {
-      return res.status(502).json({ error: error instanceof Error ? error.message : String(error) });
+      // loadGraphWithInsights 内部 loadGraph→readCaseGraph 在 case 不存在时抛 ENOENT 等，映射 404；
+      // 其余为 agent 运行错误，映射 502
+      const message = error instanceof Error ? error.message : String(error);
+      const isMissing = message.includes("ENOENT") || message.includes("not found") || message.includes("no such file");
+      return res.status(isMissing ? 404 : 502).json({ error: message });
     }
   });
 
   router.post("/cases/:caseId/agent/stream", async (req, res) => {
-    let graph: CaseGraph;
-    try {
-      graph = await loadGraphWithInsights(String(req.params.caseId));
-    } catch {
-      return res.status(404).json({ error: "case not found" });
-    }
-
+    const caseId = String(req.params.caseId);
     const parsedRequest = AgentRequestSchema.safeParse(req.body || {});
     if (!parsedRequest.success) return res.status(400).json({ error: parsedRequest.error.flatten() });
     const requestedProfileId = parsedRequest.data.profileId;
     if (requestedProfileId && !activateLlmProfile(requestedProfileId)) {
       return res.status(404).json({ error: "llm profile not found" });
+    }
+    // 进锁 + 写 SSE headers 前先做轻量 case 存在性检查，保持与非 stream /agent 路由一致的 404 语义；
+    // 否则 case 不存在时会先 flush 200 + SSE headers，错误只能以 SSE error 事件返回，外部 API 无法靠状态码判断。
+    if (!existsSync(caseDirectory(caseId))) {
+      return res.status(404).json({ error: "case not found" });
     }
 
     res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
@@ -1109,17 +1158,22 @@ export function createAgentRouter() {
     res.setHeader("Connection", "keep-alive");
     res.flushHeaders?.();
 
-    try {
-      await agentRuntimeService.stream(graph, parsedRequest.data, {
-        event: (event, data) => writeStreamEvent(res, event, data),
-        thought: (text) => writeStreamEvent(res, "thought", { text }),
-        delta: (text) => writeStreamEvent(res, "delta", { text }),
-        done: (answer) => writeStreamEvent(res, "done", answer),
-        error: (error) => writeStreamEvent(res, "error", { error })
-      });
-    } catch (error) {
-      writeStreamEvent(res, "error", { error: error instanceof Error ? error.message : String(error) });
-    }
+    // 流式同样用 per-case 锁包裹整个运行周期；锁在 stream 结束后释放，
+    // 期间并发的同 case agent run 会排队等待
+    await withCaseRunLock(caseId, async () => {
+      try {
+        const graph = await loadGraphWithInsights(caseId);
+        await agentRuntimeService.stream(graph, parsedRequest.data, {
+          event: (event, data) => writeStreamEvent(res, event, data),
+          thought: (text) => writeStreamEvent(res, "thought", { text }),
+          delta: (text) => writeStreamEvent(res, "delta", { text }),
+          done: (answer) => writeStreamEvent(res, "done", answer),
+          error: (error) => writeStreamEvent(res, "error", { error })
+        });
+      } catch (error) {
+        writeStreamEvent(res, "error", { error: error instanceof Error ? error.message : String(error) });
+      }
+    });
     return res.end();
   });
 

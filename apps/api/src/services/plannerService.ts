@@ -183,8 +183,13 @@ function aggregateChainResults(plan: AnalysisChainPlan, results: ChainStepResult
     sessionLinkIds: results.flatMap((result) => result.answer.sessionLinkIds),
     findingIds: results.flatMap((result) => result.answer.findingIds),
     missingContext: results.flatMap((result) => result.answer.missingContext),
-    // 任一步骤置信度缺失或偏低时保守聚合为 low，不高估整体结论
-    confidence: results.every((result) => result.answer.confidence === "certain") ? "certain" : results.some((result) => !result.answer.confidence || result.answer.confidence === "low" || result.answer.confidence === "needs_context") ? "low" : "high",
+    // 置信度聚合：全 certain 才 certain；显式 low/needs_context 拉低为 low；
+    // 缺失置信度（很多确定性 adapter 默认不设）视为 neutral，不拖累整体结论
+    confidence: results.every((result) => result.answer.confidence === "certain")
+      ? "certain"
+      : results.some((result) => result.answer.confidence === "low" || result.answer.confidence === "needs_context")
+        ? "low"
+        : "high",
     suggestedActions: results.flatMap((result) => result.answer.suggestedActions),
     handoffAgent: results[results.length - 1]?.answer.handoffAgent
   };

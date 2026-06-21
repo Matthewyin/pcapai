@@ -41,10 +41,15 @@ const tcpEventAdapterIdMap: Record<string, string> = {
   zero_window: "tcp_zero_window_pairs",
   syn_no_synack: "tcp_syn_no_synack_pairs",
   one_way: "tcp_one_way_pairs",
-  overview: "tcp_issues_overview"
+  overview: "tcp_issues_overview",
+  connection_health: "tcp_connection_health_matrix",
+  health_matrix: "tcp_connection_health_matrix"
 };
 
 function adapterIdFromParams(params?: Record<string, unknown>): string | undefined {
+  // 学习模式直通车（bypass）直接指定目标 adapter id，跳过 protocol/eventKind 推断与正则匹配，
+  // 避免 trace 日志声明的 adapterId 与实际路由不一致；有效性由 run() 内的 adapters.find 守卫兜底
+  if (typeof params?.adapterId === "string" && params.adapterId.trim()) return params.adapterId.trim();
   const protocol = typeof params?.protocol === "string" ? params.protocol.trim().toLowerCase() : "";
   if (!protocol) return undefined;
   if (protocol === "tcp") {

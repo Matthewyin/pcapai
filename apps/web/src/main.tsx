@@ -1,30 +1,29 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import { ArrowUp, BookOpen, CheckCircle, ChevronDown, Copy, Cpu, Eye, EyeOff, History, Maximize2, Minimize2, Moon, MoreHorizontal, Paperclip, Pencil, Pin, PinOff, Plus, Save, Settings, Sun, Trash2, X } from "lucide-react";
-import { marked } from "marked";
-import DOMPurify from "dompurify";
+import { ArrowUp, CheckCircle, ChevronDown, Copy, Eye, EyeOff, Maximize2, Minimize2, Paperclip, Pencil, Save, Square, Trash2, X } from "lucide-react";
 import { webConfig } from "./config";
 import "./styles.css";
+import "./tailwind.css";
+import { friendlyAgentName, normalizeThoughtForDisplay, appendThought, displayThoughts } from "./lib/markdown";
+import { formatPacketTime, formatShortPacketTime, formatDuration, formatEndpoint, capturePacketTotal } from "./lib/format";
+import { Sidebar, type SettingsMenuPage } from "./components/layout/Sidebar";
+import { AppShell } from "./components/layout/AppShell";
+import { useUIStore } from "./store/useUIStore";
+import { MessageList } from "./components/chat/MessageList";
+import { ReportPanel } from "./components/agent-panel/ReportPanel";
+import { EvidenceDeck } from "./components/agent-panel/EvidenceDeck";
+import { CaseStatusBar } from "./components/agent-panel/CaseStatusBar";
+import { AgentPanel } from "./components/agent-panel/AgentPanel";
+import { HelpPage } from "./components/shared/HelpPage";
+import { HistoryPage } from "./components/shared/HistoryPage";
+import { SettingsPage } from "./components/shared/SettingsPage";
+import { KnowledgePage } from "./components/shared/KnowledgePage";
 
-marked.setOptions({ breaks: true, gfm: true });
-
-function renderMarkdown(text: string): string {
-  const html = marked.parse(text) as string;
-  return DOMPurify.sanitize(html, {
-    ALLOWED_TAGS: ["h1", "h2", "h3", "h4", "h5", "h6", "p", "br", "hr", "strong", "em", "del", "ul", "ol", "li", "a", "code", "pre", "blockquote"],
-    ALLOWED_ATTR: ["href", "target", "rel"]
-  });
-}
-
-import type { PacketSummary, CaseGraph, PacketInsight, Conversation, QueryDiagnosis, EvidenceCard, ProtocolCorrelation, AccessCandidateGroup, QueryPath, QueryRun, AnalysisRun, ToolRun, MappingHint, TimeOffsetHint, DiagnosticTag, CaseSummary, LlmProfile, LlmRuntimeStatus, CaptureDraft, DetailView, DiagnosticHypothesis, ChatMessage } from "./types";
+import type { PacketSummary, CaseGraph, PacketInsight, Conversation, QueryDiagnosis, EvidenceCard, ProtocolCorrelation, AccessCandidateGroup, QueryPath, QueryRun, AnalysisRun, ToolRun, MappingHint, TimeOffsetHint, DiagnosticTag, CaseSummary, LlmProfile, LlmRuntimeStatus, McpServerInfo, CaptureDraft, DetailView, DiagnosticHypothesis, ChatMessage } from "./types";
 import { WaterfallChart, TopologyDiagram } from "./components/Charts";
 
 function fileStem(filename: string) {
   return filename.replace(/\.[^.]+$/, "");
-}
-
-function capturePacketTotal(graph?: CaseGraph | null) {
-  return graph?.captures.reduce((sum, capture) => sum + (capture.packetCount || 0), 0) || 0;
 }
 
 function formatApiError(data: unknown) {
@@ -41,58 +40,6 @@ function formatApiError(data: unknown) {
   return JSON.stringify(data);
 }
 
-function friendlyAgentName(name?: string) {
-  if (!name) return "";
-  if (name === "EvidenceAgent") return "假设验证 Agent";
-  if (name === "HypothesisAgent") return "假设验证 Agent";
-  if (name === "TriageAgent") return "诊断访谈 Agent";
-  if (name === "DiagnosticInterviewAgent") return "诊断访谈 Agent";
-  if (name === "PathAgent") return "路径还原 Agent";
-  if (name === "ProtocolAgent") return "协议诊断 Agent";
-  if (name === "ReportAgent") return "报告 Agent";
-  return name;
-}
-
-function normalizeThoughtForDisplay(text: string) {
-  if (!text.trim()) return null;
-  const displayText = text
-    .replace(/Leader Intent Planner/g, "规划")
-    .replace(/Chain Planner/g, "规划");
-  const cleanedText = displayText.replace(/^▸\s*/, "").trim();
-  if (displayText.includes("使用模型：")) return null;
-  if (displayText === "规划 正在规划分析步骤。") return "规划：正在识别问题并选择分析路径。";
-  if (displayText.startsWith("规划 输出：")) return null;
-  if (displayText.startsWith("规划 识别：")) {
-    const planKind = displayText.match(/^规划 识别：(chain|single)（([^）]+)）/);
-    return planKind ? `规划：已生成${planKind[1] === "chain" ? "多步" : "单步"}分析计划，置信度 ${planKind[2]}。` : "规划：已生成分析计划。";
-  }
-  if (displayText.startsWith("规划 正在判断用户意图。")) return "规划：正在识别问题意图。";
-  if (cleanedText.startsWith("开始分析链")) return `规划：${cleanedText}`;
-  if (/^步骤 \d+\/\d+/.test(cleanedText)) return `工具查询：${cleanedText}`;
-  if (/^✗ 步骤/.test(cleanedText)) return `执行失败：${cleanedText.replace(/^✗\s*/, "")}`;
-  if (cleanedText.startsWith("分析链完成")) return "综合解读：分析链完成。";
-  if (cleanedText.startsWith("调用 tshark-query MCP")) return `工具查询：${cleanedText.replace(/^调用 tshark-query MCP 的?/, "").trim()}`;
-  if (cleanedText.startsWith("已保存") || cleanedText.includes("EvidenceCard") || cleanedText.includes("证据卡")) return `证据生成：${cleanedText}`;
-  if (cleanedText.startsWith("综合解读")) return "综合解读：正在基于证据生成结论。";
-  return cleanedText;
-}
-
-function appendThought(message: ChatMessage, text: string) {
-  const thought = normalizeThoughtForDisplay(text);
-  if (!thought) return message;
-  const thoughts = message.thoughts || [];
-  if (thoughts[thoughts.length - 1] === thought || thoughts.includes(thought)) return message;
-  return { ...message, thoughts: [...thoughts, thought] };
-}
-
-function displayThoughts(message: ChatMessage) {
-  return (message.thoughts || []).reduce<string[]>((items, text) => {
-    const thought = normalizeThoughtForDisplay(text);
-    if (thought && !items.includes(thought)) items.push(thought);
-    return items;
-  }, []);
-}
-
 function runKindLabel(kind: AnalysisRun["kind"]) {
   if (kind === "capture_update") return "数据更新";
   if (kind === "parse") return "原始解析";
@@ -106,29 +53,6 @@ function detailTitle(view: DetailView) {
   if (view === "links") return "跨节点关联";
   if (view === "packets") return "数据包";
   return "关键事件";
-}
-
-function formatPacketTime(timestamp?: number) {
-  if (!Number.isFinite(timestamp)) return "-";
-  const milliseconds = timestamp! > 1_000_000_000_000 ? timestamp! : timestamp! * 1000;
-  return new Date(milliseconds).toLocaleString();
-}
-
-function formatShortPacketTime(timestamp?: number) {
-  if (!Number.isFinite(timestamp)) return "-";
-  const milliseconds = timestamp! > 1_000_000_000_000 ? timestamp! : timestamp! * 1000;
-  return new Date(milliseconds).toLocaleTimeString();
-}
-
-function formatDuration(start?: number, end?: number) {
-  if (!Number.isFinite(start) || !Number.isFinite(end)) return "-";
-  const duration = Math.max(0, end! - start!);
-  if (duration < 1) return `${Math.round(duration * 1000)}ms`;
-  return `${duration.toFixed(1)}s`;
-}
-
-function formatEndpoint(ip?: string, port?: number) {
-  return `${ip || "*"}:${port ?? "*"}`;
 }
 
 function conversationState(conversation: Conversation) {
@@ -231,11 +155,13 @@ function loadStoredChoice(key: string, allowedValues: string[], fallback: string
 }
 
 function App() {
-  const [page, setPage] = React.useState<"workbench" | "history" | "settings" | "help">("workbench");
-  const [theme, setTheme] = React.useState<"dark" | "light">(() => {
-    return localStorage.getItem("pcapai-theme") === "dark" ? "dark" : "light";
-  });
-  const [detailView, setDetailView] = React.useState<DetailView | null>(null);
+  // 阶段 2：page/theme/detailView 接入 useUIStore（persist 落 localStorage["pcapai-ui"]）
+  const page = useUIStore((s) => s.page);
+  const setPage = useUIStore((s) => s.setPage);
+  const theme = useUIStore((s) => s.theme);
+  const toggleTheme = useUIStore((s) => s.toggleTheme);
+  const detailView = useUIStore((s) => s.detailView);
+  const setDetailView = useUIStore((s) => s.setDetailView);
   const [tcpStreams, setTcpStreams] = React.useState<Array<{ streamIndex: number; srcIp?: string; srcPort?: number; dstIp?: string; dstPort?: number; packetCount: number; byteCount: number; displayFilter: string }>>([]);
   const [tcpStreamContent, setTcpStreamContent] = React.useState<{ clientData: string; serverData: string; streamIndex: number; format: string; totalBytes: number; truncated: boolean } | null>(null);
   const [tcpStreamLoading, setTcpStreamLoading] = React.useState(false);
@@ -258,6 +184,7 @@ function App() {
   const [showLlmApiKey, setShowLlmApiKey] = React.useState(false);
   const [llmProfileForm, setLlmProfileForm] = React.useState({ profileId: "", name: "", baseURL: "", model: "", apiKey: "", providerData: "" });
   const [llmProfiles, setLlmProfiles] = React.useState<LlmProfile[]>([]);
+  const [mcpServers, setMcpServers] = React.useState<McpServerInfo[]>([]);
   const [chatProfileId, setChatProfileId] = React.useState(() => localStorage.getItem(CHAT_PROFILE_ID_KEY) ?? "");
   const [copiedMessageId, setCopiedMessageId] = React.useState("");
   const [thinkingDepth, setThinkingDepth] = React.useState(() => loadStoredChoice(THINKING_DEPTH_KEY, THINKING_DEPTHS, "标准"));
@@ -274,12 +201,8 @@ function App() {
   const [composerFiles, setComposerFiles] = React.useState<File[]>([]);
   const [composerExpanded, setComposerExpanded] = React.useState(false);
   const [dragActive, setDragActive] = React.useState(false);
-  const [settingsMenuOpen, setSettingsMenuOpen] = React.useState(false);
   const [toolTraceOpen, setToolTraceOpen] = React.useState(false);
   const [insightsOpen, setInsightsOpen] = React.useState(false);
-  const [caseMenuId, setCaseMenuId] = React.useState("");
-  const [renamingCaseId, setRenamingCaseId] = React.useState("");
-  const [renameDraft, setRenameDraft] = React.useState("");
   const [pinnedCaseIds, setPinnedCaseIds] = React.useState<string[]>(() => loadPinnedCaseIds());
   const [rightPanelHighlight, setRightPanelHighlight] = React.useState<"evidence" | "conversation" | "">("");
   const chatMessagesRef = React.useRef<HTMLDivElement | null>(null);
@@ -288,6 +211,8 @@ function App() {
   const evidenceContextRef = React.useRef<HTMLElement | null>(null);
   const selectedConversationRef = React.useRef<HTMLElement | null>(null);
   const rightPanelHighlightTimerRef = React.useRef<number | undefined>(undefined);
+  const abortControllerRef = React.useRef<AbortController | null>(null);
+  const [isAsking, setIsAsking] = React.useState(false);
   const uploadDisabledReason = !graph ? "请先新建案例。" : !captureDrafts.length ? "请选择一个或多个 pcap/pcapng 文件。" : "";
 
   function focusRightPanel(target: "evidence" | "conversation") {
@@ -338,23 +263,20 @@ function App() {
 
   function togglePinnedCase(caseId: string) {
     savePinnedCaseIds(pinnedCaseIds.includes(caseId) ? pinnedCaseIds.filter((id) => id !== caseId) : [caseId, ...pinnedCaseIds]);
-    setCaseMenuId("");
   }
 
-  async function renameCase(caseId: string) {
-    const title = renameDraft.trim();
-    if (!title) return;
+  async function renameCase(caseId: string, title: string) {
+    const trimmed = title.trim();
+    if (!trimmed) return;
     const response = await fetch(`/api/cases/${caseId}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title })
+      body: JSON.stringify({ title: trimmed })
     });
     const data = await response.json();
     if (response.ok) {
       if (graph?.spec.caseId === caseId) setGraph(data);
       await loadCaseHistory();
-      setRenamingCaseId("");
-      setCaseMenuId("");
     }
     setStatus(response.ok ? "会话已重命名。" : formatApiError(data));
   }
@@ -376,7 +298,6 @@ function App() {
       }
       setCaseHistory(data.cases || []);
       setSelectedCaseIds((ids) => ids.filter((id) => id !== caseId));
-      setCaseMenuId("");
     }
     setStatus(response.ok ? "会话已删除。" : formatApiError(data));
   }
@@ -434,9 +355,8 @@ function App() {
     return false;
   }
 
-  function openSettingsMenuPage(nextPage: "history" | "settings" | "help") {
+  function openSettingsMenuPage(nextPage: SettingsMenuPage) {
     setPage(nextPage);
-    setSettingsMenuOpen(false);
   }
 
   async function createNewChat() {
@@ -731,6 +651,12 @@ function App() {
     const response = await fetch("/api/settings/llm/runtime");
     const data = await response.json();
     if (response.ok) setLlmRuntime(data);
+  }
+
+  async function loadMcpServers() {
+    const response = await fetch("/api/settings/mcp");
+    const data = await response.json();
+    if (response.ok) setMcpServers(data.servers || []);
   }
 
   async function saveLlmSettings() {
@@ -1073,8 +999,11 @@ function App() {
   async function ask() {
     const prompt = question.trim();
     if (!prompt && !composerFiles.length) return;
-    const targetGraph = graph || await createNewChat();
+    let targetGraph = graph || await createNewChat();
     if (!targetGraph) return;
+    const abortController = new AbortController();
+    abortControllerRef.current = abortController;
+    setIsAsking(true);
     const filesToUpload = [...composerFiles];
     const userMessage: ChatMessage = {
       id: `user-${Date.now()}`,
@@ -1093,6 +1022,9 @@ function App() {
     if (filesToUpload.length) {
       try {
         const uploadResult = await uploadComposerFiles(targetGraph, filesToUpload);
+        // 上传成功后用返回的 graph 作为后续 agent 请求的基准，避免闭包里的旧 graph 导致
+        // agent 读到上传前的空 case（captures=0 → needs_clarification）
+        if (uploadResult?.graph) targetGraph = uploadResult.graph;
         if (uploadResult?.agentAnswer && !prompt) {
           setAnswer(uploadResult.agentAnswer.answer);
           setChatMessages((messages) => messages.map((message) => message.id === assistantId ? {
@@ -1108,23 +1040,34 @@ function App() {
         }
       } catch (error) {
         setChatMessages((messages) => messages.map((message) => message.id === assistantId ? { ...message, content: error instanceof Error ? error.message : String(error), streaming: false } : message));
+        abortControllerRef.current = null;
+        setIsAsking(false);
         return;
       }
     }
 
-    if (!prompt) return;
+    if (!prompt) {
+      abortControllerRef.current = null;
+      setIsAsking(false);
+      return;
+    }
 
-    const currentCaseId = (graph || targetGraph).spec.caseId;
+    // 用 targetGraph 而非闭包里的 graph：上传后 targetGraph 是最新的（含 captures），
+    // 而 graph 是 React state 快照，在当前 ask() 闭包里可能是上传前的旧值
+    const currentCaseId = targetGraph.spec.caseId;
     const response = await fetch(`/api/cases/${currentCaseId}/agent/stream`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ question: prompt, chatHistory, profileId: chatProfileId || undefined, thinkingDepth, reasoningDepth })
+      body: JSON.stringify({ question: prompt, chatHistory, profileId: chatProfileId || undefined, thinkingDepth, reasoningDepth }),
+      signal: abortController.signal
     });
     if (!response.ok || !response.body) {
       const data = await response.json();
       const error = formatApiError(data);
       setChatMessages((messages) => messages.map((message) => message.id === assistantId ? { ...message, content: error, streaming: false } : message));
       await loadLlmRuntime();
+      abortControllerRef.current = null;
+      setIsAsking(false);
       return;
     }
 
@@ -1171,21 +1114,27 @@ function App() {
       }
     };
 
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const events = buffer.split("\n\n");
-      buffer = events.pop() || "";
-      events.forEach(applyEvent);
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const events = buffer.split("\n\n");
+        buffer = events.pop() || "";
+        events.forEach(applyEvent);
+      }
+      if (buffer.trim()) applyEvent(buffer);
+    } catch {
+      // 用户中止或连接断开：保留已收到的内容，标记 streaming 结束
     }
-    if (buffer.trim()) applyEvent(buffer);
     setChatMessages((messages) => {
       const updated = messages.map((message) => message.id === assistantId ? { ...message, streaming: false } : message);
       saveChatMessages(currentCaseId, updated);
       return updated;
     });
     await loadLlmRuntime();
+    abortControllerRef.current = null;
+    setIsAsking(false);
   }
 
   function openEvidenceDetail(message: ChatMessage, caseId: string, stepIndex?: number) {
@@ -1306,9 +1255,7 @@ function openWireshark(pcap,filter){fetch("${window.location.origin}/api/cases/$
     }
   }
 
-  React.useEffect(() => {
-    localStorage.setItem("pcapai-theme", theme);
-  }, [theme]);
+  // theme 持久化已由 useUIStore persist 接管（localStorage["pcapai-ui"]），原 pcapai-theme effect 删除
 
   // 桌面端双击 .pcap：每次新建 case 后按本地路径导入（绝不动用户原文件，后端 copy）
   async function openPcapFromPaths(paths: string[]) {
@@ -1355,22 +1302,10 @@ function openWireshark(pcap,filter){fetch("${window.location.origin}/api/cases/$
   }, []);
 
   React.useEffect(() => {
-    function closeMenusOnOutsideClick(event: PointerEvent) {
-      const target = event.target;
-      if (!(target instanceof Element)) return;
-      if (target.closest(".caseActionMenu, .caseMoreButton, .settingsMenu, .settingsMenuButton")) return;
-      setCaseMenuId("");
-      setSettingsMenuOpen(false);
-    }
-
-    document.addEventListener("pointerdown", closeMenusOnOutsideClick);
-    return () => document.removeEventListener("pointerdown", closeMenusOnOutsideClick);
-  }, []);
-
-  React.useEffect(() => {
     void loadLlmSettings();
     void loadLlmProfiles();
     void loadLlmRuntime();
+    void loadMcpServers();
     const restoreCase = async () => {
       const cases = await loadCaseHistory();
       const lastCaseId = localStorage.getItem(LAST_CASE_ID_KEY);
@@ -1424,27 +1359,15 @@ function openWireshark(pcap,filter){fetch("${window.location.origin}/api/cases/$
     localStorage.setItem(REASONING_DEPTH_KEY, reasoningDepth);
   }, [reasoningDepth]);
 
-  const tcpConnectionCount = graph?.sessions.filter((session) => session.protocol.toLowerCase() === "tcp").length || 0;
-  const tcpCommunicationPairCount = (() => {
-    if (!graph) return 0;
-    const sessionPairs = new Set(graph.sessions
-      .filter((session) => session.protocol.toLowerCase() === "tcp" && session.clientIp && session.serverIp && session.clientPort !== undefined && session.serverPort !== undefined)
-      .map((session) => [`${session.clientIp}:${session.clientPort}`, `${session.serverIp}:${session.serverPort}`].sort().join(" <-> ")));
-    if (sessionPairs.size) return sessionPairs.size;
-    return new Set(graph.packets
-      .filter((packet) => packet.protocol.toLowerCase() === "tcp" && packet.srcIp && packet.dstIp && packet.srcPort !== undefined && packet.dstPort !== undefined)
-      .map((packet) => [`${packet.srcIp}:${packet.srcPort}`, `${packet.dstIp}:${packet.dstPort}`].sort().join(" <-> "))).size;
-  })();
-  const packetTimes = (graph?.packets || []).map((packet) => packet.timestamp).filter(Number.isFinite);
-  const timeRange = packetTimes.length
-    ? `${formatPacketTime(Math.min(...packetTimes))} - ${formatPacketTime(Math.max(...packetTimes))}`
-    : "-";
-  const tcpPackets = (graph?.packets || []).filter((packet) => packet.protocol.toLowerCase() === "tcp");
-  const packetCountByFlag = (flag: string) => tcpPackets.filter((packet) => packet.tcpFlags.includes(flag)).length;
-  const retransmissionPacketCount = tcpPackets.filter((packet) => packet.tcpAnalysis?.retransmission || packet.tcpAnalysis?.fastRetransmission).length;
-  const duplicateAckPacketCount = tcpPackets.filter((packet) => packet.tcpAnalysis?.duplicateAck).length;
-  const zeroWindowPacketCount = tcpPackets.filter((packet) => packet.tcpAnalysis?.zeroWindow).length;
   const activeQueryRun = graph?.queryRuns?.find((run) => run.queryRunId === graph.activeQueryRunId) || graph?.queryRuns?.[0];
+  // 阶段 2d：从最后一条带 rootCauses 的 assistant 消息提取根因列表（防幻觉分层渲染）
+  const lastRootCauses = (() => {
+    for (let i = chatMessages.length - 1; i >= 0; i--) {
+      const msg = chatMessages[i];
+      if (msg.role === "assistant" && msg.rootCauses && msg.rootCauses.length) return msg.rootCauses;
+    }
+    return [];
+  })();
   const displayedCaseHistory = [...caseHistory].sort((left, right) => {
     const leftPinned = pinnedCaseIds.includes(left.caseId);
     const rightPinned = pinnedCaseIds.includes(right.caseId);
@@ -1525,272 +1448,137 @@ function openWireshark(pcap,filter){fetch("${window.location.origin}/api/cases/$
     return (keyPackets.length ? keyPackets : conversationPackets).slice(0, webConfig.keyPacketDisplayLimit);
   })();
 
+
+  // 阶段 2b：insightDock 移到 AppShell 右栏 slot（三栏布局启用右栏拖拽）
+  // JSX 保留在 main.tsx 内（依赖闭包 30+ handler/state，抽组件 props 会爆炸，留第 3 步三 Tab 重构）
+  // 阶段 2c：右栏抽成 AgentPanel 组件（三 Tab：知识脉络/推理轨迹/诊断档案）
+  // 业务数据 + handlers 通过 props 聚合传入；UI 态（activeTab/toolTraceOpen/insightsOpen）在组件内读 useAgentStore
+  const agentPanelNode: React.ReactNode = page === "workbench" ? (
+    <AgentPanel
+      graph={graph}
+      activeQueryRun={activeQueryRun}
+      rootCauses={lastRootCauses}
+      report={report}
+      activeCandidateGroups={activeCandidateGroups}
+      selectedCandidateGroup={selectedCandidateGroup}
+      visibleConversations={visibleConversations}
+      filteredConversationCount={filteredConversationCount}
+      keyConversationPackets={keyConversationPackets}
+      selectedEvidenceCard={selectedEvidenceCard}
+      selectedEvidencePacket={selectedEvidencePacket}
+      selectedConversation={selectedConversation}
+      selectedDiagnosis={selectedDiagnosis}
+      conversationPackets={conversationPackets}
+      conversationPacketsStatus={conversationPacketsStatus}
+      rightPanelHighlight={rightPanelHighlight}
+      conversationSearch={conversationSearch}
+      conversationSort={conversationSort}
+      evidenceContextRef={evidenceContextRef}
+      selectedConversationRef={selectedConversationRef}
+      onOpenToolRun={(run) => void openToolRun(run)}
+      onOpenEvidenceCard={(card) => void openEvidenceCard(card)}
+      onCopyEvidenceFilter={(card) => void copyEvidenceFilter(card)}
+      onOpenProtocolCorrelation={(correlation) => void openProtocolCorrelation(correlation)}
+      onCopyProtocolCorrelationFilter={(correlation) => void copyProtocolCorrelationFilter(correlation)}
+      onOpenSelectedInWireshark={() => void openSelectedInWireshark()}
+      onSelectConversation={(queryRunId, conversationId) => void selectConversation(queryRunId, conversationId)}
+      onOpenDiagnosisPacket={(packetId) => void openDiagnosisPacket(packetId)}
+      onExportReport={() => void exportReport()}
+      onCopyReport={() => void copyReport()}
+      onSetDetailView={(view) => setDetailView(view)}
+      onSetConversationSearch={(value) => setConversationSearch(value)}
+      onSetConversationSort={(value) => setConversationSort(value)}
+      onSetSelectedCandidateGroupId={(id) => setSelectedCandidateGroupId(id)}
+      onFlywheel={(action) => void (async () => {
+        // 阶段 2：飞轮反馈接入后端（verify→沉淀 field-note / dispute→标记错误）
+        const caseId = graph?.spec.caseId;
+        if (!caseId) return;
+        try {
+          const resp = await fetch(`/api/cases/${caseId}/flywheel`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ action, rootCauses: lastRootCauses })
+          });
+          if (!resp.ok) {
+            const err = await resp.json().catch(() => ({}));
+            console.error("[flywheel] 失败", err);
+          }
+        } catch (e) {
+          console.error("[flywheel] 网络错误", e);
+        }
+      })()}
+      toolRunTitle={toolRunTitle}
+      toolRunDetail={toolRunDetail}
+      toolRunKindLabel={toolRunKindLabel}
+      toolRunStatusLabel={toolRunStatusLabel}
+      toolRunActionLabel={toolRunActionLabel}
+      groupState={groupState}
+      conversationState={conversationState}
+      diagnosisCheckState={diagnosisCheckState}
+      packetMarkers={packetMarkers}
+    />
+  ) : null;
+
+
   return (
     <main className="app" data-theme={theme}>
-      <section className="appShell">
-        <aside className="appSidebar panel">
-          <div className="sidebarBrand">
-            <div>
-              <strong>PcapAI</strong>
-              <span>packet agent</span>
-            </div>
-            <button className="newCaseButton" onClick={() => void createNewChat()}>
-              <Plus size={18} /> 新建会话
-            </button>
-          </div>
-
-          <section className="currentSession">
-            <span>当前会话</span>
-            <strong>{graph ? graph.spec.title : "尚未选择会话"}</strong>
-            <small>{graph ? `${graph.captures.length} 文件 · ${graph.rawPackets.length || graph.packets.length} 包${activeQueryRun ? ` · ${activeQueryRun.protocol || "query"}` : ""}` : "新建会话后上传 pcap 开始分析"}</small>
-          </section>
-
-          <section className="sidebarCases">
-            <div className="sidebarSectionTitle">
-              <h2>最近会话</h2>
-            </div>
-            {displayedCaseHistory.map((item) => (
-              <article className={`sidebarCase ${graph?.spec.caseId === item.caseId ? "active" : ""}`} key={item.caseId} onContextMenu={(event) => {
-                event.preventDefault();
-                setCaseMenuId(item.caseId);
-              }}>
-                {renamingCaseId === item.caseId ? (
-                  <form className="caseRenameForm" onSubmit={(event) => {
-                    event.preventDefault();
-                    void renameCase(item.caseId);
-                  }}>
-                    <input value={renameDraft} autoFocus onChange={(event) => setRenameDraft(event.target.value)} onKeyDown={(event) => {
-                      if (event.key === "Escape") setRenamingCaseId("");
-                    }} />
-                    <button type="submit">保存</button>
-                  </form>
-                ) : (
-                  <>
-                    <button className="sessionOpenButton" onClick={() => openCase(item.caseId)}>
-                      <span className="caseTitle">{pinnedCaseIds.includes(item.caseId) ? "置顶 · " : ""}{item.title}</span>
-                      <span className="caseMeta">{item.captureCount} 文件 · {item.rawPacketCount || item.packetCount} 包 · {item.runCount} 查询</span>
-                      <span className="caseTime">{formatPacketTime(item.updatedAt)}</span>
-                    </button>
-                    <button className="caseMoreButton" onClick={(event) => {
-                      event.stopPropagation();
-                      setCaseMenuId((id) => id === item.caseId ? "" : item.caseId);
-                    }} aria-label="会话操作">
-                      <MoreHorizontal size={16} />
-                    </button>
-                    {caseMenuId === item.caseId && (
-                      <div className="caseActionMenu">
-                        <button onClick={() => {
-                          setRenameDraft(item.title);
-                          setRenamingCaseId(item.caseId);
-                          setCaseMenuId("");
-                        }}><Pencil size={14} /> 重命名</button>
-                        <button onClick={() => togglePinnedCase(item.caseId)}>
-                          {pinnedCaseIds.includes(item.caseId) ? <PinOff size={14} /> : <Pin size={14} />}
-                          {pinnedCaseIds.includes(item.caseId) ? "取消置顶" : "置顶"}
-                        </button>
-                        <button className="dangerAction" onClick={() => void deleteCaseFromSidebar(item.caseId)}><Trash2 size={14} /> 删除</button>
-                      </div>
-                    )}
-                  </>
-                )}
-              </article>
-            ))}
-            {!displayedCaseHistory.length && <div className="empty">暂无历史案例。</div>}
-          </section>
-
-          <div className="sidebarFooter">
-            <button className={`settingsMenuButton ${page !== "workbench" || settingsMenuOpen ? "active" : ""}`} onClick={() => setSettingsMenuOpen((open) => !open)}><Settings size={16} /> 设置</button>
-            {settingsMenuOpen && (
-              <div className="settingsMenu">
-                <button onClick={() => openSettingsMenuPage("history")}><History size={15} /> 历史案例</button>
-                <button onClick={() => openSettingsMenuPage("settings")}><Cpu size={15} /> 模型配置</button>
-                <button onClick={() => openSettingsMenuPage("help")}><BookOpen size={15} /> 帮助</button>
-                <button onClick={() => {
-                  setTheme(theme === "dark" ? "light" : "dark");
-                  setSettingsMenuOpen(false);
-                }}>
-                  {theme === "dark" ? <Sun size={15} /> : <Moon size={15} />} {theme === "dark" ? "亮色主题" : "暗色主题"}
-                </button>
-              </div>
-            )}
-          </div>
-        </aside>
-
+      <AppShell
+        sidebar={
+          <Sidebar
+            graph={graph}
+            activeQueryRun={activeQueryRun}
+            displayedCaseHistory={displayedCaseHistory}
+            pinnedCaseIds={pinnedCaseIds}
+            page={page}
+            theme={theme}
+            onCreateNewChat={() => void createNewChat()}
+            onOpenCase={(caseId) => openCase(caseId)}
+            onTogglePinned={(caseId) => togglePinnedCase(caseId)}
+            onRename={(caseId, title) => renameCase(caseId, title)}
+            onDelete={(caseId) => deleteCaseFromSidebar(caseId)}
+            onOpenSettingsPage={(nextPage) => openSettingsMenuPage(nextPage)}
+            onToggleTheme={toggleTheme}
+          />
+        }
+        agentPanel={agentPanelNode}
+      >
         <section className={`appContent ${page === "workbench" ? "workbenchContent" : "pageContent"}`}>
       {page === "help" ? (
-        <section className="helpPage">
-          <section className="helpHero">
-            <span>Agent-first pcap 排障工作流</span>
-            <h2>从聊天上传数据包，到查询通信，再点证据进 Wireshark。</h2>
-            <p>PcapAI 适合围绕一次访问链路排障。用户在聊天里上传 pcap 并提出问题，Agent 通过 tshark-query 获取事实，再用证据卡片把通信、包和过滤器返回给你。</p>
-          </section>
-
-          <section className="helpGrid">
-            <article>
-              <strong>1. 新建会话</strong>
-              <p>点击左侧新建会话会立即创建一个空 case，后续所有上传、查询和证据都围绕这个会话展开。</p>
-            </article>
-            <article>
-              <strong>2. 在聊天中上传 pcap</strong>
-              <p>可以选择、拖拽或粘贴 pcap、pcapng、cap 文件。上传后系统裁剪 payload，并自动生成最小节点信息。</p>
-            </article>
-            <article>
-              <strong>3. Agent 追问上下文</strong>
-              <p>只上传文件时，Agent 会返回抓包时间范围，并追问节点角色、抓包位置、方向、故障时间、源、目的和端口。</p>
-            </article>
-            <article>
-              <strong>4. 创建 QueryRun</strong>
-              <p>条件足够时，Agent 调用 tshark-query 构造 display filter，列出候选访问链路和关键包证据。</p>
-            </article>
-            <article>
-              <strong>5. 打开证据</strong>
-              <p>点击 conversation、packet 或 time range 证据卡片，会通过 evidence-opener 用对应过滤器打开本地 Wireshark。</p>
-            </article>
-            <article>
-              <strong>6. 多节点链路</strong>
-              <p>首版按同一五元组和时间重叠做确定性关联；遇到 NAT、F5、SSL 卸载或代理时，Agent 会追问映射线索。</p>
-            </article>
-            <article>
-              <strong>7. 配置大模型</strong>
-              <p>在配置页填写 OpenAI 兼容 Base URL、API Key 和模型名。可以保存多个配置档案并测试连通性。</p>
-            </article>
-            <article>
-              <strong>8. 询问 Agent</strong>
-              <p>Leader Agent 只解释 case graph、QueryRun 和 evidence card，不直接读取原始 pcap，也不绕过 MCP 自行判断包级事实。</p>
-            </article>
-          </section>
-
-          <section className="helpPanel">
-            <h2>推荐排障顺序</h2>
-            <ol>
-              <li>先确认每个抓包节点的角色和位置是否正确。</li>
-              <li>再确认筛选条件是否命中目标访问流量。</li>
-              <li>如果路径断裂，优先补 NAT/SLB/代理线索和时间偏移。</li>
-              <li>最后再让 Agent 解释 finding，避免让模型替代证据判断。</li>
-            </ol>
-          </section>
-        </section>
+        <HelpPage />
+      ) : page === "knowledge" ? (
+        <KnowledgePage />
       ) : page === "history" ? (
-        <section className="historyPage">
-          <section className="historyToolbar">
-            <div>
-              <h2>历史案例管理</h2>
-              <p>这里集中处理历史案例的批量选择和删除。左侧边栏只用于快速进入案例。</p>
-            </div>
-            <div className="bulkActions">
-              <button onClick={() => setSelectedCaseIds(caseHistory.map((item) => item.caseId))} disabled={!caseHistory.length}>全选</button>
-              <button onClick={() => setSelectedCaseIds([])} disabled={!selectedCaseIds.length}>清空</button>
-              <button className="danger" onClick={deleteSelectedCases} disabled={!selectedCaseIds.length}>
-                <Trash2 size={16} /> 删除
-              </button>
-            </div>
-          </section>
-          <section className="historyGrid">
-            {caseHistory.map((item) => (
-              <article className="historyCard" key={item.caseId}>
-                <input type="checkbox" checked={selectedCaseIds.includes(item.caseId)} onChange={() => toggleCaseSelection(item.caseId)} aria-label={`选择 ${item.title}`} />
-                <button onClick={() => openCase(item.caseId)}>
-                  <strong>{item.title}</strong>
-                  <span>{item.captureCount} 节点 / {item.rawPacketCount} 捕获包 / {item.packetCount} 样本包</span>
-                  <small>{item.runCount} 个分析版本 / {item.findingCount} 条判断</small>
-                </button>
-              </article>
-            ))}
-            {!caseHistory.length && <div className="empty">暂无历史案例。</div>}
-          </section>
-        </section>
+        <HistoryPage
+          caseHistory={caseHistory}
+          selectedCaseIds={selectedCaseIds}
+          onToggleSelect={(caseId) => toggleCaseSelection(caseId)}
+          onSelectAll={() => setSelectedCaseIds(caseHistory.map((item) => item.caseId))}
+          onClearSelection={() => setSelectedCaseIds([])}
+          onDeleteSelected={() => void deleteSelectedCases()}
+          onOpenCase={(caseId) => openCase(caseId)}
+        />
       ) : page === "settings" ? (
-        <section className="settingsPage">
-          <section className="settingsPanel">
-            <h2>添加 LLM</h2>
-            {llmRuntime && (
-              <dl className="runtimeSummary">
-                <dt>当前模型</dt>
-                <dd>{llmRuntime.settings.model || "-"}</dd>
-                <dt>配置档案</dt>
-                <dd>{llmRuntime.settings.activeProfileId || "手工配置"}</dd>
-                <dt>Key 状态</dt>
-                <dd>{llmRuntime.settings.hasKey ? "已配置" : "未配置"}</dd>
-                <dt>调用模式</dt>
-                <dd>{llmRuntime.useResponses ? "Responses API" : "Chat Completions"}</dd>
-              </dl>
-            )}
-            <div className="savedConfigCard">
-              <div>
-                <strong>当前已保存配置</strong>
-                <span>{llmForm.baseURL || "-"} / {llmForm.model || "-"} / {llmRuntime?.settings.hasKey ? "已保存 Key" : "未保存 Key"}</span>
-              </div>
-              <button onClick={() => { void loadLlmSettings(); void loadLlmProfiles(); void loadLlmRuntime(); }}>
-                查询配置
-              </button>
-            </div>
-            <div className="form">
-              <label>
-                <span>Base URL</span>
-                <input value={llmForm.baseURL} onChange={(event) => setLlmForm({ ...llmForm, baseURL: event.target.value })} placeholder="OpenAI 兼容 Base URL" />
-              </label>
-              <label>
-                <span>模型名称</span>
-                <input value={llmForm.model} onChange={(event) => setLlmForm({ ...llmForm, model: event.target.value })} placeholder="模型名称" />
-              </label>
-              <label>
-                <span>兼容参数 JSON</span>
-                <textarea
-                  rows={3}
-                  value={llmForm.providerData}
-                  onChange={(event) => setLlmForm({ ...llmForm, providerData: event.target.value })}
-                  placeholder='例如 DeepSeek V4 Flash: {"thinking":{"type":"disabled"}}'
-                />
-              </label>
-              <label>
-                <span>API Key</span>
-                <div className="secretInput">
-                  <input type={showLlmApiKey ? "text" : "password"} value={llmForm.apiKey} onChange={(event) => setLlmForm({ ...llmForm, apiKey: event.target.value })} placeholder="已有同名档案可留空；新增配置请填写 Key" />
-                  <button type="button" onClick={() => setShowLlmApiKey((visible) => !visible)} title={showLlmApiKey ? "隐藏 API Key" : "显示 API Key"} aria-label={showLlmApiKey ? "隐藏 API Key" : "显示 API Key"}>
-                    {showLlmApiKey ? <EyeOff size={18} /> : <Eye size={18} />}
-                  </button>
-                </div>
-              </label>
-              <button className="primary" onClick={saveLlmSettings} disabled={!llmForm.baseURL.trim() || !llmForm.model.trim()}>
-                <Save size={16} /> 保存配置
-              </button>
-              <button onClick={testLlmSettings} disabled={!llmForm.baseURL.trim() || !llmForm.model.trim()}>
-                测试配置
-              </button>
-              <button onClick={testAgentCompatibility} disabled={!llmForm.baseURL.trim() || !llmForm.model.trim()}>
-                Agent 兼容测试
-              </button>
-              <span className="status">{llmStatus}</span>
-              <p className="formHint">本地 Ollama 作为普通 OpenAI 兼容配置添加：Base URL 填本地 /v1 地址，模型名填已安装模型，API Key 按你的服务配置填写；常见本地默认可填 ollama。</p>
-            </div>
-          </section>
-
-          <section className="settingsPanel llmListPanel">
-            <h2>LLM 列表</h2>
-            <div className="bulkActions">
-              <button onClick={() => setSelectedProfileIds(llmProfiles.map((profile) => profile.profileId))} disabled={!llmProfiles.length}>全选</button>
-              <button onClick={() => setSelectedProfileIds([])} disabled={!selectedProfileIds.length}>清空</button>
-              <button className="danger" onClick={deleteSelectedProfiles} disabled={!selectedProfileIds.length}>
-                <Trash2 size={16} /> 删除
-              </button>
-            </div>
-
-            <div className="profileList">
-              {llmProfiles.map((profile) => (
-                <article className="profileItem" key={profile.profileId}>
-                  <input type="checkbox" checked={selectedProfileIds.includes(profile.profileId)} onChange={() => toggleProfileSelection(profile.profileId)} aria-label={`选择 ${profile.name}`} />
-                  <div>
-                    <strong>{profile.name}</strong>
-                    <span>{profile.baseURL} / {profile.model} / {profile.hasKey ? "已保存 Key" : "未保存 Key"}{profile.providerData ? " / 有兼容参数" : ""}{profile.active ? " / 当前启用" : ""}</span>
-                  </div>
-                  <button onClick={() => editLlmProfile(profile)} title="编辑配置档案"><Pencil size={16} /></button>
-                  <button onClick={() => activateProfile(profile.profileId)} disabled={profile.active} title="启用配置档案"><CheckCircle size={16} /></button>
-                </article>
-              ))}
-              {!llmProfiles.length && <div className="empty">暂无模型配置档案。</div>}
-            </div>
-          </section>
-        </section>
+        <SettingsPage
+          llmForm={llmForm}
+          setLlmForm={setLlmForm}
+          showLlmApiKey={showLlmApiKey}
+          setShowLlmApiKey={setShowLlmApiKey}
+          llmStatus={llmStatus}
+          llmRuntime={llmRuntime}
+          onSaveLlm={() => void saveLlmSettings()}
+          onTestLlm={() => void testLlmSettings()}
+          onTestAgentCompatibility={() => void testAgentCompatibility()}
+          onReloadLlmConfig={() => { void loadLlmSettings(); void loadLlmProfiles(); void loadLlmRuntime(); }}
+          llmProfiles={llmProfiles}
+          selectedProfileIds={selectedProfileIds}
+          onToggleProfileSelect={(profileId) => toggleProfileSelection(profileId)}
+          onSelectAllProfiles={() => setSelectedProfileIds(llmProfiles.map((profile) => profile.profileId))}
+          onClearProfileSelection={() => setSelectedProfileIds([])}
+          onDeleteSelectedProfiles={() => void deleteSelectedProfiles()}
+          onEditProfile={(profile) => editLlmProfile(profile)}
+          onActivateProfile={(profileId) => void activateProfile(profileId)}
+          mcpServers={mcpServers}
+        />
       ) : (
       <section className="workbenchShell">
         <aside className="caseRail panel">
@@ -1992,86 +1780,15 @@ function openWireshark(pcap,filter){fetch("${window.location.origin}/api/cases/$
               ) : null}
             </section>
 
-            <div className="chatMessages" ref={chatMessagesRef}>
-              {chatMessages.length ? chatMessages.map((message) => (
-                <article className={`chatBubble ${message.role === "user" ? "userBubble" : "assistantBubble"}`} key={message.id}>
-                  <div className="chatBubbleHeader">
-                    <strong>{message.role === "user" ? "你" : "Agent"}{message.streaming ? " 正在输出..." : ""}</strong>
-                    <button className="copyButton" onClick={() => copyMessage(message)} type="button">
-                      <Copy size={14} />
-                      {copiedMessageId === message.id ? "已复制" : "复制"}
-                    </button>
-                  </div>
-                  {displayThoughts(message).length ? (
-                    <details className="thoughtBox" open>
-                      <summary>执行轨迹</summary>
-                      <ol>{displayThoughts(message).map((thought, index) => <li key={`${message.id}-thought-${index}`}>{thought}</li>)}</ol>
-                    </details>
-                  ) : null}
-                  {message.role === "assistant" && message.stepEvidence && Object.keys(message.stepEvidence).length ? (
-                    <div className="stepEvidenceLinks">
-                      {Object.entries(message.stepEvidence).map(([idx, step]) => step.evidenceCards.length ? (
-                        <div key={`${message.id}-se-${idx}`} className="stepEvidenceLink">
-                          <span className="stepEvidenceLabel">步骤 {Number(idx) + 1}：{step.purpose}</span>
-                          <button type="button" onClick={() => openEvidenceDetail(message, graph?.spec.caseId || "", Number(idx))}>
-                            {step.evidenceCards.length} 张卡片
-                          </button>
-                        </div>
-                      ) : null)}
-                    </div>
-                  ) : null}
-                  {message.role === "assistant" && !message.streaming && message.content ? (
-                    <div className="markdownBody" dangerouslySetInnerHTML={{ __html: renderMarkdown(message.content) }} />
-                  ) : (
-                    <p>{message.content || (message.streaming ? "等待模型返回..." : "")}</p>
-                  )}
-	                  {message.role === "assistant" && !message.streaming && message.evidenceCards?.length ? (
-	                    <div className="evidenceRefLink">
-	                      <button type="button" onClick={() => openEvidenceDetail(message, graph?.spec.caseId || "")}>
-	                        查看证据详情（{message.evidenceCards.length} 张卡片）
-	                      </button>
-	                    </div>
-	                  ) : null}
-	                  {message.role === "assistant" && !message.streaming && message.hypotheses?.length ? (
-	                    <div className="hypothesesPanel">
-	                      <div className="hypothesesTitle">假设验证进度</div>
-	                      {message.hypotheses.map((h, index) => (
-	                        <div key={`${message.id}-h-${index}`} className={`hypothesisItem hypothesis-${h.status}`}>
-	                          <span className="hypothesisStatus">{h.status === "confirmed" ? "✓" : h.status === "ruled_out" ? "✗" : h.status === "testing" ? "◎" : "○"}</span>
-	                          <span className="hypothesisDesc">{h.description}</span>
-	                        </div>
-	                      ))}
-	                    </div>
-	                  ) : null}
-	                  {message.role === "assistant" && !message.streaming && message.followUpQuestions?.length ? (
-	                    <div className="followUpQuestions">
-	                      <div className="followUpTitle">你可以回答：</div>
-	                      {message.followUpQuestions.map((q, index) => (
-	                        <button type="button" className="followUpButton" key={`${message.id}-fq-${index}`} onClick={() => { setQuestion(q); }}>{q}</button>
-	                      ))}
-	                    </div>
-	                  ) : null}
-                  {message.suggestedQueries?.length ? (
-                    <div className="suggestedQueries">
-                      {message.suggestedQueries.map((sq, index) => (
-                        <button type="button" className="suggestedQuery" key={`${message.id}-sq-${index}`} title={sq.reason} onClick={() => { setQuestion(sq.question); }}>{sq.question}</button>
-                      ))}
-                    </div>
-                  ) : null}
-                </article>
-              )) : (
-                <article className="chatBubble assistantBubble">
-                  <strong>Agent</strong>
-                  <p>Agent 只读取当前 case graph，不直接解析 pcap。选择模型和深度后，可以直接询问当前访问链路的问题。</p>
-                </article>
-              )}
-              {llmRuntime?.agent.lastError ? (
-                <article className="chatBubble errorBubble">
-                  <strong>最近错误</strong>
-                  <p>{llmRuntime.agent.lastError}</p>
-                </article>
-              ) : null}
-            </div>
+            <MessageList
+              messages={chatMessages}
+              copiedMessageId={copiedMessageId}
+              llmRuntime={llmRuntime}
+              containerRef={chatMessagesRef}
+              onCopy={(message) => void copyMessage(message)}
+              onOpenEvidence={(message, stepIndex) => openEvidenceDetail(message, graph?.spec.caseId || "", stepIndex)}
+              onSelectQuestion={(q) => setQuestion(q)}
+            />
 
             <div
               className={`chatComposer ${dragActive ? "dragActive" : ""} ${composerExpanded ? "expanded" : ""}`}
@@ -2157,454 +1874,29 @@ function openWireshark(pcap,filter){fetch("${window.location.origin}/api/cases/$
                     <option value="高">推理：高</option>
                   </select>
                 </div>
-                <button className="composerSendButton" onClick={ask} disabled={!question.trim() && !composerFiles.length} title="发送">
-                  <ArrowUp size={22} />
+                <button
+                  className={`composerSendButton ${isAsking ? "stopButton" : ""}`}
+                  onClick={() => {
+                    if (isAsking) {
+                      abortControllerRef.current?.abort();
+                    } else {
+                      void ask();
+                    }
+                  }}
+                  disabled={!isAsking && !question.trim() && !composerFiles.length}
+                  title={isAsking ? "停止" : "发送"}
+                >
+                  {isAsking ? <Square size={16} /> : <ArrowUp size={22} />}
                 </button>
               </div>
             </div>
           </section>
         </section>
 
-        <aside className="insightDock panel">
-          <section className="queryPanel">
-            <h2>当前查询</h2>
-            {activeQueryRun ? (
-              <>
-                <p>{activeQueryRun.question || "按条件查询"}</p>
-                <code>{activeQueryRun.displayFilter}</code>
-                <span>链路组 {activeCandidateGroups.length} / 通讯对 {activeQueryRun.totalConversationCount || activeQueryRun.conversations.length} / {activeQueryRun.path?.confidence || "-"}</span>
-              </>
-            ) : <div className="empty">向 Agent 提问，例如“分析 18:05:00 到 18:07:00，A 到 B 的 443”。</div>}
-          </section>
-
-          <section className="toolTracePanel">
-            <button
-              type="button"
-              className="toolTraceToggle"
-              onClick={() => setToolTraceOpen((value) => !value)}
-              aria-expanded={toolTraceOpen}
-            >
-              <span>
-                <strong>执行轨迹</strong>
-                <small>Agent / MCP / Wireshark 动作记录</small>
-              </span>
-              <span className="toolTraceToggleMeta">
-                <span className="statusBadge neutral">{graph?.toolRuns?.length || 0}</span>
-                <ChevronDown className={toolTraceOpen ? "open" : ""} size={18} />
-              </span>
-            </button>
-            {toolTraceOpen ? <p className="panelHint">用于复盘 Agent 调用了什么工具；点击记录可跳转 QueryRun、证据卡或打开过滤器。</p> : null}
-            {toolTraceOpen && graph?.toolRuns?.length ? (
-              <div className="toolTraceList">
-                {graph.toolRuns.slice(0, 8).map((run) => (
-                  <button
-                    type="button"
-                    key={run.toolRunId}
-                    className={`toolTraceRow ${run.status}`}
-                    onClick={() => void openToolRun(run)}
-                    title={toolRunDetail(run) || run.summary}
-                  >
-                    <div className="toolTraceRowMain">
-                      <div className="toolTraceRowHeader">
-                        <strong>{toolRunTitle(run)}</strong>
-                        <span className={`toolTraceStatus ${run.status}`}>{toolRunStatusLabel(run.status)}</span>
-                      </div>
-                      <p>{run.summary}</p>
-                      <div className="toolTraceMeta">
-                        <span>{toolRunKindLabel(run)}</span>
-                        <span>{run.target}</span>
-                        {run.durationMs !== undefined ? <span>{Math.round(run.durationMs)}ms</span> : null}
-                        {run.queryRunId ? <span>QueryRun</span> : null}
-                        {run.evidenceCardIds?.length ? <span>{run.evidenceCardIds.length} 证据</span> : null}
-                      </div>
-                    </div>
-                    <span className="toolTraceAction">{toolRunActionLabel(run)}</span>
-                  </button>
-                ))}
-              </div>
-            ) : toolTraceOpen ? <div className="empty">尚无持久化执行轨迹。</div> : null}
-          </section>
-
-          <section className="insightsPanel">
-            <button
-              type="button"
-              className="toolTraceToggle"
-              onClick={() => setInsightsOpen((value) => !value)}
-              aria-expanded={insightsOpen}
-            >
-              <span>
-                <strong>数据包洞察</strong>
-                <small>自动检测的连接异常和时序问题</small>
-              </span>
-              <span className="toolTraceToggleMeta">
-                {(() => {
-                  const critical = (graph?.insights || []).filter((i) => i.severity === "critical").length;
-                  const warning = (graph?.insights || []).filter((i) => i.severity === "warning").length;
-                  return <>
-                    {critical ? <span className="statusBadge error">{critical}</span> : null}
-                    {warning ? <span className="statusBadge warn">{warning}</span> : null}
-                    {!critical && !warning ? <span className="statusBadge neutral">{graph?.insights?.length || 0}</span> : null}
-                  </>;
-                })()}
-                <ChevronDown className={insightsOpen ? "open" : ""} size={18} />
-              </span>
-            </button>
-            {insightsOpen && graph?.insights?.length ? (
-              <div className="insightList">
-                {graph.insights.map((insight) => (
-                  <div key={insight.insightId} className={`insightRow ${insight.severity}`}>
-                    <span className={`insightSev ${insight.severity}`}>
-                      {insight.severity === "critical" ? "严重" : insight.severity === "warning" ? "警告" : "信息"}
-                    </span>
-                    <div className="insightContent">
-                      <p>{insight.description}</p>
-                      {insight.type === "cross_protocol_chain" && (insight.detail as Record<string, unknown>)?.stages ? (
-                        <WaterfallChart stages={(insight.detail as Record<string, unknown>).stages as Array<{ stage: string; timestamp: number; deltaMs: number; summary: string }>} />
-                      ) : null}
-                      {insight.scenario ? <small className="insightScenario">可能场景：{insight.scenario}</small> : null}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : insightsOpen ? <div className="empty">暂无洞察结果，请先向 Agent 提问以触发分析。</div> : null}
-          </section>
-
-          {selectedEvidenceCard ? (
-            <section ref={evidenceContextRef} className={`evidenceContextPanel ${rightPanelHighlight === "evidence" ? "traceFocus" : ""}`}>
-              <div className="panelTitleRow">
-                <h2>当前证据</h2>
-                <span className="statusBadge neutral">{selectedEvidenceCard.kind}</span>
-              </div>
-              <article className={`evidenceContextCard ${selectedEvidenceCard.kind}`}>
-                <strong>{selectedEvidenceCard.title}</strong>
-                <p>{selectedEvidenceCard.summary}</p>
-                <div className="selectedFilterBox">
-                  <span>完整过滤器</span>
-                  <code>{selectedEvidenceCard.displayFilter || "-"}</code>
-                </div>
-                {selectedEvidenceCard.packetDisplayFilter || selectedEvidenceCard.frameNumber ? (
-                  <div className="selectedFilterBox">
-                    <span>定位帧</span>
-                    <code>{selectedEvidenceCard.packetDisplayFilter || `frame.number == ${selectedEvidenceCard.frameNumber}`}</code>
-                  </div>
-                ) : null}
-                {selectedEvidencePacket ? (
-                  <div className="evidencePacketSummary">
-                    <span>Frame {selectedEvidencePacket.frameNumber}</span>
-                    <span>{selectedEvidencePacket.srcIp}:{selectedEvidencePacket.srcPort}{" -> "}{selectedEvidencePacket.dstIp}:{selectedEvidencePacket.dstPort}</span>
-                    <span>{packetMarkers(selectedEvidencePacket).join("，") || selectedEvidencePacket.protocol.toUpperCase()}</span>
-                  </div>
-                ) : null}
-                <div className="evidenceContextActions">
-                  {selectedEvidenceCard.pcapFilename && (selectedEvidenceCard.displayFilter || selectedEvidenceCard.frameNumber) ? <button type="button" onClick={() => void openEvidenceCard(selectedEvidenceCard)}>Wireshark</button> : null}
-                  {selectedEvidenceCard.displayFilter || selectedEvidenceCard.packetDisplayFilter ? <button type="button" onClick={() => void copyEvidenceFilter(selectedEvidenceCard)}>复制过滤器</button> : null}
-                </div>
-              </article>
-            </section>
-          ) : null}
-
-          {activeQueryRun?.protocolCorrelations?.length ? (
-            <section className="protocolCorrelationPanel">
-              <div className="panelTitleRow">
-                <h2>L7 关联</h2>
-                <span className="statusBadge neutral">{activeQueryRun.protocolCorrelations.length}</span>
-              </div>
-              <div className="protocolCorrelationList">
-                {activeQueryRun.protocolCorrelations.map((correlation) => (
-                  <article key={correlation.correlationId}>
-                    <div>
-                      <strong>{correlation.summary}</strong>
-                      <span>{correlation.kind} / {correlation.confidence}</span>
-                    </div>
-                    <code>{correlation.targetDisplayFilter}</code>
-                    {correlation.reasons.length ? <p>{correlation.reasons.join("；")}</p> : null}
-                    <div className="evidenceContextActions">
-                      <button type="button" onClick={() => void openProtocolCorrelation(correlation)}>Wireshark</button>
-                      <button type="button" onClick={() => void copyProtocolCorrelationFilter(correlation)}>复制过滤器</button>
-                    </div>
-                  </article>
-                ))}
-              </div>
-            </section>
-          ) : null}
-
-          <section className="conversationPanel">
-            <div className="panelTitleRow">
-              <h2>候选访问链路</h2>
-              <button onClick={openSelectedInWireshark} disabled={!selectedConversation}>打开 Wireshark</button>
-            </div>
-            {activeCandidateGroups.length ? (
-              <div className="accessGroupList">
-                {activeCandidateGroups.map((group) => (
-                  <button
-                    className={group.groupId === selectedCandidateGroup?.groupId ? "active" : ""}
-                    key={group.groupId}
-                    onClick={() => setSelectedCandidateGroupId(group.groupId)}
-                  >
-                    <div className="accessGroupHeader">
-                      <strong>{group.srcIp || "*"}{" -> "}{group.dstIp || "*"}:{group.dstPort ?? "*"}</strong>
-                      <span className={`statusBadge ${groupState(group).className}`}>{groupState(group).label}</span>
-                    </div>
-                    <div className="accessGroupMetrics">
-                      <span><b>{group.conversationCount}</b>通讯对</span>
-                      <span><b>{group.successCount}</b>成功</span>
-                      <span><b>{group.failureCount}</b>异常</span>
-                      <span><b>{group.rstCount}</b>RST</span>
-                      <span><b>{group.retransmissionCount}</b>重传</span>
-                      <span><b>{group.zeroWindowCount}</b>零窗</span>
-                    </div>
-                    <div className="failureModeLine" title={group.failureModes?.map((mode) => `${mode.label} ${mode.count}`).join("，") || "暂无"}>
-                      {group.failureModes?.length
-                        ? group.failureModes
-                          .slice(0, webConfig.groupFailureModeDisplayLimit)
-                          .map((mode) => <span key={mode.kind}>{mode.label} {mode.count}</span>)
-                        : <span>暂无形态</span>}
-                    </div>
-                  </button>
-                ))}
-              </div>
-            ) : null}
-            <div className="conversationTools">
-              <input
-                value={conversationSearch}
-                onChange={(event) => setConversationSearch(event.target.value)}
-                placeholder="搜索 IP、端口、节点"
-              />
-              <select value={conversationSort} onChange={(event) => setConversationSort(event.target.value as typeof conversationSort)}>
-                <option value="anomaly">异常优先</option>
-                <option value="packets">包数优先</option>
-                <option value="time">时间顺序</option>
-              </select>
-            </div>
-            {activeQueryRun?.conversations.length ? (
-              <p className="conversationCount">
-                当前链路组：{selectedCandidateGroup?.summary || "未选择"}；显示 {visibleConversations.length}/{filteredConversationCount} 条具体 conversation
-              </p>
-            ) : null}
-            {activeQueryRun?.conversations.length ? (
-              <div className="conversationList">
-                {visibleConversations.map((conversation) => {
-                  const state = conversationState(conversation);
-                  return (
-                    <button
-                      className={conversation.conversationId === activeQueryRun.selectedConversationId ? "active" : ""}
-                      onClick={() => selectConversation(activeQueryRun.queryRunId, conversation.conversationId)}
-                      key={conversation.conversationId}
-                    >
-                      <div className="conversationRowTop">
-                        <span className={`statusBadge ${state.className}`}>{state.label}</span>
-                        <strong>{formatEndpoint(conversation.srcIp, conversation.srcPort)}{" -> "}{formatEndpoint(conversation.dstIp, conversation.dstPort)}</strong>
-                      </div>
-                      <div className="conversationMetricRow">
-                        <span>{conversation.nodeId}</span>
-                        <span>{conversation.packetCount} 包</span>
-                        <span>{conversation.byteCount} B</span>
-                        <span>RST {conversation.rstCount}</span>
-                        <span>重传 {conversation.retransmissionCount}</span>
-                      </div>
-                      <div className="conversationMetaRow">
-                        <span>{formatShortPacketTime(conversation.startTime)} - {formatShortPacketTime(conversation.endTime)}</span>
-                        <span>持续 {formatDuration(conversation.startTime, conversation.endTime)}</span>
-                      </div>
-                      <span className="rankReasonLine" title={conversation.rankReasons?.join("，") || "符合当前查询条件"}>
-                        {conversation.rankReasons?.join("，") || "符合当前查询条件"}
-                      </span>
-                    </button>
-                  );
-                })}
-                {filteredConversationCount > visibleConversations.length ? <div className="conversationMore">还有 {filteredConversationCount - visibleConversations.length} 个候选，请继续搜索或调整排序。</div> : null}
-              </div>
-            ) : <div className="empty">暂无通讯对。</div>}
-          </section>
-
-          {selectedConversation && (
-            <section ref={selectedConversationRef} className={`selectedConversationPanel ${rightPanelHighlight === "conversation" ? "traceFocus" : ""}`}>
-              <h2>选中通讯对</h2>
-              <dl>
-                <dt>协议</dt><dd>{selectedConversation.protocol.toUpperCase()}</dd>
-                <dt>包数</dt><dd>{selectedConversation.packetCount}</dd>
-                <dt>字节</dt><dd>{selectedConversation.byteCount}</dd>
-                <dt>RST</dt><dd>{selectedConversation.rstCount}</dd>
-                <dt>重传</dt><dd>{selectedConversation.retransmissionCount}</dd>
-                <dt>Zero Window</dt><dd>{selectedConversation.zeroWindowCount}</dd>
-              </dl>
-              <div className="selectedFilterBox">
-                <span>Wireshark filter</span>
-                <code>{selectedConversation.displayFilter}</code>
-              </div>
-              {selectedDiagnosis && (
-                <div className="diagnosisPanel">
-                  <h3>确定性诊断</h3>
-                  <p>{selectedDiagnosis.summary}</p>
-                  <span>置信度：{selectedDiagnosis.confidence}</span>
-                  {selectedDiagnosis.checks?.length ? (
-                    <div className="diagnosisCheckGrid">
-                      {selectedDiagnosis.checks.map((check) => {
-                        const state = diagnosisCheckState(check.status);
-                        return (
-                          <article key={check.key}>
-                            <div>
-                              <strong>{check.label}</strong>
-                              <span className={`statusBadge ${state.className}`}>{state.label}</span>
-                            </div>
-                            <p>{check.summary}</p>
-                            {check.packetIds.length ? (
-                              <div className="diagnosisEvidenceActions">
-                                {check.packetIds.map((packetId) => {
-                                  const packet = [...conversationPackets, ...(graph?.packets || [])].find((item) => item.packetId === packetId);
-                                  return (
-                                    <button key={packetId} type="button" onClick={() => void openDiagnosisPacket(packetId)}>
-                                      {packet?.frameNumber ? `Frame ${packet.frameNumber}` : packetId}
-                                    </button>
-                                  );
-                                })}
-                              </div>
-                            ) : null}
-                          </article>
-                        );
-                      })}
-                    </div>
-                  ) : null}
-                  {selectedDiagnosis.diagnosticTags.length ? (
-                    <div className="diagnosisTags">
-                      {selectedDiagnosis.diagnosticTags.map((tag) => (
-                        <article key={tag.tagId}>
-                          <strong>{tag.kind}</strong>
-                          <span>{tag.summary}</span>
-                        </article>
-                      ))}
-                    </div>
-                  ) : null}
-                  {selectedDiagnosis.nextSteps.length ? <ul>{selectedDiagnosis.nextSteps.map((step) => <li key={step}>{step}</li>)}</ul> : null}
-                </div>
-              )}
-              <div className="keyPacketPanel">
-                <h3>关键包</h3>
-                {conversationPacketsStatus ? <p>{conversationPacketsStatus}</p> : null}
-                {keyConversationPackets.length ? (
-                  <div className="keyPacketList">
-                    {keyConversationPackets.map((packet) => (
-                      <article key={packet.packetId}>
-                        <strong>#{packet.frameNumber}</strong>
-                        <span>{packet.srcIp}:{packet.srcPort}{" -> "}{packet.dstIp}:{packet.dstPort}</span>
-                        <span>{packetMarkers(packet).join("，") || packet.protocol.toUpperCase()}</span>
-                        <small>{formatPacketTime(packet.timestamp)}</small>
-                      </article>
-                    ))}
-                  </div>
-                ) : conversationPacketsStatus ? null : <div className="empty">暂无关键包。</div>}
-              </div>
-            </section>
-          )}
-
-          <section className="caseStatusBar">
-            <h3 className="metricGroupTitle">基础统计</h3>
-            <article>
-              <span>抓包节点</span>
-              <strong>{graph?.captures.length || 0}</strong>
-            </article>
-            <article>
-              <span>捕获包</span>
-              <strong>{capturePacketTotal(graph)}</strong>
-            </article>
-            <article>
-              <span>筛选包</span>
-              <strong>{graph?.packets.length || 0}</strong>
-            </article>
-            <article>
-              <span>TCP 通信对</span>
-              <strong>{tcpCommunicationPairCount}</strong>
-            </article>
-            <article>
-              <span>TCP 会话片段</span>
-              <strong>{tcpConnectionCount}</strong>
-            </article>
-            <article>
-              <span>TCP 包</span>
-              <strong>{tcpPackets.length}</strong>
-            </article>
-            <article>
-              <span>跨节点关联</span>
-              <strong>{graph?.sessionLinks.length || 0}</strong>
-            </article>
-            <article>
-              <span>判断</span>
-              <strong>{graph?.findings.length || 0}</strong>
-            </article>
-            <article className="metricWide">
-              <span>当前筛选时间区间</span>
-              <b>{timeRange}</b>
-            </article>
-            <h3 className="metricGroupTitle">包级统计</h3>
-            <article>
-              <span>RST 包</span>
-              <strong>{packetCountByFlag("RST")}</strong>
-            </article>
-            <article>
-              <span>重传包</span>
-              <strong>{retransmissionPacketCount}</strong>
-            </article>
-            <article>
-              <span>Dup ACK 包</span>
-              <strong>{duplicateAckPacketCount}</strong>
-            </article>
-            <article>
-              <span>Zero Window 包</span>
-              <strong>{zeroWindowPacketCount}</strong>
-            </article>
-          </section>
-
-          <section className="evidenceDeck">
-            <h2>明细数据</h2>
-            <div className="detailLaunchGrid">
-              <button onClick={() => setDetailView("path")}>
-                <strong>访问路径</strong>
-                <span>{graph?.path.nodes.length || 0} 个节点</span>
-              </button>
-              <button onClick={() => setDetailView("findings")}>
-                <strong>判断结果</strong>
-                <span>{graph?.findings.length || 0} 条 finding</span>
-              </button>
-              <button onClick={() => setDetailView("sessions")}>
-                <strong>会话片段</strong>
-                <span>{graph?.sessions.length || 0} 个片段</span>
-              </button>
-              <button onClick={() => setDetailView("links")}>
-                <strong>跨节点关联</strong>
-                <span>{graph?.sessionLinks.length || 0} 条关联</span>
-              </button>
-              <button onClick={() => setDetailView("packets")}>
-                <strong>数据包</strong>
-                <span>{graph?.packets.length || 0} 个包</span>
-              </button>
-              <button onClick={() => setDetailView("events")}>
-                <strong>关键事件</strong>
-                <span>{graph?.evidence.length || 0} 条证据</span>
-              </button>
-              <button onClick={() => setDetailView("tcp_stream")}>
-                <strong>TCP 流</strong>
-                <span>查看完整 TCP 会话</span>
-              </button>
-              <button onClick={() => setDetailView("topology")}>
-                <strong>网络拓扑</strong>
-                <span>{graph?.networkTopology?.devices?.length || 0} 个设备</span>
-              </button>
-            </div>
-          </section>
-
-          <section className="reportPanel">
-            <h2>报告</h2>
-            <div className="mappingActions">
-              <button className="primary" onClick={exportReport} disabled={!graph}>生成报告</button>
-              <button onClick={copyReport} disabled={!report}>复制报告</button>
-            </div>
-            <pre>{report || "报告基于当前 QueryRun、当前证据卡、选中 session 和 checks 生成，不调用大模型。"}</pre>
-          </section>
-        </aside>
       </section>
       )}
         </section>
-      </section>
+      </AppShell>
       {createFlowOpen && (
         <section className="detailOverlay" role="dialog" aria-modal="true">
           <div className="createDialog">

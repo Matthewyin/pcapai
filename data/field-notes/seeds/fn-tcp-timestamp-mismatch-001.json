@@ -1,0 +1,28 @@
+{
+  "id": "fn-tcp-timestamp-mismatch-001",
+  "title": "TCP timestamp option 不匹配导致 SYN 无 SYN-ACK 响应",
+  "summary": "客户端发出 SYN 但服务端不回 SYN-ACK，常见误判为防火墙拦截，实际可能是 TCP options 中的 timestamp 不匹配。",
+  "protocols": ["TCP"],
+  "symptoms": ["SYN 无 SYN-ACK", "握手失败", "连接建立失败"],
+  "packetFeatures": {
+    "observedFlags": ["SYN"],
+    "missingFlags": ["SYN-ACK"],
+    "protocols": ["TCP"]
+  },
+  "candidateCauses": [
+    {
+      "cause": "TCP timestamp option 不匹配",
+      "rfcDocId": 7323,
+      "rfcSection": "3.2",
+      "likelihood": "medium",
+      "howToVerify": "对比两端 SYN 包的 TCP options 是否都含 timestamp；检查 sysctl net.ipv4.tcp_timestamps",
+      "skillIds": ["verify-tcp-options"]
+    },
+    {
+      "cause": "防火墙/中间设备拦截",
+      "likelihood": "medium",
+      "howToVerify": "检查沿途设备是否有 SYN 丢弃策略；查看是否有 ICMP unreachable"
+    }
+  ],
+  "source": "seed"
+}

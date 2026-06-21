@@ -3,6 +3,7 @@ node_modules/
 .npm-cache/
 dist/
 **/dist/
+apps/desktop/release/
 .DS_Store
 .playwright-mcp/
 .env

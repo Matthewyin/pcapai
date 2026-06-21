@@ -168,6 +168,13 @@ function pairConversation(pair: ProtocolPairGroup, queryRunId: string, index: nu
     rstCount,
     retransmissionCount,
     zeroWindowCount,
+    // 这是异常对聚合的合成 conversation，不来自 MCP 的 summarizeConversations，
+    // 方向级字段无真实数据，用安全默认（handshakePhase none → unknown，避免误判握手 ok）。
+    handshakePhase: "none",
+    forwardPacketCount: 0,
+    reversePacketCount: 0,
+    hasForwardPayload: false,
+    hasReversePayload: false,
     rankScore: pair.count,
     rankReasons: [`命中 ${pair.count} 个${metricKind === "rst" ? " RST" : metricKind === "retransmission" ? "重传" : metricKind === "zero_window" ? " Zero Window" : metricKind === "syn_no_synack" ? "未应答 SYN" : "单向流量"}包`],
     displayFilter: pair.displayFilter || "tcp"

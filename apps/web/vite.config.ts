@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import tailwindcss from "@tailwindcss/vite";
 
 function resolveWorkspaceRoot() {
   const candidates = [
@@ -35,7 +36,7 @@ const port = Number(process.env.PCAPAI_WEB_PORT || defaults.web.port);
 const apiTarget = process.env.PCAPAI_API_TARGET || defaults.web.apiTarget;
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), tailwindcss()],
   define: {
     __PCAPAI_WEB_CONFIG__: JSON.stringify({
       defaultQuestion: process.env.PCAPAI_DEFAULT_QUESTION || defaults.web.defaultQuestion,

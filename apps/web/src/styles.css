@@ -198,10 +198,66 @@ main.app > header {
   display: none;
 }
 
+/* 阶段 2 三栏新 UI：appShell 改为 flex，宽度由 useUIStore 拖拽控制 */
 .appShell {
-  display: grid;
-  grid-template-columns: 286px minmax(0, 1fr);
-  min-height: 100vh;
+  display: flex;
+  height: 100vh;
+  min-height: 0;
+}
+
+/* 两栏模式（非 workbench 页面，无右栏） */
+.appShellTwoCol {
+  /* flex 默认即可，children flex:1 自动占满 */
+}
+
+.appShellCol {
+  min-width: 0;
+  min-height: 0;
+}
+
+/* 左栏外壳：撑满分配宽度，内部 Sidebar.tsx 的 .appSidebar 自管 padding/scroll */
+.appSidebarWrap {
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* 右栏外壳：同上 */
+.appAgentPanel {
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* 拖拽手柄（取自 docs/ui-design/three-column-light.html） */
+.resizer {
+  width: 5px;
+  cursor: col-resize;
+  background: transparent;
+  flex-shrink: 0;
+  position: relative;
+  transition: background 0.15s;
+  z-index: 5;
+}
+
+.resizer:hover,
+.resizer.dragging {
+  background: var(--accent);
+}
+
+.resizer::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 3px;
+  height: 28px;
+  background: var(--line);
+  border-radius: 2px;
+}
+
+.resizer:hover::after,
+.resizer.dragging::after {
+  background: var(--accent);
 }
 
 .appSidebar {
@@ -496,6 +552,7 @@ main.app > header {
 }
 
 .appContent {
+  flex: 1;
   min-width: 0;
 }
 
@@ -543,9 +600,8 @@ main.app > header {
 }
 
 .workbenchShell {
-  align-items: start;
-  display: grid;
-  grid-template-columns: minmax(640px, 1fr) minmax(320px, 380px);
+  /* 阶段 2b：insightDock 移到 AppShell 右栏后，workbenchShell 只剩 chatPanel，改为单列 */
+  display: block;
   height: 100vh;
   min-height: 0;
   overflow: hidden;
@@ -603,12 +659,69 @@ main.app > header {
   top: 16px;
 }
 
+/* 阶段 2c：insightDock 升级为 AgentPanel 三 Tab 结构 */
 .insightDock {
-  align-content: start;
-  display: grid;
-  gap: 16px;
+  display: flex;
+  flex-direction: column;
   height: 100vh;
+  overflow: hidden;
+}
+
+/* Tab 导航栏（取自 docs/ui-design/three-column-light.html .panel-tabs） */
+.insightDock .panelTabs {
+  display: flex;
+  border-bottom: 1px solid var(--line);
+  flex-shrink: 0;
+}
+
+.insightDock .panelTab {
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  color: var(--text);
+  cursor: pointer;
+  flex: 1;
+  font-size: 12px;
+  font-weight: 500;
+  min-height: 38px;
+  padding: 10px 4px;
+  text-align: center;
+}
+
+.insightDock .panelTab:hover {
+  background: var(--status-bg);
+}
+
+.insightDock .panelTab.active {
+  border-bottom-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.insightDock .tabCount {
+  background: var(--status-bg);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 10px;
+  margin-left: 3px;
+  padding: 0 5px;
+}
+
+/* Tab 内容区：可滚动 */
+.insightDock .panelBody {
+  flex: 1;
   overflow-y: auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* 各 Tab 内部 section 容器 */
+.insightDock .knowledgeTab,
+.insightDock .traceTab,
+.insightDock .diagnosisTab {
+  display: contents;
 }
 
 .insightDock .caseStatusBar {
@@ -1720,6 +1833,27 @@ main.app > header {
 }
 
 .markdownBody strong { font-weight: 600; }
+.markdownBody table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 8px 0;
+  font-size: 0.9em;
+  display: block;
+  overflow-x: auto;
+}
+.markdownBody th, .markdownBody td {
+  border: 1px solid var(--line);
+  padding: 6px 10px;
+  text-align: left;
+  white-space: normal;
+}
+.markdownBody th {
+  background: var(--panel-2);
+  font-weight: 600;
+}
+.markdownBody tr:nth-child(even) td {
+  background: rgba(128, 128, 128, 0.04);
+}
 
 .evidenceRefLink {
   display: flex;
@@ -1848,6 +1982,16 @@ main.app > header {
 
 .composerSendButton:disabled {
   color: var(--muted);
+  opacity: 0.55;
+}
+
+.composerSendButton.stopButton {
+  background: rgba(220, 38, 38, 0.15);
+  border-color: rgba(220, 38, 38, 0.4);
+  color: rgb(220, 38, 38);
+  opacity: 1;
+}
+.composerSendButton.stopButton:disabled {
   opacity: 0.55;
 }
 
@@ -2541,6 +2685,46 @@ pre {
   white-space: nowrap;
 }
 
+.mcpList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.mcpItem {
+  background: var(--surface-raised, rgba(0, 0, 0, 0.06));
+  border: 1px solid var(--border-subtle, rgba(0, 0, 0, 0.08));
+  border-radius: 8px;
+  padding: 12px 14px;
+}
+.mcpItemHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.mcpItemHeader strong {
+  font-size: 13px;
+}
+.mcpKind {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--text-secondary, rgba(0, 0, 0, 0.5));
+  background: var(--surface-sunken, rgba(0, 0, 0, 0.04));
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+.mcpDescription {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-secondary, rgba(0, 0, 0, 0.6));
+  margin: 0 0 6px;
+}
+.mcpMeta {
+  font-size: 11px;
+  color: var(--text-tertiary, rgba(0, 0, 0, 0.4));
+}
+
 .path {
   align-items: center;
   background:
@@ -2760,9 +2944,7 @@ pre {
   white-space: pre-wrap;
 }
 
-.workbenchShell {
-  grid-template-columns: minmax(680px, 1fr) minmax(300px, 360px);
-}
+/* 阶段 2b：workbenchShell 已改为单列，原 grid-template-columns 覆盖删除 */
 
 .chatComposer.dragActive {
   border-color: var(--accent);
@@ -3227,4 +3409,477 @@ pre {
   width: 100%;
   min-height: 120px;
   margin: 8px 0;
+}
+
+/* 知识库管理页 */
+.knowledgeList { display: flex; flex-direction: column; gap: 14px; padding: 16px 0; }
+.knowledgeCard { border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; background: var(--surface); }
+.knowledgeCard header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 8px; }
+.knowledgeCard h3 { margin: 0; font-size: 15px; }
+.knowledgeMeta { display: flex; gap: 12px; align-items: center; font-size: 12px; color: var(--text-dim); flex-shrink: 0; }
+.knowledgeMeta em.warn { color: var(--warn); }
+.causeList { list-style: none; padding: 0; margin: 8px 0; display: flex; flex-direction: column; gap: 4px; }
+.causeList li { font-size: 13px; padding: 6px 10px; background: var(--surface-2); border-radius: 6px; }
+.causeList li em { color: var(--accent); margin-left: 6px; font-style: normal; }
+.causeList li small { display: block; color: var(--text-dim); margin-top: 2px; }
+.knowledgeActions { display: flex; gap: 8px; margin-top: 10px; }
+.knowledgeActions button { font-size: 13px; padding: 4px 12px; }
+
+.skillLayout { display: grid; grid-template-columns: 280px 1fr; gap: 16px; min-height: 400px; }
+.skillList { display: flex; flex-direction: column; gap: 6px; }
+.skillItem { display: flex; flex-direction: column; gap: 2px; text-align: left; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); cursor: pointer; }
+.skillItem.active { border-color: var(--accent); }
+.skillItem strong { font-size: 13px; }
+.skillItem span { font-size: 12px; color: var(--text-dim); }
+.skillDetail { border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; background: var(--surface); display: flex; flex-direction: column; gap: 10px; }
+.skillDetailHeader { display: flex; justify-content: space-between; align-items: center; }
+.skillDetailHeader h3 { margin: 0; font-size: 15px; }
+.skillBody { background: var(--surface-2); padding: 12px; border-radius: 6px; font-size: 13px; max-height: 60vh; overflow: auto; white-space: pre-wrap; margin: 0; }
+
+.statusList { display: grid; grid-template-columns: 140px 1fr; gap: 8px 16px; font-size: 14px; }
+.statusList dt { color: var(--text-dim); }
+.statusList dd { margin: 0; }
+.statusList em.warn { color: var(--warn); }
+
+@media (max-width: 768px) {
+  .skillLayout { grid-template-columns: 1fr; }
+}
+
+/* ============================================================
+ * 阶段 2d：根因卡 + 飞轮反馈（防幻觉分层渲染）
+ * 取自 docs/ui-design/diagnosis-card-prototype.html + three-column-light.html
+ * rfcVerified=true → 绿色（高可信）/ rfcVerified=false → 琥珀色（需核实）
+ * ============================================================ */
+
+/* 根因 section 标题 */
+.rootCauseSection {
+  border-top: 1px solid var(--line);
+  padding-top: 14px;
+}
+
+.rootCauseSection .panelSectionTitle {
+  align-items: baseline;
+  display: flex;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.rootCauseSection .panelSectionTitle h2 {
+  font-size: 14px;
+  font-weight: 600;
+  margin: 0;
+}
+
+.rcSummary {
+  color: var(--faint);
+  font-size: 11px;
+}
+
+/* 单张根因卡 */
+.rootCauseCard {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-left: 3px solid;
+  border-radius: 8px;
+  margin-bottom: 8px;
+  padding: 11px 13px;
+}
+
+.rootCauseCard.rcVerified {
+  background: var(--rc-verified-bg);
+  border-color: var(--rc-verified-border);
+  border-left-color: var(--rc-verified-accent);
+}
+
+.rootCauseCard.rcSpec {
+  background: var(--rc-spec-bg);
+  border-color: var(--rc-spec-border);
+  border-left-color: var(--rc-spec-accent);
+}
+
+.rcHeader {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.rcTag {
+  align-items: center;
+  border-radius: 4px;
+  display: inline-flex;
+  font-size: 10px;
+  font-weight: 600;
+  gap: 3px;
+  padding: 2px 7px;
+}
+
+.rcTagVerified {
+  background: var(--rc-tag-verified-bg);
+  color: var(--rc-tag-verified-text);
+}
+
+.rcTagSpec {
+  background: var(--rc-tag-spec-bg);
+  color: var(--rc-tag-spec-text);
+}
+
+.rcConfidence {
+  color: var(--faint);
+  font-size: 11px;
+}
+
+.rcCause {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.5;
+  margin: 0;
+}
+
+.rfcChip {
+  border-radius: 4px;
+  display: inline-block;
+  font-family: monospace;
+  font-size: 11px;
+  margin-top: 6px;
+  padding: 2px 8px;
+}
+
+.rfcChipVerified {
+  background: var(--rc-rfc-verified-bg);
+  color: var(--rc-rfc-verified-text);
+}
+
+.rfcChipSpec {
+  background: var(--rc-rfc-spec-bg);
+  color: var(--rc-rfc-spec-text);
+}
+
+.rcEvidence {
+  color: var(--faint);
+  display: flex;
+  font-size: 11px;
+  gap: 12px;
+  margin-top: 6px;
+}
+
+/* 飞轮反馈 */
+.flywheel {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 11px 13px;
+}
+
+.fwQuestion {
+  color: var(--text);
+  font-size: 12px;
+  margin: 0 0 8px;
+}
+
+.flywheelBtns {
+  display: flex;
+  gap: 8px;
+}
+
+.fwBtn {
+  background: var(--control);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--text);
+  cursor: pointer;
+  flex: 1;
+  font-size: 12px;
+  justify-content: center;
+  padding: 6px;
+}
+
+.fwBtn.fwYes {
+  border-color: var(--rc-verified-accent);
+  color: var(--rc-tag-verified-text);
+}
+
+.fwBtn.fwNo {
+  border-color: var(--rc-spec-accent);
+  color: var(--rc-tag-spec-text);
+}
+
+.fwBtn:hover {
+  background: var(--control-hover);
+}
+
+.flywheelDone {
+  color: var(--text);
+  font-size: 12px;
+  margin: 0;
+}
+
+/* 根因语义色 —— 暗色（默认 :root） */
+:root {
+  --rc-verified-bg: rgba(26, 127, 55, 0.12);
+  --rc-verified-border: rgba(26, 127, 55, 0.3);
+  --rc-verified-accent: #2da44e;
+  --rc-tag-verified-bg: rgba(26, 127, 55, 0.25);
+  --rc-tag-verified-text: #56d364;
+  --rc-rfc-verified-bg: rgba(9, 105, 218, 0.18);
+  --rc-rfc-verified-text: #79c0ff;
+
+  --rc-spec-bg: rgba(154, 103, 0, 0.12);
+  --rc-spec-border: rgba(154, 103, 0, 0.3);
+  --rc-spec-accent: #d29922;
+  --rc-tag-spec-bg: rgba(154, 103, 0, 0.25);
+  --rc-tag-spec-text: #e3b341;
+  --rc-rfc-spec-bg: rgba(154, 103, 0, 0.15);
+  --rc-rfc-spec-text: #e3b341;
+}
+
+/* 根因语义色 —— 亮色（WCAG AAA 对比度优化） */
+.app[data-theme="light"] {
+  --rc-verified-bg: #dafbe1;
+  --rc-verified-border: #aceebb;
+  --rc-verified-accent: #1a7f37;
+  --rc-tag-verified-bg: #dafbe1;
+  --rc-tag-verified-text: #0a3622;
+  --rc-rfc-verified-bg: #ddf4ff;
+  --rc-rfc-verified-text: #0550ae;
+
+  --rc-spec-bg: #fff8c5;
+  --rc-spec-border: #f4e3a1;
+  --rc-spec-accent: #9a6700;
+  --rc-tag-spec-bg: #fff8c5;
+  --rc-tag-spec-text: #5d4400;
+  --rc-rfc-spec-bg: #fff8c5;
+  --rc-rfc-spec-text: #6b4d00;
+}
+
+/* ============================================================
+ * 阶段 3a：RFC 库管理面板（设置页）+ 知识脉络 Tab
+ * ============================================================ */
+
+/* RFC 库面板（设置页） */
+.rfcLibraryPanel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.settingsPanelHeader {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+}
+
+.rfcTierStatus h3,
+.rfcDownloadSection h3 {
+  font-size: 12px;
+  font-weight: 600;
+  margin: 0 0 6px;
+}
+
+.tierBadge {
+  align-items: center;
+  display: flex;
+  gap: 6px;
+  margin: 0;
+}
+
+.tierBadge small {
+  color: var(--faint);
+  font-size: 11px;
+}
+
+.tierFull { color: var(--rc-verified-accent); }
+.tierCurated { color: var(--rc-spec-accent); }
+.tierNone { color: var(--danger); }
+
+.rfcMeta {
+  color: var(--faint);
+  display: block;
+  font-size: 11px;
+  margin-top: 4px;
+}
+
+.rfcDownloadHint,
+.rfcAlreadyFull {
+  color: var(--faint);
+  font-size: 12px;
+  margin: 0 0 10px;
+}
+
+/* 下载进度条 */
+.downloadProgress {
+  background: var(--status-bg);
+  border-radius: 6px;
+  height: 24px;
+  margin-bottom: 8px;
+  min-width: 200px;
+  overflow: hidden;
+  position: relative;
+}
+
+.progressBar {
+  background: var(--accent);
+  height: 100%;
+  transition: width 0.3s ease;
+}
+
+.progressText {
+  align-items: center;
+  color: var(--text);
+  display: flex;
+  font-size: 11px;
+  font-weight: 500;
+  height: 100%;
+  justify-content: center;
+  left: 0;
+  position: absolute;
+  top: 0;
+  width: 100%;
+}
+
+.downloadDone {
+  align-items: center;
+  color: var(--rc-verified-accent);
+  display: flex;
+  font-size: 12px;
+  gap: 12px;
+  margin: 0;
+}
+
+.dangerLink {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  color: var(--danger);
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 11px;
+  gap: 3px;
+  padding: 0;
+}
+
+.dangerLink:hover { text-decoration: underline; }
+
+.rfcDownloadActions {
+  display: flex;
+  gap: 8px;
+}
+
+/* 加载旋转动画（lucide Loader2 用） */
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+.spin { animation: spin 1s linear infinite; }
+
+/* ============================================================
+ * 知识脉络 Tab（右栏 AgentPanel）
+ * ============================================================ */
+.knowledgeTab {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.knowledgeTab .panelSection {
+  display: flex;
+  flex-direction: column;
+}
+
+.knowledgeTab .panelSectionTitle {
+  align-items: center;
+  color: var(--faint);
+  display: flex;
+  font-size: 11px;
+  font-weight: 600;
+  gap: 6px;
+  letter-spacing: 0.3px;
+  margin-bottom: 8px;
+  text-transform: uppercase;
+}
+
+/* 实战库命中卡（取自 three-column-light.html .fn-hit） */
+.fnHit {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent);
+  border-radius: 6px;
+  margin-bottom: 8px;
+  padding: 10px 12px;
+}
+
+.fnHit .fnTitle {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.fnHit .fnMeta {
+  align-items: center;
+  color: var(--faint);
+  display: flex;
+  font-size: 10px;
+  gap: 8px;
+  margin-top: 3px;
+}
+
+.fnHit .fnVerified { color: var(--rc-verified-accent); }
+
+.fnHit .fnScore {
+  background: var(--status-bg);
+  border-radius: 3px;
+  color: var(--accent);
+  padding: 1px 6px;
+}
+
+/* Skill 卡（取自 .skill-card） */
+.skillMini {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  margin-bottom: 6px;
+  padding: 9px 11px;
+}
+
+.skillMini .skName {
+  color: var(--accent);
+  font-family: monospace;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.skillMini .skDesc {
+  color: var(--faint);
+  font-size: 11px;
+  margin-top: 2px;
+}
+
+/* RFC 引用条（取自 .rfc-ref） */
+.rfcRefRow {
+  align-items: center;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  display: flex;
+  gap: 6px;
+  margin-bottom: 5px;
+  padding: 7px 10px;
+}
+
+.rfcRefRow .rfcNum {
+  color: var(--accent);
+  font-family: monospace;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.rfcRefRow .rfcSec {
+  color: var(--faint);
+  font-size: 10px;
+}
+
+.rfcRefRow .rfcVerifiedTag {
+  color: var(--rc-verified-accent);
+  font-size: 10px;
+  margin-left: auto;
 }

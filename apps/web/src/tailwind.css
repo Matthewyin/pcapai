@@ -1,0 +1,48 @@
+/*
+ * Tailwind v4 入口（CSS-first 配置）。
+ * 阶段 0：新旧并存。本文件只启用 theme + utilities，禁用 Preflight（reset），
+ * 避免破坏现有 styles.css 的默认样式。
+ * 迁移完成后（阶段 2）再考虑启用 Preflight。
+ *
+ * 引入方式：main.tsx 里在 styles.css 之后 import 本文件（让 Tailwind utilities 可覆盖）。
+ */
+@import "tailwindcss/theme" layer(theme);
+@import "tailwindcss/utilities" layer(utilities);
+/* 注意：故意不 import tailwindcss/preflight，避免 reset 破坏现有样式 */
+
+/*
+ * Design tokens：映射现有 styles.css 的 CSS 变量到 Tailwind theme。
+ * 这样组件用 bg-panel / text-accent / border-line 等 utility 时，
+ * 自动跟随现有主题（暗色/亮色切换也能工作，因为引用的是 CSS 变量）。
+ */
+@theme {
+  /* 颜色（引用 styles.css 的 :root / [data-theme] 变量）*/
+  --color-bg: var(--bg);
+  --color-panel: var(--panel);
+  --color-panel-2: var(--panel-2);
+  --color-panel-3: var(--panel-3);
+  --color-card: var(--card);
+  --color-control: var(--control);
+  --color-control-hover: var(--control-hover);
+  --color-input-bg: var(--input-bg);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-text: var(--text);
+  --color-muted: var(--muted);
+  --color-faint: var(--faint);
+  --color-accent: var(--accent);
+  --color-accent-2: var(--accent-2);
+  --color-warn: var(--warn);
+  --color-danger: var(--danger);
+  --color-ok: var(--ok);
+
+  /* 语义色（根因分层用，跟随主题）*/
+  --color-verified: #1a7f37;
+  --color-verified-soft: #dafbe1;
+  --color-speculative: #9a6700;
+  --color-speculative-soft: #fff8c5;
+
+  /* 字体 */
+  --font-sans: "Avenir Next", "SF Pro Text", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-mono: "SF Mono", "JetBrains Mono", "Menlo", monospace;
+}
