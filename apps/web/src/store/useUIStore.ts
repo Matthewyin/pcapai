@@ -37,6 +37,9 @@ type UIState = {
   /** 三栏宽度（拖拽调整，localStorage 持久化） */
   sidebarWidth: number;
   agentPanelWidth: number;
+  /** 左右栏折叠态（true=隐藏）。折叠按钮在栏顶部，展开按钮浮在边缘 */
+  sidebarCollapsed: boolean;
+  agentPanelCollapsed: boolean;
 
   setPage: (page: Page) => void;
   setTheme: (theme: Theme) => void;
@@ -44,6 +47,8 @@ type UIState = {
   setDetailView: (view: DetailView | null) => void;
   setSidebarWidth: (width: number) => void;
   setAgentPanelWidth: (width: number) => void;
+  toggleSidebar: () => void;
+  toggleAgentPanel: () => void;
 };
 
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
@@ -57,13 +62,17 @@ export const useUIStore = create<UIState>()(
       detailView: null,
       sidebarWidth: SIDEBAR_DEFAULT,
       agentPanelWidth: AGENT_PANEL_DEFAULT,
+      sidebarCollapsed: false,
+      agentPanelCollapsed: false,
 
       setPage: (page) => set({ page }),
       setTheme: (theme) => set({ theme }),
       toggleTheme: () => set({ theme: get().theme === "dark" ? "light" : "dark" }),
       setDetailView: (detailView) => set({ detailView }),
       setSidebarWidth: (width) => set({ sidebarWidth: clamp(width, SIDEBAR_MIN, SIDEBAR_MAX) }),
-      setAgentPanelWidth: (width) => set({ agentPanelWidth: clamp(width, AGENT_PANEL_MIN, AGENT_PANEL_MAX) })
+      setAgentPanelWidth: (width) => set({ agentPanelWidth: clamp(width, AGENT_PANEL_MIN, AGENT_PANEL_MAX) }),
+      toggleSidebar: () => set({ sidebarCollapsed: !get().sidebarCollapsed }),
+      toggleAgentPanel: () => set({ agentPanelCollapsed: !get().agentPanelCollapsed })
     }),
     {
       name: "pcapai-ui",
@@ -71,7 +80,9 @@ export const useUIStore = create<UIState>()(
       partialize: (state) => ({
         theme: state.theme,
         sidebarWidth: state.sidebarWidth,
-        agentPanelWidth: state.agentPanelWidth
+        agentPanelWidth: state.agentPanelWidth,
+        sidebarCollapsed: state.sidebarCollapsed,
+        agentPanelCollapsed: state.agentPanelCollapsed
       })
     }
   )
