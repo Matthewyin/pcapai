@@ -324,6 +324,7 @@ a,
   position: absolute;
   transition: opacity 0.15s, color 0.15s;
   width: 26px;
+  z-index: 10; /* 高于 titleBarDrag(3)，确保可点击 */
   z-index: 10;
 }
 
@@ -362,8 +363,10 @@ a,
   height: 26px;
   justify-content: center;
   margin: 8px 4px;
+  position: relative;
   transition: color 0.15s, border-color 0.15s;
   width: 26px;
+  z-index: 10; /* 高于 titleBarDrag(3)，确保折叠后仍可点击展开 */
 }
 
 .sidebarExpandBtn:hover,
