@@ -226,7 +226,7 @@ main.app > header {
 .appAgentPanel {
   height: 100vh;
   overflow: hidden;
-  padding-top: 40px;
+  padding-top: 52px;
   position: relative;
 }
 
@@ -339,9 +339,9 @@ main.app > header {
   grid-template-rows: auto auto minmax(0, 1fr) auto;
   height: 100vh;
   overflow: hidden;
-  /* Electron hiddenInset 模式：macOS traffic light（红黄绿按钮）占据左上角 ~78px×28px。
-     左栏顶部留出空间避免 PcapAI logo 被遮挡；右栏和中栏顶部也同步下移保持对齐。 */
-  padding: 40px 14px 16px;
+  /* Electron hiddenInset 模式：macOS traffic light（红黄绿按钮）+ 呼吸空间约 52px。
+     左栏顶部留出空间让 logo 完全在按钮下方；右栏和中栏顶部同步下移保持对齐。 */
+  padding: 52px 14px 16px;
   position: sticky;
   top: 0;
 }
@@ -708,7 +708,7 @@ main.app > header {
   height: 100vh;
   overflow: hidden;
   /* Electron hiddenInset：顶部留出 traffic light 空间，与 sidebar 对齐 */
-  padding: 40px 16px 16px;
+  padding: 52px 16px 16px;
 }
 
 .evidenceDeck,
@@ -730,8 +730,8 @@ main.app > header {
   display: grid;
   gap: 16px;
   grid-template-rows: auto auto minmax(0, 1fr) auto;
-  /* mainDesk 已有 padding-top:40px（给 traffic light 让位），chatPanel 填满剩余 */
-  height: calc(100vh - 56px);
+  /* mainDesk 已有 padding-top:52px（给 traffic light 让位），chatPanel 填满剩余 */
+  height: calc(100vh - 68px);
   min-height: 0;
   overflow: hidden;
   position: relative;
