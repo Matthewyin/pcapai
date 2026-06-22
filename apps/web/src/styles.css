@@ -221,10 +221,11 @@ main.app > header {
   overflow: hidden;
 }
 
-/* 右栏外壳：同上 */
+/* 右栏外壳：同 sidebar/mainDesk 顶部对齐（traffic light 偏移） */
 .appAgentPanel {
   height: 100vh;
   overflow: hidden;
+  padding-top: 40px;
 }
 
 /* 拖拽手柄（取自 docs/ui-design/three-column-light.html） */
@@ -267,7 +268,9 @@ main.app > header {
   grid-template-rows: auto auto minmax(0, 1fr) auto;
   height: 100vh;
   overflow: hidden;
-  padding: 16px 14px;
+  /* Electron hiddenInset 模式：macOS traffic light（红黄绿按钮）占据左上角 ~78px×28px。
+     左栏顶部留出空间避免 PcapAI logo 被遮挡；右栏和中栏顶部也同步下移保持对齐。 */
+  padding: 40px 14px 16px;
   position: sticky;
   top: 0;
 }
@@ -275,23 +278,25 @@ main.app > header {
 .sidebarBrand {
   align-items: center;
   display: flex;
-  gap: 12px;
+  gap: 10px;
   justify-content: space-between;
+  /* macOS traffic light（3 个按钮 ~70px 宽）在左上角，品牌文字右移避让 */
+  padding-left: 70px;
 }
 
-.sidebarBrand strong {
+.sidebarBrandText strong {
   color: var(--accent);
   font-family: "DIN Condensed", "Avenir Next Condensed", "PingFang SC", sans-serif;
-  font-size: 26px;
+  font-size: 22px;
   letter-spacing: 0.04em;
   line-height: 1;
 }
 
-.sidebarBrand span {
-  color: var(--text);
+.sidebarBrandText span {
+  color: var(--faint);
   display: block;
-  font-size: 10px;
-  letter-spacing: 0.12em;
+  font-size: 9px;
+  letter-spacing: 0.15em;
   line-height: 1.4;
   text-transform: uppercase;
 }
@@ -301,11 +306,12 @@ main.app > header {
   border-color: var(--accent);
   color: #ffffff;
   flex: 0 0 auto;
-  font-size: 14px;
-  font-weight: 700;
-  min-height: 36px;
-  padding: 7px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  min-height: 30px;
+  padding: 6px 12px;
   white-space: nowrap;
+  border-radius: 6px;
 }
 
 .currentSession {
@@ -630,7 +636,8 @@ main.app > header {
   gap: 16px;
   height: 100vh;
   overflow: hidden;
-  padding: 16px;
+  /* Electron hiddenInset：顶部留出 traffic light 空间，与 sidebar 对齐 */
+  padding: 40px 16px 16px;
 }
 
 .evidenceDeck,
@@ -652,11 +659,11 @@ main.app > header {
   display: grid;
   gap: 16px;
   grid-template-rows: auto auto minmax(0, 1fr) auto;
-  height: calc(100vh - 32px);
+  /* mainDesk 已有 padding-top:40px（给 traffic light 让位），chatPanel 填满剩余 */
+  height: calc(100vh - 56px);
   min-height: 0;
   overflow: hidden;
-  position: sticky;
-  top: 16px;
+  position: relative;
 }
 
 /* 阶段 2c：insightDock 升级为 AgentPanel 三 Tab 结构 */

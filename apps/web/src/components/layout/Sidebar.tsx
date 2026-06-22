@@ -105,14 +105,14 @@ export function Sidebar(props: SidebarProps) {
 
   return (
     <aside className="appSidebar panel">
-      {/* 品牌 + 新建 */}
+      {/* 品牌 + 新建。左侧给 macOS traffic light（红黄绿按钮）留出 ~70px 空间避免遮挡 */}
       <div className="sidebarBrand">
-        <div>
+        <div className="sidebarBrandText">
           <strong>PcapAI</strong>
           <span>packet agent</span>
         </div>
         <button className="newCaseButton" onClick={() => void onCreateNewChat()}>
-          <Plus size={18} /> 新建会话
+          <Plus size={16} /> 新建
         </button>
       </div>
 
