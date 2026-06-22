@@ -203,6 +203,46 @@ main.app > header {
   display: flex;
   height: 100vh;
   min-height: 0;
+  position: relative; /* 给 titleBarDrag 绝对定位提供基准 */
+}
+
+/* 顶部窗口拖拽条（Electron hiddenInset 模式必须，否则无法拖动窗口）。
+   覆盖三栏顶部 52px（与 padding-top 对齐），透明，只在无交互元素的空白区生效。
+   交互元素用 no-drag 覆盖，保持按钮/输入/滚动的可点击性。 */
+.titleBarDrag {
+  -webkit-app-region: drag;
+  height: 52px;
+  left: 0;
+  position: absolute;
+  right: 0;
+  top: 0;
+  z-index: 3;
+}
+
+/* 所有交互元素：no-drag（否则按钮点不动、滚动条拖不动、输入框无法聚焦）。
+   只针对具体控件，栏的 padding 空白区继承 titleBarDrag 的 drag 属性可拖拽窗口。 */
+button,
+input,
+select,
+textarea,
+a,
+.resizer,
+.sidebarCollapseBtn,
+.agentPanelCollapseBtn,
+.sidebarExpandBtn,
+.agentPanelExpandBtn,
+.panelTabs,
+.panelTab,
+.toolTraceToggle,
+.conversationList button,
+.evidenceDeck,
+.evidenceContextCard,
+.reportPanel,
+.accessGroupList,
+.knowledgeTab,
+.traceTab,
+.diagnosisTab {
+  -webkit-app-region: no-drag;
 }
 
 /* 两栏模式（非 workbench 页面，无右栏） */

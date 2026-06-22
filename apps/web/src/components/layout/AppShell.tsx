@@ -69,6 +69,10 @@ export function AppShell({ sidebar, children, agentPanel }: AppShellProps) {
 
   return (
     <section className={`appShell ${hasAgentPanel ? "" : "appShellTwoCol"} ${sidebarCollapsed ? "sidebarCollapsed" : ""}`}>
+      {/* 顶部拖拽条：覆盖三栏顶部 52px，让用户按住空白区拖动窗口。
+          traffic light 按钮在左上角（系统绘制，z-index 高于此条，不会被遮挡）。
+          交互元素（折叠按钮/composer 等）用 no-drag 覆盖。 */}
+      <div className="titleBarDrag" />
       {/* 左栏：折叠时不渲染 aside + resizer，只渲染边缘展开按钮 */}
       {sidebarCollapsed ? (
         <button className="sidebarExpandBtn" onClick={toggleSidebar} title="展开侧栏" aria-label="展开侧栏">
