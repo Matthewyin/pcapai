@@ -977,8 +977,8 @@ a,
 .toolTraceList {
   display: grid;
   gap: 10px;
-  max-height: 300px;
-  overflow-y: auto;
+  /* 不限制 max-height：右栏 panelBody 已有 overflow-y:auto 滚动，
+     限制 max-height 会导致卡片在滚动容器内 hover 时 box-shadow 被裁剪 + 视觉重叠 */
   padding-right: 2px;
 }
 
