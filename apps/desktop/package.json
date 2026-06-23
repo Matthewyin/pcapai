@@ -8,11 +8,12 @@
   "author": "pcapAI",
   "scripts": {
     "build": "tsc -p tsconfig.json && cp src/preload.cjs dist/preload.cjs",
+    "rebuild:native": "npx electron-rebuild -f -w better-sqlite3 --module-dir ../.. --electron-version 33.4.11 && npx electron-rebuild -f -w keytar --module-dir . --electron-version 33.4.11",
     "check": "tsc -p tsconfig.json --noEmit",
     "dev": "npm run build && PCAPAI_DESKTOP_MODE=dev electron .",
     "start": "PCAPAI_DESKTOP_MODE=prod electron .",
-    "pack": "electron-builder --mac dmg --config electron-builder.yml",
-    "pack:dir": "electron-builder --mac dir --config electron-builder.yml"
+    "pack": "npm run rebuild:native && electron-builder --mac dmg --config electron-builder.yml",
+    "pack:dir": "npm run rebuild:native && electron-builder --mac dir --config electron-builder.yml"
   },
   "devDependencies": {
     "@types/node": "^24.10.1",
@@ -20,6 +21,7 @@
     "electron-builder": "^25.1.8"
   },
   "dependencies": {
+    "better-sqlite3": "^12.10.0",
     "keytar": "^7.9.0"
   }
 }
