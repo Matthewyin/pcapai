@@ -68,31 +68,17 @@ export function AppShell({ sidebar, children, agentPanel }: AppShellProps) {
   const hasAgentPanel = agentPanel !== null && agentPanel !== undefined && !agentPanelCollapsed;
 
   return (
-    <section
-      className={`appShell ${hasAgentPanel ? "" : "appShellTwoCol"} ${sidebarCollapsed ? "sidebarCollapsed" : ""}`}
-      style={{
-        // CSS 变量传栏宽给展开按钮定位（折叠后按钮要停在栏原来的右边缘位置，不跳动）
-        ["--sidebar-w" as string]: `${sidebarWidth}px`,
-        ["--agent-w" as string]: `${agentPanelWidth}px`,
-      }}
-    >
+    <section className={`appShell ${hasAgentPanel ? "" : "appShellTwoCol"} ${sidebarCollapsed ? "sidebarCollapsed" : ""}`}>
       {/* 顶部拖拽条：覆盖三栏顶部 52px，让用户按住空白区拖动窗口。
           traffic light 按钮在左上角（系统绘制，z-index 高于此条，不会被遮挡）。
           交互元素（折叠按钮/composer 等）用 no-drag 覆盖。 */}
       <div className="titleBarDrag" />
-      {/* 左栏：折叠时不渲染 aside + resizer，只渲染边缘展开按钮（absolute 定位到栏右边缘，不跳动） */}
-      {sidebarCollapsed ? (
-        <button className="sidebarExpandBtn" onClick={toggleSidebar} title="展开侧栏" aria-label="展开侧栏">
-          <PanelLeftOpen size={18} />
-        </button>
-      ) : (
+
+      {/* 左栏：折叠时不渲染 aside + resizer */}
+      {sidebarCollapsed ? null : (
         <>
           <aside className="appShellCol appSidebarWrap" style={{ width: sidebarWidth, flexShrink: 0 }}>
             {sidebar}
-            {/* 折叠按钮：浮在 sidebar 右上角 */}
-            <button className="sidebarCollapseBtn" onClick={toggleSidebar} title="收起侧栏" aria-label="收起侧栏">
-              <PanelLeftClose size={18} />
-            </button>
           </aside>
           <Resizer
             direction={1}
@@ -103,31 +89,47 @@ export function AppShell({ sidebar, children, agentPanel }: AppShellProps) {
         </>
       )}
 
-      <section className="appShellCol appContent">{children}</section>
-
-      {/* 右栏：折叠时只渲染边缘展开按钮 */}
-      {agentPanel !== null && agentPanel !== undefined ? (
-        agentPanelCollapsed ? (
-          <button className="agentPanelExpandBtn" onClick={toggleAgentPanel} title="展开右栏" aria-label="展开右栏">
-            <PanelRightOpen size={18} />
+      <section className="appShellCol appContent">
+        {children}
+        {/* 折叠/展开按钮：吸附在 content 边缘（ZCode 风格）。
+            content 随栏折叠而左移/右扩，按钮跟随 content 边缘移动，y 固定。
+            - 左栏按钮：content 左边缘（栏展开时=sidebar右边界，栏折叠时=窗口左边缘）
+            - 右栏按钮：content 右边缘（栏展开时=agentPanel左边界，栏折叠时=窗口右边缘） */}
+        {sidebarCollapsed ? (
+          <button className="edgeToggleBtn sidebarExpandBtn" onClick={toggleSidebar} title="展开侧栏" aria-label="展开侧栏">
+            <PanelLeftOpen size={18} />
           </button>
         ) : (
-          <>
-            <Resizer
-              direction={-1}
-              getWidth={() => agentPanelWidth}
-              onDrag={(w) => setAgentPanelWidthLocal(clampAgent(w))}
-              onCommit={(w) => setAgentPanelWidth(w)}
-            />
-            <aside className="appShellCol appAgentPanel" style={{ width: agentPanelWidth, flexShrink: 0 }}>
-              {agentPanel}
-              {/* 折叠按钮：浮在右栏左上角 */}
-              <button className="agentPanelCollapseBtn" onClick={toggleAgentPanel} title="收起右栏" aria-label="收起右栏">
-                <PanelRightClose size={18} />
-              </button>
-            </aside>
-          </>
-        )
+          <button className="edgeToggleBtn sidebarCollapseBtn" onClick={toggleSidebar} title="收起侧栏" aria-label="收起侧栏">
+            <PanelLeftClose size={18} />
+          </button>
+        )}
+        {agentPanel !== null && agentPanel !== undefined ? (
+          agentPanelCollapsed ? (
+            <button className="edgeToggleBtn agentPanelExpandBtn" onClick={toggleAgentPanel} title="展开右栏" aria-label="展开右栏">
+              <PanelRightOpen size={18} />
+            </button>
+          ) : (
+            <button className="edgeToggleBtn agentPanelCollapseBtn" onClick={toggleAgentPanel} title="收起右栏" aria-label="收起右栏">
+              <PanelRightClose size={18} />
+            </button>
+          )
+        ) : null}
+      </section>
+
+      {/* 右栏：折叠时不渲染 resizer + aside */}
+      {agentPanel !== null && agentPanel !== undefined && !agentPanelCollapsed ? (
+        <>
+          <Resizer
+            direction={-1}
+            getWidth={() => agentPanelWidth}
+            onDrag={(w) => setAgentPanelWidthLocal(clampAgent(w))}
+            onCommit={(w) => setAgentPanelWidth(w)}
+          />
+          <aside className="appShellCol appAgentPanel" style={{ width: agentPanelWidth, flexShrink: 0 }}>
+            {agentPanel}
+          </aside>
+        </>
       ) : null}
     </section>
   );
