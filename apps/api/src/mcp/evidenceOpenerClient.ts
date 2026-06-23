@@ -31,7 +31,12 @@ export async function openInWiresharkWithMcp(input: { pcapPath: string; displayF
     command: apiConfig.evidenceOpenerMcp.command,
     args: apiConfig.evidenceOpenerMcp.args,
     cwd: apiConfig.evidenceOpenerMcp.cwd,
-    stderr: "pipe"
+    stderr: "pipe",
+    // 同 tsharkQueryClient：传 ELECTRON_RUN_AS_NODE 让 MCP server 以 node 模式运行
+    env: {
+      ...process.env,
+      ELECTRON_RUN_AS_NODE: process.env.ELECTRON_RUN_AS_NODE || "1"
+    }
   });
   try {
     await client.connect(transport);

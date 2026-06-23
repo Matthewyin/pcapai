@@ -19,7 +19,14 @@ async function connectWithRetry(): Promise<MCPServerStdio> {
       command: apiConfig.tsharkQueryMcp.command,
       args: apiConfig.tsharkQueryMcp.args,
       cwd: apiConfig.tsharkQueryMcp.cwd,
-      cacheToolsList: true
+      cacheToolsList: true,
+      // 打包后 MCP server 用 Electron 二进制启动，必须传 ELECTRON_RUN_AS_NODE
+      // 让它以 node 模式运行（否则 GUI 模式启动崩溃 → Connection closed）。
+      // OpenAI Agents SDK 的 MCPServerStdio 默认不继承 process.env，只传 command/args。
+      env: {
+        ...process.env,
+        ELECTRON_RUN_AS_NODE: process.env.ELECTRON_RUN_AS_NODE || "1"
+      }
     });
     try {
       await server.connect();

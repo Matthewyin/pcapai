@@ -128,8 +128,22 @@ function getClient(): Promise<Client> {
         command: apiConfig.tsharkQueryMcp.command,
         args: apiConfig.tsharkQueryMcp.args,
         cwd: apiConfig.tsharkQueryMcp.cwd,
-        stderr: "pipe"
+        stderr: "pipe",
+        // MCP SDK 的 StdioClientTransport 只继承安全的环境变量（HOME/PATH/SHELL 等），
+        // 不含 ELECTRON_RUN_AS_NODE。打包后 MCP server 用 Electron 二进制启动，
+        // 必须传 ELECTRON_RUN_AS_NODE 让它以 node 模式运行（否则 GUI 模式启动崩溃）。
+        env: {
+          ...process.env,
+          ELECTRON_RUN_AS_NODE: process.env.ELECTRON_RUN_AS_NODE || "1"
+        }
       });
+      // 诊断：监听 MCP server stderr + close 事件（排查 Connection closed）
+      transport.stderr?.on("data", (chunk: Buffer) => {
+        console.error(`[tshark-query MCP stderr] ${chunk.toString().trim()}`);
+      });
+      transport.onclose = () => {
+        console.error("[tshark-query MCP] transport closed");
+      };
       await client.connect(transport);
       return client;
     })();
