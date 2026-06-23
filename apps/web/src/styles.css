@@ -383,48 +383,84 @@ a,
   top: 0;
 }
 
-.sidebarBrand {
+/* AppShell 顶部品牌区（独立于 sidebar，始终可见，不受栏折叠影响）
+   绝对定位到窗口左上角，避开 macOS traffic light（~70px 右移 + 52px 下移） */
+.appBrand {
   align-items: flex-start;
-  display: flex;
-  gap: 10px;
-  justify-content: space-between;
-}
-
-.sidebarBrandText {
   display: flex;
   flex-direction: column;
   gap: 2px;
+  left: 70px;
+  position: absolute;
+  top: 12px;
+  z-index: 6; /* 低于交互按钮(10)，高于内容；titleBarDrag(3) 之下但能看见 */
 }
 
-/* logo 行：图标 + PcapAI 文字。整体向右移避开 macOS traffic light（~70px） */
-.sidebarBrandLogo {
+.appBrandLogo {
   align-items: center;
   display: flex;
   gap: 6px;
-  margin-left: 70px;
 }
 
-.sidebarBrandIcon {
+.appBrandIcon {
   color: var(--accent);
   flex-shrink: 0;
 }
 
-.sidebarBrandText strong {
+.appBrand strong {
   color: var(--accent);
   font-family: "DIN Condensed", "Avenir Next Condensed", "PingFang SC", sans-serif;
-  font-size: 22px;
+  font-size: 20px;
   letter-spacing: 0.04em;
   line-height: 1;
 }
 
-.sidebarBrandText span {
+.appBrand span {
   color: var(--faint);
-  display: block;
   font-size: 9px;
   letter-spacing: 0.15em;
   line-height: 1.4;
+  padding-left: 24px; /* 与图标对齐 */
   text-transform: uppercase;
   white-space: nowrap;
+}
+
+/* 左栏迷你栏（折叠时显示）：窄条，图标快捷入口垂直排列 */
+.appSidebarMini {
+  align-items: center;
+  border-right: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  gap: 4px;
+  padding: 60px 6px 12px;
+  width: 48px;
+}
+
+.miniIconBtn {
+  align-items: center;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--faint);
+  cursor: pointer;
+  display: flex;
+  height: 34px;
+  justify-content: center;
+  transition: color 0.15s, background 0.15s;
+  width: 34px;
+}
+
+.miniIconBtn:hover {
+  background: var(--status-bg);
+  color: var(--text);
+}
+
+.miniIconBtn.active {
+  color: var(--accent);
+}
+
+.miniSpacer {
+  flex: 1;
 }
 
 .newCaseButton {

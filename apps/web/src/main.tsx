@@ -162,6 +162,7 @@ function App() {
   const toggleTheme = useUIStore((s) => s.toggleTheme);
   const detailView = useUIStore((s) => s.detailView);
   const setDetailView = useUIStore((s) => s.setDetailView);
+  const sidebarCollapsed = useUIStore((s) => s.sidebarCollapsed);
   const [tcpStreams, setTcpStreams] = React.useState<Array<{ streamIndex: number; srcIp?: string; srcPort?: number; dstIp?: string; dstPort?: number; packetCount: number; byteCount: number; displayFilter: string }>>([]);
   const [tcpStreamContent, setTcpStreamContent] = React.useState<{ clientData: string; serverData: string; streamIndex: number; format: string; totalBytes: number; truncated: boolean } | null>(null);
   const [tcpStreamLoading, setTcpStreamLoading] = React.useState(false);
@@ -1531,6 +1532,7 @@ function openWireshark(pcap,filter){fetch("${window.location.origin}/api/cases/$
             pinnedCaseIds={pinnedCaseIds}
             page={page}
             theme={theme}
+            mini={sidebarCollapsed}
             onCreateNewChat={() => void createNewChat()}
             onOpenCase={(caseId) => openCase(caseId)}
             onTogglePinned={(caseId) => togglePinnedCase(caseId)}

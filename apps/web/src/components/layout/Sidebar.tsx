@@ -27,6 +27,8 @@ type SidebarProps = {
   page: "workbench" | "history" | "settings" | "help" | "knowledge";
   /** 主题 */
   theme: "dark" | "light";
+  /** 迷你栏模式（左栏折叠时，渲染图标版快捷入口） */
+  mini?: boolean;
 
   // ---- 行为回调（main.tsx 仍是权威，涉及 API 调用）----
   /** 新建会话 */
@@ -53,6 +55,7 @@ export function Sidebar(props: SidebarProps) {
     pinnedCaseIds,
     page,
     theme,
+    mini,
     onCreateNewChat,
     onOpenCase,
     onTogglePinned,
@@ -103,24 +106,48 @@ export function Sidebar(props: SidebarProps) {
     setCaseMenuId("");
   }
 
+  // 迷你栏模式：左栏折叠时渲染图标版快捷入口（logo 已在 AppShell 顶部品牌区）
+  if (mini) {
+    return (
+      <aside className="appSidebarMini">
+        <button className="miniIconBtn" onClick={() => void onCreateNewChat()} title="新建会话">
+          <Plus size={18} />
+        </button>
+        <button
+          className={`miniIconBtn ${page === "history" ? "active" : ""}`}
+          onClick={() => onOpenSettingsPage("history")}
+          title="历史案例"
+        >
+          <History size={18} />
+        </button>
+        <button
+          className={`miniIconBtn ${page === "knowledge" ? "active" : ""}`}
+          onClick={() => onOpenSettingsPage("knowledge")}
+          title="知识库"
+        >
+          <BookOpen size={18} />
+        </button>
+        <button
+          className={`miniIconBtn ${page === "settings" ? "active" : ""}`}
+          onClick={() => onOpenSettingsPage("settings")}
+          title="模型配置"
+        >
+          <Settings size={18} />
+        </button>
+        <div className="miniSpacer" />
+        <button className="miniIconBtn" onClick={onToggleTheme} title={theme === "dark" ? "亮色主题" : "暗色主题"}>
+          {theme === "dark" ? <Sun size={18} /> : <Moon size={18} />}
+        </button>
+      </aside>
+    );
+  }
+
   return (
     <aside className="appSidebar panel">
-      {/* 品牌 + 新建。
-          macOS traffic light（红黄绿按钮）在左上角 ~70px 宽：
-          - PcapAI logo 向右移 70px 避开按钮
-          - packet agent 副标题位置不变（在 logo 下方左对齐） */}
-      <div className="sidebarBrand">
-        <div className="sidebarBrandText">
-          <div className="sidebarBrandLogo">
-            <Activity size={18} className="sidebarBrandIcon" />
-            <strong>PcapAI</strong>
-          </div>
-          <span>packet agent</span>
-        </div>
-        <button className="newCaseButton" onClick={() => void onCreateNewChat()}>
-          <Plus size={16} /> 新建
-        </button>
-      </div>
+      {/* 新建按钮：独立一行（logo 已移到 AppShell 顶部） */}
+      <button className="newCaseButton" onClick={() => void onCreateNewChat()}>
+        <Plus size={16} /> 新建会话
+      </button>
 
       {/* 当前会话概览 */}
       <section className="currentSession">
