@@ -27,6 +27,7 @@ extraResources:
       # 运行时依赖：API（express/cors/better-sqlite3/dotenv）+ MCP（@modelcontextprotocol/sdk）
       # + OpenAI Agents SDK + zod 等。native 模块（better-sqlite3）已 rebuild 为 Electron ABI。
       # 排除 devDependencies（electron/electron-builder/typescript/vite/babel 等构建工具，运行时不需要）
+      # web 前端依赖（lucide-react/react-dom/react）也不需要（dist 已 build）
       - node_modules/**/*
       - "!node_modules/electron/**"
       - "!node_modules/electron-builder/**"
@@ -41,6 +42,26 @@ extraResources:
       - "!node_modules/postject/**"
       - "!node_modules/@electron/**"
       - "!node_modules/@tailwindcss/**"
+      # 前端依赖（dist 已 build，运行时不需要源码）
+      - "!node_modules/lucide-react/**"
+      - "!node_modules/react-dom/**"
+      - "!node_modules/react/**"
+      - "!node_modules/scheduler/**"
+      # 其他构建/类型工具
+      - "!node_modules/rxjs/**"
+      - "!node_modules/lodash/**"
+      - "!node_modules/rollup/**"
+      - "!node_modules/@rollup/**"
+      - "!node_modules/caniuse-lite/**"
+      - "!node_modules/node-gyp/**"
+      - "!node_modules/app-builder-lib/**"
+      - "!node_modules/@develar/**"
+      - "!node_modules/dmg-license/**"
+      - "!node_modules/plist/**"
+      - "!node_modules/@types/**"
+      - "!node_modules/jiti/**"
+      - "!node_modules/config-file-ts/**"
+      - "!node_modules/csstype/**"
       # 阶段 3a 双层库：只内置精简库（20MB），完整库（786MB）通过 GitHub Release 静默下载
       # 不打包 RFC/ 语料（786MB 文本）和完整 rfc.db（786MB）—— 节省 ~1.5GB
       - data/rfc-index/rfc-mini.db
