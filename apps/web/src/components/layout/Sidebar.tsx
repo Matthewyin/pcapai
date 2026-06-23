@@ -8,7 +8,7 @@
  * 行为完全等价于原 main.tsx:1565-1652 的 <aside className="appSidebar panel">。
  */
 import React from "react";
-import { BookOpen, Cpu, History, Moon, MoreHorizontal, Pencil, Pin, PinOff, Plus, Settings, Sun, Trash2 } from "lucide-react";
+import { Activity, BookOpen, Cpu, History, Moon, MoreHorizontal, Pencil, Pin, PinOff, Plus, Settings, Sun, Trash2 } from "lucide-react";
 import type { CaseGraph, CaseSummary, QueryRun } from "../../types";
 import { formatPacketTime } from "../../lib/format";
 
@@ -105,10 +105,16 @@ export function Sidebar(props: SidebarProps) {
 
   return (
     <aside className="appSidebar panel">
-      {/* 品牌 + 新建。左侧给 macOS traffic light（红黄绿按钮）留出 ~70px 空间避免遮挡 */}
+      {/* 品牌 + 新建。
+          macOS traffic light（红黄绿按钮）在左上角 ~70px 宽：
+          - PcapAI logo 向右移 70px 避开按钮
+          - packet agent 副标题位置不变（在 logo 下方左对齐） */}
       <div className="sidebarBrand">
         <div className="sidebarBrandText">
-          <strong>PcapAI</strong>
+          <div className="sidebarBrandLogo">
+            <Activity size={18} className="sidebarBrandIcon" />
+            <strong>PcapAI</strong>
+          </div>
           <span>packet agent</span>
         </div>
         <button className="newCaseButton" onClick={() => void onCreateNewChat()}>

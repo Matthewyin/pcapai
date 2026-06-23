@@ -76,7 +76,7 @@ export function AppShell({ sidebar, children, agentPanel }: AppShellProps) {
       {/* 左栏：折叠时不渲染 aside + resizer，只渲染边缘展开按钮 */}
       {sidebarCollapsed ? (
         <button className="sidebarExpandBtn" onClick={toggleSidebar} title="展开侧栏" aria-label="展开侧栏">
-          <PanelLeftOpen size={16} />
+          <PanelLeftOpen size={18} />
         </button>
       ) : (
         <>
@@ -84,7 +84,7 @@ export function AppShell({ sidebar, children, agentPanel }: AppShellProps) {
             {sidebar}
             {/* 折叠按钮：浮在 sidebar 右上角 */}
             <button className="sidebarCollapseBtn" onClick={toggleSidebar} title="收起侧栏" aria-label="收起侧栏">
-              <PanelLeftClose size={15} />
+              <PanelLeftClose size={18} />
             </button>
           </aside>
           <Resizer
@@ -102,7 +102,7 @@ export function AppShell({ sidebar, children, agentPanel }: AppShellProps) {
       {agentPanel !== null && agentPanel !== undefined ? (
         agentPanelCollapsed ? (
           <button className="agentPanelExpandBtn" onClick={toggleAgentPanel} title="展开右栏" aria-label="展开右栏">
-            <PanelRightOpen size={16} />
+            <PanelRightOpen size={18} />
           </button>
         ) : (
           <>
@@ -116,7 +116,7 @@ export function AppShell({ sidebar, children, agentPanel }: AppShellProps) {
               {agentPanel}
               {/* 折叠按钮：浮在右栏左上角 */}
               <button className="agentPanelCollapseBtn" onClick={toggleAgentPanel} title="收起右栏" aria-label="收起右栏">
-                <PanelRightClose size={15} />
+                <PanelRightClose size={18} />
               </button>
             </aside>
           </>
