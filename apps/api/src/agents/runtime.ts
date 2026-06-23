@@ -807,12 +807,37 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
     if (session.itemCount() <= threshold) return;
     const allItems = await session.getItems();
     if (allItems.length <= keepRecent) return;
-    const recent = allItems.slice(allItems.length - keepRecent);
-    const older = allItems.slice(0, allItems.length - keepRecent);
+    // 保留 recent 时确保 tool_call / function_call 和它的 output 成对完整。
+    // DeepSeek 等模型严格要求 function_call 后面紧跟 function_call_output，
+    // 截断点落在中间会导致 "tool_call_ids did not have response messages" 400 错误。
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const typedItems = allItems as any[];
+    let recent = typedItems.slice(typedItems.length - keepRecent);
+    // 如果 recent 第一条是 function_call_output 但对应的 function_call 在 older 区（被截走），
+    // 丢弃这些孤立的 output，直到 recent 以 function_call 或 message 开头
+    while (recent.length > 0) {
+      const first = recent[0];
+      if (first?.type === "function_call_output") {
+        recent = recent.slice(1);
+      } else {
+        break;
+      }
+    }
+    // 同理：如果 recent 末尾是 function_call 但没有对应的 output（可能被收口逻辑截断），
+    // 也丢弃，避免发给 LLM 一个未响应的工具调用
+    while (recent.length > 0) {
+      const last = recent[recent.length - 1];
+      if (last?.type === "function_call") {
+        recent = recent.slice(0, -1);
+      } else {
+        break;
+      }
+    }
+    const older = typedItems.slice(0, typedItems.length - keepRecent);
     // 聚合早期工具相关条目为摘要
     const toolSummaries: string[] = [];
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    for (const item of older as any[]) {
+    for (const item of older) {
       if (item.type === "function_call" && item.name) {
         toolSummaries.push(`调用 ${item.name}`);
       } else if (item.type === "function_call_output" && item.output) {
@@ -832,12 +857,84 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
     input.onTrace?.(`上下文压缩：${allItems.length} 条 → ${summaryItems.length + recent.length} 条。`);
   }
 
+  /**
+   * 清理 session 中不完整的 tool_call 对：
+   * - 孤立的 function_call（没有对应的 function_call_output）→ 丢弃
+   * - 孤立的 function_call_output（对应的 function_call 被截走）→ 丢弃
+   * - assistant message 带 tool_calls 但后续没有完整 tool response → 移除 tool_calls
+   * DeepSeek 等模型严格要求 tool_call 链完整，否则 400。
+   */
+  async function sanitizeSessionToolCalls(session: SqliteSession) {
+    const items = await session.getItems();
+    if (!items.length) return;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const typed = items as any[];
+    // 收集所有有 output 的 function_call id
+    const callIdsWithOutput = new Set<string>();
+    for (const item of typed) {
+      if (item?.type === "function_call_output" && item.call_id) {
+        callIdsWithOutput.add(item.call_id);
+      }
+    }
+    // 收集所有 function_call 的 id
+    const callIdsDefined = new Set<string>();
+    for (const item of typed) {
+      if (item?.type === "function_call" && item.call_id) {
+        callIdsDefined.add(item.call_id);
+      }
+    }
+    // 过滤：保留 message + 成对的 function_call/function_call_output
+    const cleaned: AgentInputItem[] = [];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    for (const item of typed) {
+      if (item?.type === "function_call") {
+        // 只保留有对应 output 的 function_call
+        if (item.call_id && callIdsWithOutput.has(item.call_id)) {
+          cleaned.push(item as AgentInputItem);
+        }
+      } else if (item?.type === "function_call_output") {
+        // 只保留有对应 function_call 的 output
+        if (item.call_id && callIdsDefined.has(item.call_id)) {
+          cleaned.push(item as AgentInputItem);
+        }
+      } else {
+        // message / handoff 等正常保留，但检查 assistant message 的 tool_calls 字段
+        if (item?.role === "assistant" && Array.isArray(item.tool_calls)) {
+          const validToolCalls = item.tool_calls.filter(
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            (tc: any) => tc.id && callIdsWithOutput.has(tc.id)
+          );
+          if (validToolCalls.length < item.tool_calls.length) {
+            if (validToolCalls.length === 0) {
+              // 所有 tool_calls 都没响应 → 移除 tool_calls 字段，保留纯文本消息
+              const { tool_calls: _tc, ...rest } = item;
+              cleaned.push(rest as AgentInputItem);
+            } else {
+              cleaned.push({ ...item, tool_calls: validToolCalls });
+            }
+            continue;
+          }
+        }
+        cleaned.push(item as AgentInputItem);
+      }
+    }
+    if (cleaned.length !== items.length) {
+      session.replaceAllWith(cleaned);
+    }
+  }
+
   try {
     input.onTrace?.("开始运行 OpenAI Agents SDK，等待模型选择专家并调用 case-graph 工具。");
     // session：有 sessionDir 时启用跨轮持久化记忆，SDK 自动 prepend 历史并持久化新轮。
     // 此时 contextMessage 只传当前问题（历史由 session 管），不重复拼 chatHistory 避免双重计入。
     const session = input.sessionDir ? new SqliteSession({ baseDir: input.sessionDir, sessionId: input.graph.spec.caseId }) : undefined;
-    if (session) input.onTrace?.(`已启用持久化 session（${session.itemCount()} 条历史）。`);
+    if (session) {
+      // 清理 session 中可能存在的不完整 tool_call 对（上一轮中断/收口导致）。
+      // DeepSeek 等模型严格要求 function_call 后面紧跟 function_call_output，
+      // 孤立的 function_call 或 function_call_output 会触发 400 "tool_call_ids did not have response"。
+      await sanitizeSessionToolCalls(session);
+      input.onTrace?.(`已启用持久化 session（${session.itemCount()} 条历史）。`);
+    }
     const contextMessage = session
       ? input.question
       : (input.chatHistory?.length
