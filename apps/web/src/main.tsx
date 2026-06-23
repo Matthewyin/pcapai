@@ -329,6 +329,11 @@ function App() {
     const response = await fetch(`/api/cases/${caseId}`);
     const data = await response.json();
     if (response.ok) {
+      // 会话隔离：切换会话时清空 composer 态（附件草稿、问题、拖拽态等）
+      // 避免上一个会话的附件/输入泄漏到新会话
+      setComposerFiles([]);
+      setQuestion("");
+      setDragActive(false);
       setGraph(data);
       setMappingHints(data.mappingHints || []);
       setTimeOffsetHints(data.timeOffsetHints || []);

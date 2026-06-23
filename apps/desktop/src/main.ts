@@ -299,6 +299,15 @@ async function createMainWindow(apiUrl: string) {
     if (url.startsWith("http")) shell.openExternal(url);
     return { action: "deny" };
   });
+  // 防止页面内意外导航（表单提交/链接点击等导致窗口跳转到未知 URL）
+  win.webContents.on("will-navigate", (event, url) => {
+    // 只允许同源导航（API server 内部路由），其他一律拦截
+    const apiOrigin = apiUrl.replace(/\/+$/, "");
+    if (!url.startsWith(apiOrigin)) {
+      event.preventDefault();
+      if (url.startsWith("http")) shell.openExternal(url);
+    }
+  });
   if (isDev) {
     const devUrl = process.env.PCAPAI_WEB_DEV_URL || "http://127.0.0.1:30023";
     await win.loadURL(devUrl);
@@ -337,6 +346,26 @@ function buildApplicationMenu() {
     { role: "help", submenu: [{ label: "GitHub", click: () => shell.openExternal("https://github.com/Matthewyin/pcapai") }] }
   ];
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+}
+
+// 单实例锁：防止多进程同时运行（双击 app 多次 / 发送消息意外拉起新进程）
+// 第二个实例启动时，聚焦已有窗口并处理命令行参数（如双击 .pcap 打开）
+const gotLock = app.requestSingleInstanceLock();
+if (!gotLock) {
+  app.quit();
+} else {
+  app.on("second-instance", (_event, argv) => {
+    // 聚焦已有窗口
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      if (!mainWindow.isVisible()) mainWindow.show();
+      mainWindow.focus();
+    }
+    // 处理第二个实例带来的 pcap 路径（macOS open-file 事件已处理，这里兜底命令行参数）
+    for (const arg of argv.slice(2)) {
+      if (/\.(pcap|pcapng|cap)$/i.test(arg)) dispatchOpenPcap(arg);
+    }
+  });
 }
 
 app.whenReady().then(async () => {
