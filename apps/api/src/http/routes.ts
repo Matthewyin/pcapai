@@ -373,6 +373,13 @@ async function testOpenAICompatibleConfig(input: z.infer<typeof LlmTestRequestSc
   });
   if (!response.ok) {
     const body = await response.text();
+    // resource_not_found 常见原因：baseURL 缺 /v1 后缀，或模型名写错
+    if (response.status === 404 || body.includes("resource_not_found") || body.includes("not found")) {
+      const hint = !input.baseURL.includes("/v1") && !input.baseURL.includes("/v2") && !input.baseURL.includes("/paas")
+        ? `\n\n提示：baseURL 通常需要以 /v1 结尾（如 https://api.moonshot.cn/v1），当前填的是 ${input.baseURL}`
+        : `\n\n提示：模型名「${input.model}」可能不正确，请到供应商文档确认可用模型名。`;
+      return { ok: false, status: response.status, error: (body.slice(0, 300) || response.statusText) + hint };
+    }
     return { ok: false, status: response.status, error: body.slice(0, 500) || response.statusText };
   }
   return { ok: true, status: response.status };
