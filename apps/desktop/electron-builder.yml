@@ -24,6 +24,23 @@ extraResources:
       - apps/web/package.json
       - packages/shared/package.json
       - package.json
+      # 运行时依赖：API（express/cors/better-sqlite3/dotenv）+ MCP（@modelcontextprotocol/sdk）
+      # + OpenAI Agents SDK + zod 等。native 模块（better-sqlite3）已 rebuild 为 Electron ABI。
+      # 排除 devDependencies（electron/electron-builder/typescript/vite/babel 等构建工具，运行时不需要）
+      - node_modules/**/*
+      - "!node_modules/electron/**"
+      - "!node_modules/electron-builder/**"
+      - "!node_modules/app-builder-bin/**"
+      - "!node_modules/electron-winstaller/**"
+      - "!node_modules/7zip-bin/**"
+      - "!node_modules/typescript/**"
+      - "!node_modules/@esbuild/**"
+      - "!node_modules/lightningcss-darwin-arm64/**"
+      - "!node_modules/@babel/**"
+      - "!node_modules/vite/**"
+      - "!node_modules/postject/**"
+      - "!node_modules/@electron/**"
+      - "!node_modules/@tailwindcss/**"
       # 阶段 3a 双层库：只内置精简库（20MB），完整库（786MB）通过 GitHub Release 静默下载
       # 不打包 RFC/ 语料（786MB 文本）和完整 rfc.db（786MB）—— 节省 ~1.5GB
       - data/rfc-index/rfc-mini.db
