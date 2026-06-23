@@ -68,22 +68,23 @@ export function AppShell({ sidebar, children, agentPanel }: AppShellProps) {
   const hasAgentPanel = agentPanel !== null && agentPanel !== undefined && !agentPanelCollapsed;
 
   return (
-    <section className={`appShell ${hasAgentPanel ? "" : "appShellTwoCol"} ${sidebarCollapsed ? "sidebarCollapsed" : ""}`}>
-      {/* 顶部拖拽条：覆盖三栏顶部 52px，让用户按住空白区拖动窗口。
-          traffic light 按钮在左上角（系统绘制，z-index 高于此条，不会被遮挡）。
-          交互元素（折叠按钮/composer 等）用 no-drag 覆盖。 */}
-      <div className="titleBarDrag" />
-
-      {/* 品牌区：独立于 sidebar，始终在窗口左上角（避开 traffic light）。
-          sidebar 折叠时不影响 logo + packet agent 的显示。 */}
-      <div className="appBrand">
-        <div className="appBrandLogo">
-          <Activity size={18} className="appBrandIcon" />
-          <strong>PcapAI</strong>
+    <section className={`appShell ${sidebarCollapsed ? "sidebarCollapsed" : ""}`}>
+      {/* 顶部品牌行：占满宽度的一整行，和下方三栏区上下分离（不重叠）。
+          包含拖拽区（窗口拖动）+ logo + packet agent。
+          traffic light 按钮在左上角（系统绘制，z-index 高于此行）。 */}
+      <header className="appTopBar">
+        <div className="titleBarDrag" />
+        <div className="appBrand">
+          <div className="appBrandLogo">
+            <Activity size={18} className="appBrandIcon" />
+            <strong>PcapAI</strong>
+          </div>
+          <span>packet agent</span>
         </div>
-        <span>packet agent</span>
-      </div>
+      </header>
 
+      {/* 下方三栏区：横向 flex，从品牌行底部开始 */}
+      <section className={`appColumns ${hasAgentPanel ? "" : "appShellTwoCol"}`}>
       {/* 左栏：折叠时显示迷你栏（窄条，图标快捷入口），展开时完整 sidebar */}
       {sidebarCollapsed ? (
         <aside className="appShellCol appSidebarMini">
@@ -145,6 +146,7 @@ export function AppShell({ sidebar, children, agentPanel }: AppShellProps) {
           </aside>
         </>
       ) : null}
+      </section>
     </section>
   );
 }

@@ -8,7 +8,7 @@
  * 行为完全等价于原 main.tsx:1565-1652 的 <aside className="appSidebar panel">。
  */
 import React from "react";
-import { Activity, BookOpen, Cpu, History, Moon, MoreHorizontal, Pencil, Pin, PinOff, Plus, Settings, Sun, Trash2 } from "lucide-react";
+import { Activity, BookOpen, Clock, Library, Moon, MoreHorizontal, Pencil, Pin, PinOff, Plus, Settings, SlidersHorizontal, SquarePen, Sun, Trash2 } from "lucide-react";
 import type { CaseGraph, CaseSummary, QueryRun } from "../../types";
 import { formatPacketTime } from "../../lib/format";
 
@@ -107,36 +107,40 @@ export function Sidebar(props: SidebarProps) {
   }
 
   // 迷你栏模式：左栏折叠时渲染图标版快捷入口（logo 已在 AppShell 顶部品牌区）
+  // 专业图标 + hover tooltip（title 属性原生提示）+ 加大尺寸
   if (mini) {
     return (
       <aside className="appSidebarMini">
-        <button className="miniIconBtn" onClick={() => void onCreateNewChat()} title="新建会话">
-          <Plus size={18} />
+        <button className="miniIconBtn" onClick={() => void onCreateNewChat()} title="新建会话" aria-label="新建会话">
+          <SquarePen size={22} />
         </button>
         <button
           className={`miniIconBtn ${page === "history" ? "active" : ""}`}
           onClick={() => onOpenSettingsPage("history")}
           title="历史案例"
+          aria-label="历史案例"
         >
-          <History size={18} />
+          <Clock size={22} />
         </button>
         <button
           className={`miniIconBtn ${page === "knowledge" ? "active" : ""}`}
           onClick={() => onOpenSettingsPage("knowledge")}
           title="知识库"
+          aria-label="知识库"
         >
-          <BookOpen size={18} />
+          <Library size={22} />
         </button>
         <button
           className={`miniIconBtn ${page === "settings" ? "active" : ""}`}
           onClick={() => onOpenSettingsPage("settings")}
           title="模型配置"
+          aria-label="模型配置"
         >
-          <Settings size={18} />
+          <SlidersHorizontal size={22} />
         </button>
         <div className="miniSpacer" />
-        <button className="miniIconBtn" onClick={onToggleTheme} title={theme === "dark" ? "亮色主题" : "暗色主题"}>
-          {theme === "dark" ? <Sun size={18} /> : <Moon size={18} />}
+        <button className="miniIconBtn" onClick={onToggleTheme} title={theme === "dark" ? "切换亮色" : "切换暗色"} aria-label="切换主题">
+          {theme === "dark" ? <Sun size={22} /> : <Moon size={22} />}
         </button>
       </aside>
     );
@@ -250,13 +254,13 @@ export function Sidebar(props: SidebarProps) {
         {settingsMenuOpen && (
           <div className="settingsMenu">
             <button onClick={() => { onOpenSettingsPage("history"); setSettingsMenuOpen(false); }}>
-              <History size={15} /> 历史案例
+              <Clock size={15} /> 历史案例
             </button>
             <button onClick={() => { onOpenSettingsPage("settings"); setSettingsMenuOpen(false); }}>
-              <Cpu size={15} /> 模型配置
+              <SlidersHorizontal size={15} /> 模型配置
             </button>
             <button onClick={() => { onOpenSettingsPage("knowledge"); setSettingsMenuOpen(false); }}>
-              <BookOpen size={15} /> 知识库
+              <Library size={15} /> 知识库
             </button>
             <button onClick={() => { onOpenSettingsPage("help"); setSettingsMenuOpen(false); }}>
               <BookOpen size={15} /> 帮助

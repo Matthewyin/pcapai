@@ -198,25 +198,30 @@ main.app > header {
   display: none;
 }
 
-/* 阶段 2 三栏新 UI：appShell 改为 flex，宽度由 useUIStore 拖拽控制 */
+/* 阶段 2 三栏新 UI：appShell 纵向 flex（顶部品牌行 + 下方三栏区） */
 .appShell {
   display: flex;
+  flex-direction: column;
   height: 100vh;
   min-height: 0;
-  position: relative; /* 给 titleBarDrag 绝对定位提供基准 */
 }
 
-/* 顶部窗口拖拽条（Electron hiddenInset 模式必须，否则无法拖动窗口）。
-   覆盖三栏顶部 52px（与 padding-top 对齐），透明，只在无交互元素的空白区生效。
-   交互元素用 no-drag 覆盖，保持按钮/输入/滚动的可点击性。 */
-.titleBarDrag {
-  -webkit-app-region: drag;
+/* 顶部品牌行：占满宽度的一整行，和下方三栏区上下分离。
+   含拖拽区（窗口拖动）+ logo。高度固定，不与三栏区重叠。 */
+.appTopBar {
+  -webkit-app-region: drag; /* 整个顶栏空白区可拖动窗口 */
+  align-items: center;
+  display: flex;
+  flex-shrink: 0;
   height: 52px;
-  left: 0;
-  position: absolute;
-  right: 0;
-  top: 0;
-  z-index: 3;
+  min-height: 52px;
+  padding-left: 70px; /* 给 macOS traffic light 让位 */
+  position: relative;
+}
+
+/* 拖拽条不再需要独立元素（appTopBar 整体可拖），保留空类兼容 */
+.titleBarDrag {
+  display: none;
 }
 
 /* 所有交互元素：no-drag（否则按钮点不动、滚动条拖不动、输入框无法聚焦）。
@@ -250,6 +255,13 @@ a,
   /* flex 默认即可，children flex:1 自动占满 */
 }
 
+/* 下方三栏区：横向 flex，填满 appTopBar 下方的剩余高度 */
+.appColumns {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
 .appShellCol {
   min-width: 0;
   min-height: 0;
@@ -257,16 +269,15 @@ a,
 
 /* 左栏外壳：撑满分配宽度，内部 Sidebar.tsx 的 .appSidebar 自管 padding/scroll */
 .appSidebarWrap {
-  height: 100vh;
+  height: 100%;
   overflow: hidden;
   position: relative;
 }
 
 /* 右栏外壳：同 sidebar/mainDesk 顶部对齐（traffic light 偏移） */
 .appAgentPanel {
-  height: 100vh;
+  height: 100%;
   overflow: hidden;
-  padding-top: 52px;
   position: relative;
 }
 
@@ -311,7 +322,7 @@ a,
 /* 边缘折叠/展开按钮（ZCode 风格）：吸附在 content 左右边缘，跟随 content 移动
    - 栏展开时显示折叠按钮（半透明，hover 栏完全显示）
    - 栏折叠后显示展开按钮（accent 边框，始终明显，因为是唯一恢复入口）
-   - y 坐标固定（top: 62px），x 跟随 content 边缘自然变化 */
+   - y 坐标固定（top: 10px），x 跟随 content 边缘自然变化 */
 .edgeToggleBtn {
   align-items: center;
   background: var(--card);
@@ -324,7 +335,7 @@ a,
   height: 30px;
   justify-content: center;
   position: absolute;
-  top: 62px;
+  top: 10px;
   transition: opacity 0.15s, color 0.15s, background 0.15s, border-color 0.15s;
   width: 30px;
   z-index: 10; /* 高于 titleBarDrag(3)，确保可点击 */
@@ -374,26 +385,20 @@ a,
   display: grid;
   gap: 12px;
   grid-template-rows: auto auto minmax(0, 1fr) auto;
-  height: 100vh;
+  height: 100%;
   overflow: hidden;
-  /* Electron hiddenInset 模式：macOS traffic light（红黄绿按钮）+ 呼吸空间约 52px。
-     左栏顶部留出空间让 logo 完全在按钮下方；右栏和中栏顶部同步下移保持对齐。 */
-  padding: 52px 14px 16px;
-  position: sticky;
-  top: 0;
+  /* logo 已在独立顶栏（appTopBar），sidebar 不需要再给 logo 让位 */
+  padding: 14px 14px 16px;
+  position: relative;
 }
 
-/* AppShell 顶部品牌区（独立于 sidebar，始终可见，不受栏折叠影响）
-   绝对定位到窗口左上角，避开 macOS traffic light（~70px 右移 + 52px 下移） */
+/* 顶部品牌区（在 appTopBar 内，横向排列 logo + 副标题）
+   不再 absolute 定位，作为 appTopBar 的 flex 子元素自然排列 */
 .appBrand {
-  align-items: flex-start;
+  align-items: center;
   display: flex;
-  flex-direction: column;
-  gap: 2px;
-  left: 70px;
-  position: absolute;
-  top: 12px;
-  z-index: 6; /* 低于交互按钮(10)，高于内容；titleBarDrag(3) 之下但能看见 */
+  flex-direction: row;
+  gap: 8px;
 }
 
 .appBrandLogo {
@@ -420,7 +425,6 @@ a,
   font-size: 9px;
   letter-spacing: 0.15em;
   line-height: 1.4;
-  padding-left: 24px; /* 与图标对齐 */
   text-transform: uppercase;
   white-space: nowrap;
 }
@@ -432,22 +436,22 @@ a,
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
-  gap: 4px;
-  padding: 60px 6px 12px;
-  width: 48px;
+  gap: 6px;
+  padding: 8px 6px 12px;
+  width: 56px;
 }
 
 .miniIconBtn {
   align-items: center;
   border: 1px solid transparent;
-  border-radius: 6px;
+  border-radius: 8px;
   color: var(--faint);
   cursor: pointer;
   display: flex;
-  height: 34px;
+  height: 40px;
   justify-content: center;
-  transition: color 0.15s, background 0.15s;
-  width: 34px;
+  transition: color 0.15s, background 0.15s, border-color 0.15s;
+  width: 40px;
 }
 
 .miniIconBtn:hover {
@@ -456,6 +460,7 @@ a,
 }
 
 .miniIconBtn.active {
+  background: var(--status-bg);
   color: var(--accent);
 }
 
@@ -797,10 +802,10 @@ a,
   background: var(--center-bg);
   display: grid;
   gap: 16px;
-  height: 100vh;
+  height: 100%;
   overflow: hidden;
-  /* Electron hiddenInset：顶部留出 traffic light 空间，与 sidebar 对齐 */
-  padding: 52px 16px 16px;
+  /* logo 已在独立顶栏，mainDesk 不需要再给 logo 让位 */
+  padding: 16px;
 }
 
 .evidenceDeck,
@@ -822,8 +827,8 @@ a,
   display: grid;
   gap: 16px;
   grid-template-rows: auto auto minmax(0, 1fr) auto;
-  /* mainDesk 已有 padding-top:52px（给 traffic light 让位），chatPanel 填满剩余 */
-  height: calc(100vh - 68px);
+  /* mainDesk 已是 100% 高度，chatPanel 填满剩余 */
+  height: 100%;
   min-height: 0;
   overflow: hidden;
   position: relative;
@@ -833,7 +838,7 @@ a,
 .insightDock {
   display: flex;
   flex-direction: column;
-  height: 100vh;
+  height: 100%;
   overflow: hidden;
 }
 
