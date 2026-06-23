@@ -31,33 +31,39 @@
 }
 
 .app[data-theme="light"] {
+  /* WCAG AAA 调色板：所有文字 vs 背景对比度 ≥7.0
+     审计工具：WCAG contrast formula（luminance 计算）
+     - 正文 #070707 vs 任何背景：17-20 ✓
+     - accent #7a420f（深棕橙）vs 白：8.03 ✓（原 #c96814 只有 3.84 ✗）
+     - danger #a02020（深红）vs 白：7.71 ✓
+     - warn #7a420f（同 accent，深棕橙）：8.03 ✓ */
   --bg: #f6f1e9;
-  --bg-grid: rgba(201, 104, 20, 0.12);
+  --bg-grid: rgba(122, 66, 15, 0.08);
   --panel: #ffffff;
   --panel-2: #f6f9fb;
   --panel-3: #eef4f6;
-  --panel-surface: rgba(255, 255, 255, 0.9);
-  --panel-surface-strong: rgba(255, 255, 255, 0.96);
-  --card: rgba(255, 255, 255, 0.94);
+  --panel-surface: rgba(255, 255, 255, 0.92);
+  --panel-surface-strong: rgba(255, 255, 255, 0.97);
+  --card: rgba(255, 255, 255, 0.96);
   --center-bg: rgba(246, 241, 233, 0.72);
   --control: #fff8ef;
   --control-hover: #f3e2cc;
   --input-bg: #ffffff;
-  --header-bg: rgba(255, 249, 241, 0.92);
+  --header-bg: rgba(255, 249, 241, 0.94);
   --table-header: #f0dfc8;
-  --status-bg: rgba(201, 104, 20, 0.12);
+  --status-bg: rgba(122, 66, 15, 0.1);
   --path-bg: rgba(255, 255, 255, 0.88);
   --path-node-bg: #f8fbfc;
-  --line: #d7b890;
-  --line-strong: #b9854d;
+  --line: #c4a87e;
+  --line-strong: #9a6f3a;
   --text: #070707;
   --muted: #111111;
-  --faint: #1c1c1c;
-  --accent: #c96814;
-  --accent-2: #e58a22;
-  --warn: #9c5a10;
-  --danger: #c73d3d;
-  --ok: #c96814;
+  --faint: #3a3a3a;
+  --accent: #7a420f;
+  --accent-2: #7a420f;
+  --warn: #7a420f;
+  --danger: #a02020;
+  --ok: #7a420f;
   --shadow: 0 18px 48px rgba(64, 35, 12, 0.16);
 }
 
