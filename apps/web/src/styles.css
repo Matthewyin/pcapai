@@ -353,8 +353,29 @@ a,
 }
 
 /* 展开按钮：栏折叠后浮在边缘（这是唯一的恢复入口，必须明显）
-   不透明背景 + 强边框 + 阴影，确保第一眼就看到 */
-.sidebarExpandBtn,
+   不透明背景 + 强边框 + 阴影，确保第一眼就看到。
+   absolute 定位到 appShell，left/right 用栏宽 CSS 变量，确保折叠/展开切换时按钮不水平跳动。 */
+.sidebarExpandBtn {
+  align-items: center;
+  background: var(--card);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.15);
+  color: var(--accent);
+  cursor: pointer;
+  display: flex;
+  font-weight: 600;
+  height: 30px;
+  justify-content: center;
+  /* left = 栏宽 - 15px（按钮中心对齐 resizer 位置，和折叠按钮 right:-15px 重合） */
+  left: calc(var(--sidebar-w, 240px) - 15px);
+  position: absolute;
+  top: 62px;
+  transition: background 0.15s, color 0.15s;
+  width: 30px;
+  z-index: 10;
+}
+
 .agentPanelExpandBtn {
   align-items: center;
   background: var(--card);
@@ -364,15 +385,16 @@ a,
   color: var(--accent);
   cursor: pointer;
   display: flex;
-  flex-shrink: 0;
   font-weight: 600;
   height: 30px;
   justify-content: center;
-  margin: 10px 4px;
-  position: relative;
+  /* right = 栏宽 - 15px（按钮中心对齐 resizer 位置，和折叠按钮 left:-15px 重合） */
+  position: absolute;
+  right: calc(var(--agent-w, 360px) - 15px);
+  top: 62px;
   transition: background 0.15s, color 0.15s;
   width: 30px;
-  z-index: 10; /* 高于 titleBarDrag(3)，确保折叠后仍可点击展开 */
+  z-index: 10;
 }
 
 .sidebarExpandBtn:hover,
