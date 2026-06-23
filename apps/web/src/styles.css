@@ -1046,12 +1046,16 @@ a,
   grid-template-columns: minmax(0, 1fr);
   min-width: 0;
   padding: 12px;
+  position: relative;
   text-align: left;
+  transition: border-color 0.15s, box-shadow 0.15s;
   width: 100%;
 }
 
 .toolTraceRow:hover {
   border-color: var(--accent);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  z-index: 2;
 }
 
 .toolTraceRow.error {
