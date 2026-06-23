@@ -546,11 +546,18 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
 
   const mcpServers = [tsharkQueryMcp];
   const localTools = input.tools || [];
+  // 动态生成工具名列表，放进 prompt 让 LLM 看到精确名称（减少拼写幻觉）
+  const localToolNames = localTools.map((t) => t.name).filter(Boolean);
   const agentToolInstruction = localTools.length
     ? [
-      "## pcapAI 本地工具",
-      "你可以调用 pcapai_ 前缀的本地工具来创建 QueryRun、查询统计、关联多文件、诊断选中 session 或导出报告。",
-      "**工具名必须精确匹配**：前缀是 `pcapai_`（p-c-a-p-a-i 下划线），不要拼成 papai_ 或 pcaipi_。调用前确认名称。",
+      "## ⚠️ 工具名必须精确匹配（最重要）",
+      "所有本地确定性工具前缀是 `pcapai_`（拼写：p-c-a-p-a-i 下划线），**不是** papai_ / pcaipi_ / pintai_。",
+      "以下是你可以调用的精确工具名，调用时必须逐字符匹配：",
+      "",
+      "```",
+      ...localToolNames.map((name) => `- ${name}`),
+      "```",
+      "",
       "这些工具会写入 QueryRun、EvidenceCard、checks 和 ToolRun，适合回答用户的具体排障问题。",
       "tshark-query MCP 仍用于更底层的包级查询；不要绕过 pcapai_ 工具重复做已经封装好的确定性查询。"
     ].join("\n")
@@ -858,9 +865,12 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
         const errMsg = runError instanceof Error ? runError.message : String(runError);
         if (/Tool .* not found/i.test(errMsg) && attempt < 2) {
           input.onTrace?.(`第 ${attempt + 1} 次工具名错误（${errMsg.slice(0, 80)}），带纠正提示重试。`);
-          // 提取拼错的工具名，明确告诉正确前缀
+          // 提取拼错的工具名，明确告诉正确前缀 + 完整工具名列表
           const wrongName = errMsg.match(/Tool (\S+) not found/)?.[1] || "";
-          lastContextMessage = `${contextMessage}\n\n[系统提示-重要] 上次调用的工具名 "${wrongName}" 不存在。所有本地确定性工具前缀是 pcapai_（p-c-a-p-a-i-下划线），示例：pcapai_ask_clarification、pcapai_list_protocols、pcapai_get_network_statistics。请用精确名称重新调用。`;
+          const correctNames = localToolNames.length
+            ? `\n可用工具完整列表（逐字符匹配）：\n${localToolNames.map((n) => `- ${n}`).join("\n")}`
+            : "";
+          lastContextMessage = `${contextMessage}\n\n[系统提示-严重错误] 上次调用的工具名 "${wrongName}" 不存在。正确前缀是 pcapai_（p-c-a-p-a-i-下划线），不是 papai_。${correctNames}\n\n请用上述列表中的精确名称重新调用，不要自己拼写。`;
         } else {
           throw runError;
         }
