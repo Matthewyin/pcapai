@@ -726,17 +726,19 @@ a,
 
 .appContent {
   flex: 1;
+  height: 100%;
+  min-height: 0;
   min-width: 0;
   position: relative; /* 给 edgeToggleBtn 的 absolute 定位提供基准 */
 }
 
 .workbenchContent {
-  height: 100vh;
+  height: 100%;
   overflow: hidden;
 }
 
 .pageContent {
-  height: 100vh;
+  height: 100%;
   overflow-y: auto;
 }
 
@@ -776,7 +778,7 @@ a,
 .workbenchShell {
   /* 阶段 2b：insightDock 移到 AppShell 右栏后，workbenchShell 只剩 chatPanel，改为单列 */
   display: block;
-  height: 100vh;
+  height: 100%;
   min-height: 0;
   overflow: hidden;
 }
@@ -804,8 +806,8 @@ a,
   gap: 16px;
   height: 100%;
   overflow: hidden;
-  /* logo 已在独立顶栏，mainDesk 不需要再给 logo 让位 */
-  padding: 16px;
+  /* 无 padding：让 chatPanel 撑满 mainDesk，底边与 sidebar/agentPanel 对齐 */
+  padding: 0;
 }
 
 .evidenceDeck,
@@ -827,10 +829,11 @@ a,
   display: grid;
   gap: 16px;
   grid-template-rows: auto auto minmax(0, 1fr) auto;
-  /* mainDesk 已是 100% 高度，chatPanel 填满剩余 */
+  /* chatPanel 填满 mainDesk，内部 padding 提供视觉留白（底边与左右栏对齐） */
   height: 100%;
   min-height: 0;
   overflow: hidden;
+  padding: 16px;
   position: relative;
 }
 
