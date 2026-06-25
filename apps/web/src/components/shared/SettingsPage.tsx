@@ -9,6 +9,7 @@ import React from "react";
 import { CheckCircle, Eye, EyeOff, Pencil, Save, Trash2 } from "lucide-react";
 import type { LlmProfile, LlmRuntimeStatus, McpServerInfo } from "../../types";
 import { RfcLibraryPanel } from "./RfcLibraryPanel";
+import { McpServersPanel } from "./McpServersPanel";
 
 type LlmFormState = {
   baseURL: string;
@@ -211,7 +212,10 @@ export function SettingsPage(props: SettingsPageProps) {
         </div>
       </section>
 
-      {/* 阶段 3a：RFC 双层库管理（精简库内置 + 完整库静默下载） */}
+      {/* MCP Server 注册制管理（local + sse + http） */}
+      <McpServersPanel />
+
+      {/* RFC 双层库管理（精简库内置 + 完整库静默下载） */}
       <RfcLibraryPanel />
     </section>
   );

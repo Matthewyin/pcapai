@@ -4,7 +4,7 @@ import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { AgentIntentEnum, AnalysisChainPlanSchema, type AgentAnswer, type AnalysisChainPlan, type AnalysisChainStep, type CaseGraph } from "../../../../packages/shared/src/index.js";
 import { apiConfig } from "../config.js";
-import { getTsharkQueryMcp, resetTsharkQueryMcp } from "../mcp/tsharkQueryMcpRuntime.js";
+import { createAgentServers, resetAgentServers } from "../mcp/mcpRegistry.js";
 import { SqliteSession } from "./sqliteSession.js";
 
 // 排障方法论：从 docs/agent-methodology.md 加载，开发期可改文档不必改代码。
@@ -540,11 +540,11 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
   const { llm, runner } = snapshotLlmRunner();
   input.onTrace?.(`Agent 使用模型：${llm.model}，端点：${llm.baseURL}`);
 
-  input.onTrace?.("正在获取常驻 tshark-query MCP 连接。");
-  const tsharkQueryMcp = await getTsharkQueryMcp();
-  input.onTrace?.("tshark-query MCP 已就绪；case graph 工具以进程内方式提供。");
+  input.onTrace?.("正在获取 MCP server 连接（注册制）。");
+  const mcpServers = await createAgentServers();
+  const serverCount = mcpServers.length;
+  input.onTrace?.(`MCP 已就绪（${serverCount} 个 server）；case graph 工具以进程内方式提供。`);
 
-  const mcpServers = [tsharkQueryMcp];
   const localTools = input.tools || [];
   // 动态生成工具名列表，放进 prompt 让 LLM 看到精确名称（减少拼写幻觉）
   const localToolNames = localTools.map((t) => t.name).filter(Boolean);
@@ -1046,7 +1046,7 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
       return closeOutAnswer();
     }
     // 会话失败可能源于 MCP 连接断开，重置单例让下一次请求重新拉起
-    resetTsharkQueryMcp();
+    resetAgentServers();
     throw error;
   }
 }

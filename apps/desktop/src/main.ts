@@ -4,7 +4,7 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from "electron";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import path from "node:path";
-import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import keytar from "keytar";
 
@@ -232,6 +232,56 @@ function seedUserDataFromResources(dirs: { fieldNotesSeeds: string; skills: stri
     } catch {
       // seed 失败不阻塞启动（API 会用空库降级）
     }
+  }
+  // seed MCP server 注册表 + skills 目录配置（首次启动写入 userData，用户后续可编辑）
+  seedPluginConfig();
+}
+
+/**
+ * 首次启动 seed MCP server 注册表 + skills 目录配置到 userData。
+ * 用户后续可通过设置页编辑（不覆盖已有文件）。
+ */
+function seedPluginConfig() {
+  const userData = app.getPath("userData");
+  // MCP 注册表：内置 tshark-query + evidence-opener（用 ${resources} 变量，运行时解析）
+  const mcpRegPath = path.join(userData, "mcp-registries.json");
+  if (!existsSync(mcpRegPath)) {
+    const mcpServers = {
+      servers: [
+        {
+          id: "tshark-query",
+          name: "tshark-query（数据包查询）",
+          type: "local",
+          enabled: true,
+          builtIn: true,
+          command: process.execPath,
+          args: ["${resources}/mcp/tshark-query/dist/index.js"],
+          env: {}
+        },
+        {
+          id: "evidence-opener",
+          name: "Wireshark 证据打开",
+          type: "local",
+          enabled: true,
+          builtIn: true,
+          command: process.execPath,
+          args: ["${resources}/mcp/evidence-opener/dist/index.js"],
+          env: {}
+        }
+      ]
+    };
+    try { writeFileSync(mcpRegPath, JSON.stringify(mcpServers, null, 2), "utf8"); } catch { /* ignore */ }
+  }
+  // Skills 目录配置：内置目录（只读）+ userData 目录（可写）
+  const skillsCfgPath = path.join(userData, "skills-config.json");
+  if (!existsSync(skillsCfgPath)) {
+    const skillsCfg = {
+      directories: [
+        "${resources}/data/skills",
+        "${userData}/skills"
+      ]
+    };
+    try { writeFileSync(skillsCfgPath, JSON.stringify(skillsCfg, null, 2), "utf8"); } catch { /* ignore */ }
   }
 }
 

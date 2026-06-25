@@ -1,8 +1,7 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { z } from "zod";
 import { ConversationSchema, PacketSummarySchema } from "../../../../packages/shared/src/index.js";
-import { apiConfig } from "../config.js";
+import { createClient } from "./mcpRegistry.js";
 
 const BuildDisplayFilterResultSchema = z.object({ displayFilter: z.string() });
 const CaptureTimeRangeResultSchema = z.object({
@@ -122,31 +121,8 @@ let clientPromise: Promise<Client> | null = null;
 
 function getClient(): Promise<Client> {
   if (!clientPromise) {
-    clientPromise = (async () => {
-      const client = new Client({ name: "pcapai-api", version: "0.1.0" });
-      const transport = new StdioClientTransport({
-        command: apiConfig.tsharkQueryMcp.command,
-        args: apiConfig.tsharkQueryMcp.args,
-        cwd: apiConfig.tsharkQueryMcp.cwd,
-        stderr: "pipe",
-        // MCP SDK 的 StdioClientTransport 只继承安全的环境变量（HOME/PATH/SHELL 等），
-        // 不含 ELECTRON_RUN_AS_NODE。打包后 MCP server 用 Electron 二进制启动，
-        // 必须传 ELECTRON_RUN_AS_NODE 让它以 node 模式运行（否则 GUI 模式启动崩溃）。
-        env: {
-          ...process.env,
-          ELECTRON_RUN_AS_NODE: process.env.ELECTRON_RUN_AS_NODE || "1"
-        }
-      });
-      // 诊断：监听 MCP server stderr + close 事件（排查 Connection closed）
-      transport.stderr?.on("data", (chunk: Buffer) => {
-        console.error(`[tshark-query MCP stderr] ${chunk.toString().trim()}`);
-      });
-      transport.onclose = () => {
-        console.error("[tshark-query MCP] transport closed");
-      };
-      await client.connect(transport);
-      return client;
-    })();
+    // 从注册表获取 client（替代硬编码 transport）
+    clientPromise = createClient("tshark-query");
     clientPromise.catch(() => {
       clientPromise = null;
     });

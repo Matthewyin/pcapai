@@ -15,6 +15,7 @@ import {
 import { runAgentCompatibilityCheck } from "../agents/runtime.js";
 import { rfcIndexStatus, searchRfc } from "../services/rfcRagService.js";
 import { startDownload, getDownloadStatus, cancelDownload, deleteDownloadedDb } from "../services/rfcDownloadService.js";
+import { listStatus as listMcpStatus, upsertServer, removeServer, toggleServer, loadServers as loadMcpServers, type McpServerConfig } from "../mcp/mcpRegistry.js";
 import { fieldNotesIndexStatus, listAllFieldNotes, getFieldNote, verifyFieldNote, disputeFieldNote, createFieldNote, deleteFieldNote, extractPacketFeatures, searchFieldNotes } from "../services/fieldNotesService.js";
 import { listSkills, getSkill, createSkill, deleteSkill, skillsIndexStatus } from "../services/skillsService.js";
 import { deleteLearnedPattern, listLearnedPatterns } from "../services/patternLearner.js";
@@ -405,32 +406,93 @@ export function createAgentRouter() {
   });
 
   // MCP Server 清单（静态元数据，仅展示用途、工具数和运行方式，不含启停/状态）
-  router.get("/settings/mcp", (_req, res) => {
+  // MCP server 状态（注册制）
+  router.get("/settings/mcp", async (_req, res) => {
+    try {
+      const statuses = await listMcpStatus();
+      // 补充 case-graph（进程内调用，不在注册表里）
+      res.json({
+        servers: [
+          ...statuses.map((s) => ({
+            id: s.id,
+            name: s.name,
+            description: s.type === "local" ? "本地 stdio" : s.type === "sse" ? "远程 SSE" : "远程 HTTP",
+            toolCount: s.connected ? undefined : 0,
+            kind: s.type,
+            enabled: s.enabled,
+            builtIn: s.builtIn,
+            connected: s.connected,
+            type: s.type
+          })),
+          {
+            id: "case-graph",
+            name: "case-graph-mcp",
+            description: "Agent 读写 case graph（进程内调用，22 个工具）",
+            toolCount: 22,
+            kind: "进程内调用",
+            enabled: true,
+            builtIn: true,
+            connected: true,
+            type: "in-process"
+          }
+        ]
+      });
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  // MCP server 注册表 CRUD
+  router.get("/mcp-servers", (_req, res) => {
+    res.json({ servers: loadMcpServers() });
+  });
+
+  router.post("/mcp-servers", (req, res) => {
+    try {
+      const config = req.body as McpServerConfig;
+      if (!config?.id || !config?.name || !config?.type) {
+        return res.status(400).json({ error: "缺少必填字段：id/name/type" });
+      }
+      const servers = upsertServer(config);
+      res.json({ servers });
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  router.post("/mcp-servers/:id/toggle", (req, res) => {
+    const updated = toggleServer(String(req.params.id));
+    if (!updated) return res.status(404).json({ error: "server not found" });
+    res.json({ server: updated });
+  });
+
+  router.delete("/mcp-servers/:id", (req, res) => {
+    const result = removeServer(String(req.params.id));
+    if (!result.removed) return res.status(400).json({ error: result.reason });
+    res.json({ removed: true });
+  });
+
+  // Skills 目录列表 + 新增
+  router.get("/skills-dirs", (_req, res) => {
     res.json({
-      servers: [
-        {
-          id: "tshark-query",
-          name: "tshark-query-mcp",
-          description: "读取 pcap 元数据并运行 tshark 查询：会话枚举、包查询、RST / 重传 / 零窗口 / DNS / TLS / HTTP / ICMP / UDP 事件、TCP stream follow、expert info 等。",
-          toolCount: 19,
-          kind: "stdio 常驻单例"
-        },
-        {
-          id: "evidence-opener",
-          name: "evidence-opener-mcp",
-          description: "用本地 Wireshark 打开 pcap 文件并应用 display filter，供证据卡下钻查看。",
-          toolCount: 1,
-          kind: "stdio 按需启动"
-        },
-        {
-          id: "case-graph",
-          name: "case-graph-mcp",
-          description: "Agent 读写 case graph：QueryRun / 证据卡 / 诊断 / 路径 / 拓扑 / 记忆 / 洞察 / 报告等 22 个工具。",
-          toolCount: 22,
-          kind: "进程内调用"
-        }
-      ]
+      main: apiConfig.skills.dir,
+      extra: apiConfig.skills.extraDirs
     });
+  });
+
+  router.post("/skills-dirs", (req, res) => {
+    const dir = typeof req.body?.dir === "string" ? req.body.dir.trim() : "";
+    if (!dir) return res.status(400).json({ error: "缺少 dir" });
+    if (!apiConfig.skills.extraDirs.includes(dir)) {
+      apiConfig.skills.extraDirs.push(dir);
+    }
+    res.json({ main: apiConfig.skills.dir, extra: apiConfig.skills.extraDirs });
+  });
+
+  router.delete("/skills-dirs", (req, res) => {
+    const dir = typeof req.query.dir === "string" ? req.query.dir : "";
+    apiConfig.skills.extraDirs = apiConfig.skills.extraDirs.filter((d) => d !== dir);
+    res.json({ main: apiConfig.skills.dir, extra: apiConfig.skills.extraDirs });
   });
 
   router.get("/settings/llm", (_req, res) => {

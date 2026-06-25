@@ -64,45 +64,57 @@ function ensureSkillsDir(): string {
   return dir;
 }
 
-// 列出所有 skill（只读 frontmatter，不读正文，省内存）
-export function listSkills(): Array<Pick<Skill, "name" | "description" | "triggers">> {
-  const dir = apiConfig.skills.dir;
-  if (!existsSync(dir)) return [];
-  const result: Array<Pick<Skill, "name" | "description" | "triggers">> = [];
-  for (const file of readdirSync(dir)) {
-    if (!file.endsWith(".md")) continue;
-    const name = file.replace(/\.md$/, "");
-    if (!isValidSkillName(name)) continue;
-    try {
-      const raw = readFileSync(path.join(dir, file), "utf8");
-      const { frontmatter } = parseFrontmatter(raw);
-      result.push({
-        name,
-        description: typeof frontmatter.description === "string" ? frontmatter.description : "",
-        triggers: asStringArray(frontmatter.triggers)
-      });
-    } catch {
-      // 单个文件解析失败跳过，不影响其他
-    }
-  }
-  return result.sort((a, b) => a.name.localeCompare(b.name));
+/** 所有 skills 目录（主目录 + extraDirs），后者优先级更高（用户可覆盖内置） */
+function allSkillDirs(): string[] {
+  return [apiConfig.skills.dir, ...apiConfig.skills.extraDirs].filter((d) => existsSync(d));
 }
 
-// 读取单个 skill 全文
+// 列出所有 skill（扫描所有目录，同名 skill 后面的目录覆盖前面的）
+export function listSkills(): Array<Pick<Skill, "name" | "description" | "triggers">> {
+  const dirs = allSkillDirs();
+  const byName = new Map<string, Pick<Skill, "name" | "description" | "triggers">>();
+  for (const dir of dirs) {
+    let files: string[];
+    try { files = readdirSync(dir); } catch { continue; }
+    for (const file of files) {
+      if (!file.endsWith(".md")) continue;
+      const name = file.replace(/\.md$/, "");
+      if (!isValidSkillName(name)) continue;
+      try {
+        const raw = readFileSync(path.join(dir, file), "utf8");
+        const { frontmatter } = parseFrontmatter(raw);
+        byName.set(name, {
+          name,
+          description: typeof frontmatter.description === "string" ? frontmatter.description : "",
+          triggers: asStringArray(frontmatter.triggers)
+        });
+      } catch {
+        // 单个文件解析失败跳过
+      }
+    }
+  }
+  return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+// 读取单个 skill 全文（从优先级最高的目录找）
 export function getSkill(name: string): Skill | null {
   if (!isValidSkillName(name)) return null;
-  const filePath = path.join(apiConfig.skills.dir, `${name}.md`);
-  if (!existsSync(filePath)) return null;
-  const raw = readFileSync(filePath, "utf8");
-  const { frontmatter, body } = parseFrontmatter(raw);
-  return {
-    name,
-    description: typeof frontmatter.description === "string" ? frontmatter.description : "",
-    triggers: asStringArray(frontmatter.triggers),
-    toolsRequired: asStringArray(frontmatter.tools_required),
-    body: body.trim(),
-    filePath
-  };
+  for (const dir of [...allSkillDirs()].reverse()) {
+    const filePath = path.join(dir, `${name}.md`);
+    if (existsSync(filePath)) {
+      const raw = readFileSync(filePath, "utf8");
+      const { frontmatter, body } = parseFrontmatter(raw);
+      return {
+        name,
+        description: typeof frontmatter.description === "string" ? frontmatter.description : "",
+        triggers: asStringArray(frontmatter.triggers),
+        toolsRequired: asStringArray(frontmatter.tools_required),
+        body: body.trim(),
+        filePath
+      };
+    }
+  }
+  return null;
 }
 
 // 创建 skill（Agent 自我进化用）。已存在则覆盖（带 overwrite 控制）。

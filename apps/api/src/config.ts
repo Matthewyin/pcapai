@@ -84,6 +84,8 @@ const defaults = JSON.parse(readFileSync(configPath, "utf8")) as {
     };
     skills: {
       dir: string;
+      /** 额外 skills 目录（多目录注册制，用户可配置外部/团队目录） */
+      extraDirs: string[];
     };
     session: {
       compressThreshold: number;
@@ -115,6 +117,19 @@ const defaults = JSON.parse(readFileSync(configPath, "utf8")) as {
         captureCorrelation: string;
       };
     };
+    /** MCP server 注册表（替代旧的 tsharkQueryMcp/evidenceOpenerMcp 硬编码） */
+    mcpServers: {
+      id: string;
+      name: string;
+      type: "local" | "sse" | "streamable-http";
+      enabled: boolean;
+      builtIn: boolean;
+      command?: string;
+      args?: string[];
+      env?: Record<string, string>;
+      url?: string;
+    }[];
+    /** 向后兼容：旧版 tsharkQueryMcp/evidenceOpenerMcp（已被 mcpServers 替代，保留用于 seed） */
     tsharkQueryMcp: {
       command: string;
       args: string[];
@@ -214,7 +229,9 @@ export const apiConfig = {
   skills: {
     dir: process.env.PCAPAI_SKILLS_DIR
       ? path.resolve(process.env.PCAPAI_SKILLS_DIR)
-      : path.resolve(workspaceRoot, defaults.api.skills.dir)
+      : path.resolve(workspaceRoot, defaults.api.skills.dir),
+    /** 额外 skills 目录（用户可配置外部目录，逗号分隔的环境变量或 defaults extraDirs） */
+    extraDirs: resolveSkillsExtraDirs(defaults.api.skills.extraDirs || [])
   },
   session: {
     compressThreshold: numberFromEnv(process.env.PCAPAI_SESSION_COMPRESS_THRESHOLD, defaults.api.session.compressThreshold),
@@ -252,6 +269,10 @@ export const apiConfig = {
       : defaults.api.evidenceOpenerMcp.args,
     cwd: workspaceRoot
   },
+  /** MCP server 注册表：支持 local(stdio)/sse/streamable-http 三种类型。
+   *  环境变量 PCAPAI_TSHARK_QUERY_MCP_* / PCAPAI_EVIDENCE_OPENER_MCP_* 会覆盖内置 server 配置（dev 模式优先）。
+   *  userData 的 mcp-registries.json 会覆盖 defaults（用户可编辑，设置页可视化操作）。 */
+  mcpServers: resolveMcpServers(defaults.api.mcpServers || []),
   llm: {
     apiKey: process.env.PCAPAI_LLM_API_KEY || process.env.OPENAI_API_KEY || "",
     baseURL: process.env.PCAPAI_LLM_BASE_URL || process.env.OPENAI_BASE_URL || defaults.llm.baseURL,
@@ -284,4 +305,99 @@ export function updateLlmConfig(input: { apiKey?: string; baseURL?: string; mode
     apiConfig.llm.providerData = input.providerData;
     process.env.PCAPAI_LLM_PROVIDER_DATA = JSON.stringify(input.providerData);
   }
+}
+
+/**
+ * 路径变量替换：把 ${resources}/${userData}/${workspace} 替换为实际路径。
+ * 打包后 resources=process.resourcesPath/app, userData=PCAPAI_USERDATA_DIR, workspace=PCAPAI_ROOT
+ */
+export function resolvePathVars(p: string): string {
+  const resources = process.env.PCAPAI_ROOT || (typeof (process as unknown as { resourcesPath?: string }).resourcesPath === "string" ? path.join((process as unknown as { resourcesPath: string }).resourcesPath, "app") : workspaceRoot);
+  const userData = process.env.PCAPAI_USERDATA_DIR || workspaceRoot;
+  return p
+    .replace(/\$\{resources\}/g, resources)
+    .replace(/\$\{userData\}/g, userData)
+    .replace(/\$\{workspace\}/g, workspaceRoot);
+}
+
+/** 解析 MCP server 注册表：defaults 为基准，环境变量覆盖内置 server，userData JSON 覆盖全部 */
+function resolveMcpServers(
+  defaultServers: Array<{ id: string; name: string; type: "local" | "sse" | "streamable-http"; enabled: boolean; builtIn: boolean; command?: string; args?: string[]; env?: Record<string, string>; url?: string }>
+) {
+  let servers = defaultServers.map((s) => ({ ...s }));
+  // 环境变量覆盖内置 server（dev 模式：PCAPAI_TSHARK_QUERY_MCP_* 优先）
+  const tsharkCmd = process.env.PCAPAI_TSHARK_QUERY_MCP_COMMAND;
+  const tsharkArgs = process.env.PCAPAI_TSHARK_QUERY_MCP_ARGS?.split(" ").filter(Boolean);
+  if (tsharkCmd || tsharkArgs) {
+    const idx = servers.findIndex((s) => s.id === "tshark-query");
+    if (idx >= 0) {
+      if (tsharkCmd) servers[idx].command = tsharkCmd;
+      if (tsharkArgs) servers[idx].args = tsharkArgs;
+    }
+  }
+  const evidenceCmd = process.env.PCAPAI_EVIDENCE_OPENER_MCP_COMMAND;
+  const evidenceArgs = process.env.PCAPAI_EVIDENCE_OPENER_MCP_ARGS?.split(" ").filter(Boolean);
+  if (evidenceCmd || evidenceArgs) {
+    const idx = servers.findIndex((s) => s.id === "evidence-opener");
+    if (idx >= 0) {
+      if (evidenceCmd) servers[idx].command = evidenceCmd;
+      if (evidenceArgs) servers[idx].args = evidenceArgs;
+    }
+  }
+  // userData JSON 覆盖（用户编辑的注册表）
+  const userDataDir = process.env.PCAPAI_USERDATA_DIR;
+  if (userDataDir) {
+    const regPath = path.join(userDataDir, "mcp-registries.json");
+    try {
+      if (existsSync(regPath)) {
+        const reg = JSON.parse(readFileSync(regPath, "utf8"));
+        if (Array.isArray(reg.servers)) {
+          servers = reg.servers;
+        }
+      }
+    } catch {
+      // JSON 解析失败用 defaults
+    }
+  }
+  // 路径变量替换（command/args/url 中的 ${resources} 等）
+  return servers.map((s) => ({
+    ...s,
+    command: s.command ? resolvePathVars(s.command) : undefined,
+    args: s.args?.map(resolvePathVars),
+    url: s.url ? resolvePathVars(s.url) : undefined
+  }));
+}
+
+/** 解析额外 skills 目录（环境变量 PCAPAI_SKILLS_EXTRA_DIRS 逗号分隔 + defaults extraDirs） */
+function resolveSkillsExtraDirs(defaultExtraDirs: string[]): string[] {
+  const dirs: string[] = [];
+  // 环境变量
+  const envDirs = process.env.PCAPAI_SKILLS_EXTRA_DIRS;
+  if (envDirs) {
+    for (const d of envDirs.split(",").map((s) => s.trim()).filter(Boolean)) {
+      dirs.push(resolvePathVars(d));
+    }
+  }
+  // defaults
+  for (const d of defaultExtraDirs) {
+    dirs.push(resolvePathVars(d));
+  }
+  // userData 配置文件
+  const userDataDir = process.env.PCAPAI_USERDATA_DIR;
+  if (userDataDir) {
+    const cfgPath = path.join(userDataDir, "skills-config.json");
+    try {
+      if (existsSync(cfgPath)) {
+        const cfg = JSON.parse(readFileSync(cfgPath, "utf8"));
+        if (Array.isArray(cfg.directories)) {
+          for (const d of cfg.directories) {
+            dirs.push(resolvePathVars(d));
+          }
+        }
+      }
+    } catch {
+      // 解析失败忽略
+    }
+  }
+  return [...new Set(dirs)]; // 去重
 }

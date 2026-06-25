@@ -52,7 +52,8 @@
       }
     },
     "skills": {
-      "dir": "data/skills"
+      "dir": "data/skills",
+      "extraDirs": []
     },
     "session": {
       "compressThreshold": 40,
@@ -88,6 +89,28 @@
         "captureCorrelation": "串起来|关联起来|能串|能否串|能不能串|两个文件|2个文件|多文件|多节点|跨节点|链路还原|路径还原|是否连续|能否关联|能不能关联"
       }
     },
+    "mcpServers": [
+      {
+        "id": "tshark-query",
+        "name": "tshark-query（数据包查询）",
+        "type": "local",
+        "enabled": true,
+        "builtIn": true,
+        "command": "npm",
+        "args": ["run", "dev", "-w", "mcp/tshark-query"],
+        "env": {}
+      },
+      {
+        "id": "evidence-opener",
+        "name": "Wireshark 证据打开",
+        "type": "local",
+        "enabled": true,
+        "builtIn": true,
+        "command": "npm",
+        "args": ["run", "dev", "-w", "mcp/evidence-opener"],
+        "env": {}
+      }
+    ],
     "tsharkQueryMcp": {
       "command": "npm",
       "args": ["run", "dev", "-w", "mcp/tshark-query"]

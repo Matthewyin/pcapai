@@ -3845,6 +3845,83 @@ pre {
  * 阶段 3a：RFC 库管理面板（设置页）+ 知识脉络 Tab
  * ============================================================ */
 
+/* MCP Server 注册制管理面板（设置页） */
+.mcpServersPanel { display: flex; flex-direction: column; gap: 14px; }
+
+.mcpServerList { display: flex; flex-direction: column; gap: 8px; }
+
+.mcpServerItem {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 11px 13px;
+}
+
+.mcpServerItem.disabled { opacity: 0.55; }
+
+.mcpServerHeader {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.mcpServerName {
+  align-items: center;
+  display: flex;
+  gap: 6px;
+}
+
+.mcpServerName .connected { color: var(--rc-verified-accent); }
+
+.mcpServerName .tag {
+  border-radius: 3px;
+  font-size: 10px;
+  padding: 1px 6px;
+}
+
+.tag.builtIn { background: var(--status-bg); color: var(--accent); }
+.tag.local { background: var(--status-bg); color: var(--faint); }
+.tag.sse, .tag.streamable-http { background: var(--rc-rfc-verified-bg); color: var(--rc-rfc-verified-text); }
+
+.mcpServerActions { display: flex; gap: 6px; }
+
+.mcpServerActions .dangerBtn { background: transparent; border: 0; color: var(--danger); cursor: pointer; padding: 4px; }
+
+.mcpServerCommand {
+  color: var(--faint);
+  display: block;
+  font-family: monospace;
+  font-size: 11px;
+  margin-bottom: 4px;
+  word-break: break-all;
+}
+
+.mcpServerStatus { font-size: 11px; }
+.mcpServerStatus.online { color: var(--rc-verified-accent); }
+.mcpServerStatus.offline { color: var(--faint); }
+
+.mcpAddForm {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+}
+
+.mcpAddForm input, .mcpAddForm select {
+  background: var(--input-bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-size: 12px;
+  min-height: 32px;
+  padding: 6px 10px;
+}
+
+.mcpAddFormActions { display: flex; gap: 8px; }
+
 /* RFC 库面板（设置页） */
 .rfcLibraryPanel {
   display: flex;

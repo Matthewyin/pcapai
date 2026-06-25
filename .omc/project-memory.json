@@ -1,0 +1,166 @@
+{
+  "version": "1.0.0",
+  "lastScanned": 1782228721109,
+  "projectRoot": "/Users/matthewyin/Coding/pcapAI",
+  "techStack": {
+    "languages": [
+      {
+        "name": "JavaScript/TypeScript",
+        "version": null,
+        "confidence": "high",
+        "markers": [
+          "package.json"
+        ]
+      }
+    ],
+    "frameworks": [],
+    "packageManager": "npm",
+    "runtime": null
+  },
+  "build": {
+    "buildCommand": "npm run build",
+    "testCommand": "npm test",
+    "lintCommand": null,
+    "devCommand": "npm run dev",
+    "scripts": {
+      "dev": "concurrently -n api,web \"npm run dev -w apps/api\" \"npm run dev -w apps/web\"",
+      "build": "npm run build --workspaces --if-present",
+      "check": "npm run check --workspaces --if-present",
+      "test": "npm run test --workspaces --if-present",
+      "rag:build": "npm run rag:build -w apps/api --",
+      "fieldnotes:build": "npm run fieldnotes:build -w apps/api --",
+      "eval": "npm run eval -w apps/api --",
+      "launch": "node scripts/launch.mjs",
+      "app:dev": "concurrently -k -n web,desktop \"npm run dev -w apps/web\" \"npm run dev -w apps/desktop\"",
+      "app:build": "npm run build -w packages/shared && npm run build -w apps/api && npm run build -w apps/web && npm run build -w mcp/tshark-query && npm run build -w mcp/evidence-opener && npm run build -w apps/desktop"
+    }
+  },
+  "conventions": {
+    "namingStyle": null,
+    "importStyle": null,
+    "testPattern": null,
+    "fileOrganization": null
+  },
+  "structure": {
+    "isMonorepo": true,
+    "workspaces": [
+      "apps/*",
+      "mcp/*",
+      "packages/*"
+    ],
+    "mainDirectories": [
+      "docs",
+      "scripts"
+    ],
+    "gitBranches": {
+      "defaultBranch": "main",
+      "branchingStrategy": null
+    }
+  },
+  "customNotes": [],
+  "directoryMap": {
+    "RFC": {
+      "path": "RFC",
+      "purpose": null,
+      "fileCount": 9783,
+      "lastAccessed": 1782228721102,
+      "keyFiles": [
+        "RFCs_for_errata.txt",
+        "bcp-index.txt",
+        "bcp-ref.txt",
+        "fyi-index.txt",
+        "ien-index.txt"
+      ]
+    },
+    "apps": {
+      "path": "apps",
+      "purpose": null,
+      "fileCount": 1,
+      "lastAccessed": 1782228721102,
+      "keyFiles": []
+    },
+    "config": {
+      "path": "config",
+      "purpose": "Configuration files",
+      "fileCount": 1,
+      "lastAccessed": 1782228721102,
+      "keyFiles": [
+        "defaults.json"
+      ]
+    },
+    "data": {
+      "path": "data",
+      "purpose": "Data files",
+      "fileCount": 1,
+      "lastAccessed": 1782228721103,
+      "keyFiles": []
+    },
+    "docs": {
+      "path": "docs",
+      "purpose": "Documentation",
+      "fileCount": 8,
+      "lastAccessed": 1782228721103,
+      "keyFiles": [
+        "agent-methodology.md",
+        "architecture.md",
+        "design-field-notes-roadmap.md",
+        "design-field-notes.md",
+        "design-full-roadmap.md"
+      ]
+    },
+    "mcp": {
+      "path": "mcp",
+      "purpose": null,
+      "fileCount": 1,
+      "lastAccessed": 1782228721103,
+      "keyFiles": []
+    },
+    "packages": {
+      "path": "packages",
+      "purpose": null,
+      "fileCount": 1,
+      "lastAccessed": 1782228721103,
+      "keyFiles": []
+    },
+    "pcap": {
+      "path": "pcap",
+      "purpose": null,
+      "fileCount": 1,
+      "lastAccessed": 1782228721103,
+      "keyFiles": [
+        "20260127newnew01.pcap"
+      ]
+    },
+    "scripts": {
+      "path": "scripts",
+      "purpose": "Build/utility scripts",
+      "fileCount": 1,
+      "lastAccessed": 1782228721103,
+      "keyFiles": [
+        "launch.mjs"
+      ]
+    },
+    "apps/api": {
+      "path": "apps/api",
+      "purpose": "API routes",
+      "fileCount": 3,
+      "lastAccessed": 1782228721109,
+      "keyFiles": [
+        "package.json",
+        "tsconfig.json"
+      ]
+    },
+    "data/fixtures": {
+      "path": "data/fixtures",
+      "purpose": "Test fixtures",
+      "fileCount": 2,
+      "lastAccessed": 1782228721109,
+      "keyFiles": [
+        "multi-fault-scenario.pcap",
+        "saas-cascade-fault.pcap"
+      ]
+    }
+  },
+  "hotPaths": [],
+  "userDirectives": []
+}
