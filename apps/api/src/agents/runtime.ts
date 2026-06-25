@@ -559,7 +559,20 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
       "```",
       "",
       "这些工具会写入 QueryRun、EvidenceCard、checks 和 ToolRun，适合回答用户的具体排障问题。",
-      "tshark-query MCP 仍用于更底层的包级查询；不要绕过 pcapai_ 工具重复做已经封装好的确定性查询。"
+      "tshark-query MCP 仍用于更底层的包级查询；不要绕过 pcapai_ 工具重复做已经封装好的确定性查询。",
+      "",
+      "## 工具调用纪律（避免冗余）",
+      "- 统计类：只调 `pcapai_get_network_statistics`，不要同时调 `get_case_statistics` 或 `get_network_statistics`（重复）",
+      "- 协议列表：只调 `pcapai_list_protocols`，不要同时调 `list_protocols`（重复）",
+      "- TCP 异常：直接用专用工具（`list_tcp_retransmissions` / `list_tcp_resets` / `list_tcp_zero_window`），不要用通用 `query_packets` 重复查同类数据",
+      "- **同一轮内不要重复调用已调用过的工具**（检查 session 历史中最近的调用）",
+      "- 工具输出被标记 `[cleared]` 时，说明旧结果已被清理，如需该数据请重新调用",
+      "",
+      "## 追问处理（重要）",
+      "如果用户的问题基于上一轮的分析结果（如\"告诉我重传序号\"\"那 4 个 RST 的详情\"）：",
+      "1. 先用 `get_case_memory` 读取已记录的关键发现",
+      "2. 如果 memory 或 session 历史中已有答案，**直接引用，不要重新查询**",
+      "3. 只有确实缺少数据时才调用新工具，且只调必要的那个（不要重新执行完整分析）"
     ].join("\n")
     : "";
 
@@ -716,6 +729,7 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
       "- 根因结论（root cause）必须满足以下之一：(a) 经 get_rfc_section 回读 RFC 原文并引用编号+§section；(b) 明确标注\"经验推测，无 RFC 依据\"。不允许凭记忆引用 RFC 编号或章节内容。",
       "- 当信息不足时，返回 followUpQuestions，不要猜测。",
       "- 输出必须绑定 QueryRun、evidenceIds、packetIds 等可回溯 ID。",
+      "- **分析完成后**，调用 update_case_memory（findings 参数）记录关键发现（具体帧号、重传明细、RST 列表、RFC 引用等）。这样用户追问细节时不需要重新查询。",
       jsonOutputInstruction
     ].join("\n"),
     handoffs: [evidenceAgent, pathAgent, protocolAgent],
@@ -798,63 +812,88 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
     }
   }
 
-  // 应用层上下文压缩：session 条目超阈值时，把早期的工具调用/输出聚合成一条摘要，
-  // 保留最近 N 条原样。确定性压缩（不调 LLM），降本且防 context 爆炸。
-  // SDK 原生 OpenAIResponsesCompactionSession 依赖 OpenAI Responses API（MiniMax useResponses=false 不支持）。
-  async function compressSessionIfNeeded(session: SqliteSession) {
-    const threshold = apiConfig.session.compressThreshold;
-    const keepRecent = apiConfig.session.keepRecent;
-    if (session.itemCount() <= threshold) return;
-    const allItems = await session.getItems();
-    if (allItems.length <= keepRecent) return;
-    // 保留 recent 时确保 tool_call / function_call 和它的 output 成对完整。
-    // DeepSeek 等模型严格要求 function_call 后面紧跟 function_call_output，
-    // 截断点落在中间会导致 "tool_call_ids did not have response messages" 400 错误。
+  // 应用层上下文管理（参考 Anthropic context engineering 文章的三原语）：
+  // 1. Tool-result clearing（主要策略）：保留最近 N 个工具输出原文，清除更早的 payload。
+  //    保留 function_call + function_call_output 的配对结构（避免 DeepSeek 400），
+  //    Agent 看到 [cleared] 知道调过但结果被清，需要时可重调（无损——工具可重新调用）。
+  // 2. Compaction（辅助策略）：只压缩对话文本（用户消息 + assistant 推理），
+  //    不碰工具输出（工具输出由 clearing 管理）。
+  async function clearStaleToolResults(session: SqliteSession) {
+    const items = await session.getItems();
+    if (items.length <= apiConfig.session.compressThreshold) return;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const typedItems = allItems as any[];
-    let recent = typedItems.slice(typedItems.length - keepRecent);
-    // 如果 recent 第一条是 function_call_output 但对应的 function_call 在 older 区（被截走），
-    // 丢弃这些孤立的 output，直到 recent 以 function_call 或 message 开头
-    while (recent.length > 0) {
-      const first = recent[0];
-      if (first?.type === "function_call_output") {
-        recent = recent.slice(1);
-      } else {
-        break;
-      }
-    }
-    // 同理：如果 recent 末尾是 function_call 但没有对应的 output（可能被收口逻辑截断），
-    // 也丢弃，避免发给 LLM 一个未响应的工具调用
-    while (recent.length > 0) {
-      const last = recent[recent.length - 1];
-      if (last?.type === "function_call") {
-        recent = recent.slice(0, -1);
-      } else {
-        break;
-      }
-    }
-    const older = typedItems.slice(0, typedItems.length - keepRecent);
-    // 聚合早期工具相关条目为摘要
-    const toolSummaries: string[] = [];
+    const typed = items as any[];
+    // 收集所有 function_call_output 的位置 + call_id
+    const outputs = typed
+      .map((item, idx) => ({ idx, item }))
+      .filter(({ item }) => item?.type === "function_call_output");
+    if (outputs.length <= apiConfig.session.keepRecent) return; // 工具输出不够多，不需要清理
+    // 保留最近 keepRecent 个工具输出原文，清除更早的
+    const keepCount = apiConfig.session.keepRecent;
+    const outputsToClear = outputs.slice(0, outputs.length - keepCount);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    for (const item of older) {
-      if (item.type === "function_call" && item.name) {
-        toolSummaries.push(`调用 ${item.name}`);
-      } else if (item.type === "function_call_output" && item.output) {
-        const out = typeof item.output === "string" ? item.output : JSON.stringify(item.output);
-        toolSummaries.push(`  输出: ${out.slice(0, 120)}`);
+    const cleared = typed.map((item) => ({ ...item })) as any[];
+    let clearedCount = 0;
+    let clearedTokens = 0;
+    for (const { idx, item } of outputsToClear) {
+      const out = item.output;
+      const outLen = typeof out === "string" ? out.length : JSON.stringify(out).length;
+      if (outLen > 100) {
+        // 只清除较大的 payload（>100 字符），小的保留（不值得清）
+        clearedTokens += outLen;
+        cleared[idx].output = "[cleared to save context — 调用同名工具可重新获取完整结果]";
+        clearedCount += 1;
       }
     }
-    const summaryItems: AgentInputItem[] = toolSummaries.length
-      ? [{
-          type: "message",
-          role: "user",
-          content: [{ type: "input_text", text: `[上下文压缩] 早期 ${older.length} 条历史已聚合，其中工具调用：\n${toolSummaries.slice(0, 20).join("\n")}${toolSummaries.length > 20 ? `\n...等共 ${toolSummaries.length} 条` : ""}` }]
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        } as any]
-      : [];
-    session.replaceAllWith([...summaryItems, ...recent]);
-    input.onTrace?.(`上下文压缩：${allItems.length} 条 → ${summaryItems.length + recent.length} 条。`);
+    if (clearedCount > 0) {
+      session.replaceAllWith(cleared as AgentInputItem[]);
+      input.onTrace?.(`工具输出清理：清除 ${clearedCount} 个旧工具结果（保留最近 ${keepCount} 个原文）。`);
+    }
+  }
+
+  // Compaction：只压缩对话文本（用户消息 + assistant 推理），不碰工具输出
+  // 只在文本条目极多时触发（通常是多轮对话累积）
+  async function compressDialogueIfNeeded(session: SqliteSession) {
+    const items = await session.getItems();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const typed = items as any[];
+    // 只看对话类条目（message），不含 function_call
+    const dialogueItems = typed.filter((item) => item?.type === "message" && item?.role !== "system");
+    if (dialogueItems.length <= 20) return; // 对话条目不够多，不压缩
+    // 保留最近 8 条对话原文，更早的聚合成摘要
+    const oldDialogue = dialogueItems.slice(0, -8);
+    const recentDialogue = dialogueItems.slice(-8);
+    // 构建 oldDialogue 的摘要（提取每条的核心内容）
+    const summaries: string[] = [];
+    for (const item of oldDialogue) {
+      const content = item.content;
+      let text = "";
+      if (typeof content === "string") text = content;
+      else if (Array.isArray(content)) text = content.map((c: { text?: string }) => c?.text || "").join(" ");
+      if (text.trim()) summaries.push(`[${item.role}] ${text.slice(0, 150)}`);
+    }
+    // 用摘要替换 oldDialogue，保留 recentDialogue + 所有 function_call/function_call_output
+    const summaryItem: AgentInputItem = {
+      type: "message",
+      role: "user",
+      content: [{ type: "input_text", text: `[对话历史摘要] ${oldDialogue.length} 条早期对话：\n${summaries.join("\n")}` }]
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any;
+    // 重建 items：摘要 + 保留的非对话条目（按原顺序） + recentDialogue
+    // 策略：遍历原 items，对话类的如果不在 recentDialogue 就跳过（用摘要替代），
+    // 非对话类（function_call/output）全部保留
+    const recentSet = new Set(recentDialogue);
+    const rebuilt: AgentInputItem[] = [summaryItem];
+    for (const item of typed) {
+      if (item?.type === "message" && recentSet.has(item)) {
+        rebuilt.push(item as AgentInputItem);
+      } else if (item?.type !== "message") {
+        rebuilt.push(item as AgentInputItem);
+      }
+      // oldDialogue 跳过（已被摘要替代）
+    }
+    session.replaceAllWith(rebuilt);
+    input.onTrace?.(`对话压缩：${oldDialogue.length} 条早期对话 → 1 条摘要。`);
   }
 
   /**
@@ -932,6 +971,8 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
       // 清理 session 中可能存在的不完整 tool_call 对（上一轮中断/收口导致）。
       // DeepSeek 等模型严格要求 function_call 后面紧跟 function_call_output，
       // 孤立的 function_call 或 function_call_output 会触发 400 "tool_call_ids did not have response"。
+      // 运行前先清理上一轮遗留的旧工具输出 + 不完整 tool_call 对
+      await clearStaleToolResults(session);
       await sanitizeSessionToolCalls(session);
       input.onTrace?.(`已启用持久化 session（${session.itemCount()} 条历史）。`);
     }
@@ -989,9 +1030,15 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
     }
     input.onTrace?.("Agents SDK 运行完成，正在归一化模型输出为 AgentAnswer。");
     const answer = parseAgentOutput(finalOutput);
-    // 应用层上下文压缩：session 条目超阈值时聚合早期工具调用，防下一轮 context 爆炸。
-    // SDK 原生 compaction 依赖 OpenAI Responses API（MiniMax 不支持），此处用确定性压缩兜底。
-    if (session) await compressSessionIfNeeded(session);
+    // 应用层上下文管理（Anthropic context engineering 三原语适配）：
+    // 1. Tool-result clearing：保留最近 N 个工具输出原文，清除旧 payload（保留配对结构）
+    // 2. Dialogue compaction：只压缩对话文本，不碰工具输出
+    // 3. sanitize：清理任何残留的不完整 tool_call 对
+    if (session) {
+      await clearStaleToolResults(session);
+      await compressDialogueIfNeeded(session);
+      await sanitizeSessionToolCalls(session);
+    }
     return { ...answer, toolCalls };
   } catch (error) {
     if (error instanceof MaxTurnsExceededError && collectedToolResults.length) {

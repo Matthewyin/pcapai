@@ -479,22 +479,24 @@ export function createCaseGraphTools(input: CaseGraphToolsInput): Tool[] {
     }),
     tool({
       name: "get_case_memory",
-      description: "读取当前案例的记忆：已确认的网络拓扑、已有分析结论、用户补充信息。",
+      description: "读取当前案例的记忆：已确认的网络拓扑、已记录的关键发现（含帧号/重传明细）、用户补充信息。追问时优先调用此工具获取已有结论。",
       parameters: z.object({}),
       execute: async () => json(input.loadGraph().memory || defaultCaseMemory())
     }),
     tool({
       name: "update_case_memory",
-      description: "更新案例记忆。用于保存用户确认的网络拓扑、补充信息等。topology 会覆盖，userNotes 会追加。",
+      description: "更新案例记忆。用于保存网络拓扑、用户补充信息、关键发现（findings）。findings 会被追加，用于记录具体帧号/重传明细/RFC 引用等，后续追问可直接引用。",
       parameters: z.object({
         topology: z.string().optional(),
-        userNotes: z.string().optional()
+        userNotes: z.string().optional(),
+        findings: z.array(z.string()).optional().describe("关键发现列表，每条是一个可被追问引用的事实（如'端口58487↔54038有4次重传：Frame 1234/1235/1236/1237'）")
       }),
-      execute: async ({ topology, userNotes }) => {
+      execute: async ({ topology, userNotes, findings }) => {
         const graph = input.loadGraph();
         const memory: CaseMemory = { ...defaultCaseMemory(), ...graph.memory };
         if (topology) memory.topology = topology;
         if (userNotes) memory.userNotes = [...memory.userNotes, userNotes];
+        if (findings && findings.length) memory.userNotes = [...memory.userNotes, ...findings.map((f) => `[发现] ${f}`)];
         input.saveGraph({ ...graph, memory });
         return json({ updated: true, memory });
       }
