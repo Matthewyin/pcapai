@@ -48,6 +48,7 @@ export type ServerStatus = {
   builtIn: boolean;
   connected: boolean;
   toolCount?: number;
+  toolNames?: string[];
   error?: string;
 };
 
@@ -232,14 +233,39 @@ export function resetClient(serverId?: string): void {
 
 export async function listStatus(): Promise<ServerStatus[]> {
   const servers = loadServers();
-  return servers.map((s) => ({
-    id: s.id,
-    name: s.name,
-    type: s.type,
-    enabled: s.enabled,
-    builtIn: !!s.builtIn,
-    connected: agentServerCache.has(s.id) || clientCache.has(s.id)
-  }));
+  const results = await Promise.allSettled(
+    servers.map(async (s): Promise<ServerStatus> => {
+      if (!s.enabled) {
+        return { id: s.id, name: s.name, type: s.type, enabled: false, builtIn: !!s.builtIn, connected: false };
+      }
+      try {
+        // 主动连接获取真实状态 + 工具列表
+        const server = createAgentServer(s);
+        await connectAgentServer(server, s);
+        let toolNames: string[] = [];
+        try {
+          const tools = await server.listTools();
+          toolNames = tools.map((t: { name?: string }) => t.name || "").filter(Boolean);
+        } catch { /* listTools 失败不阻塞状态查询 */ }
+        // 连接后立即关闭（状态查询不需要常驻），缓存由 Agent 运行时填充
+        try { await server.close(); } catch { /* ignore */ }
+        return {
+          id: s.id, name: s.name, type: s.type, enabled: true, builtIn: !!s.builtIn,
+          connected: true, toolCount: toolNames.length, toolNames
+        };
+      } catch (error) {
+        return {
+          id: s.id, name: s.name, type: s.type, enabled: true, builtIn: !!s.builtIn,
+          connected: false, error: error instanceof Error ? error.message : String(error)
+        };
+      }
+    })
+  );
+  return results.map((r, i) => r.status === "fulfilled" ? r.value : {
+    id: servers[i].id, name: servers[i].name, type: servers[i].type,
+    enabled: servers[i].enabled, builtIn: !!servers[i].builtIn, connected: false,
+    error: r.status === "rejected" ? String(r.reason) : "unknown error"
+  });
 }
 
 /** 新增/更新 server（upsert by id） */

@@ -15,15 +15,19 @@ type Server = {
   enabled: boolean;
   builtIn: boolean;
   connected: boolean;
+  toolCount?: number;
+  toolNames?: string[];
   command?: string;
   args?: string[];
   url?: string;
+  error?: string;
 };
 
 export function McpServersPanel() {
   const [servers, setServers] = React.useState<Server[]>([]);
   const [loading, setLoading] = React.useState(false);
   const [showAddForm, setShowAddForm] = React.useState(false);
+  const [expandedTools, setExpandedTools] = React.useState<Set<string>>(new Set());
   const [newServer, setNewServer] = React.useState({
     id: "",
     name: "",
@@ -35,7 +39,8 @@ export function McpServersPanel() {
 
   const refresh = React.useCallback(async () => {
     try {
-      const res = await fetch("/api/mcp-servers");
+      // 用 settings/mcp 端点获取含工具列表的完整状态
+      const res = await fetch("/api/settings/mcp");
       const data = await res.json();
       setServers(data.servers || []);
     } catch { /* ignore */ }
@@ -129,6 +134,15 @@ export function McpServersPanel() {
                 <strong>{server.name}</strong>
                 {server.builtIn ? <span className="tag builtIn">内置</span> : null}
                 <span className={`tag ${server.type}`}>{server.type}</span>
+                {server.toolCount !== undefined && server.toolCount > 0 ? (
+                  <span className="tag toolCount" onClick={() => {
+                    const next = new Set(expandedTools);
+                    if (next.has(server.id)) next.delete(server.id); else next.add(server.id);
+                    setExpandedTools(next);
+                  }}>
+                    {server.toolCount} 个工具 {expandedTools.has(server.id) ? "▾" : "▸"}
+                  </span>
+                ) : null}
               </div>
               <div className="mcpServerActions">
                 <button onClick={() => void handleToggle(server.id)} disabled={loading || server.type === "in-process"} title={server.enabled ? "禁用" : "启用"}>
@@ -143,9 +157,19 @@ export function McpServersPanel() {
             </div>
             {server.command ? <code className="mcpServerCommand">{server.command} {server.args?.join(" ")}</code> : null}
             {server.url ? <code className="mcpServerCommand">{server.url}</code> : null}
-            <span className={`mcpServerStatus ${server.connected ? "online" : "offline"}`}>
-              {server.connected ? "● 已连接" : "○ 未连接"}
-            </span>
+            <div className="mcpServerStatusRow">
+              <span className={`mcpServerStatus ${server.connected ? "online" : "offline"}`}>
+                {server.connected ? "● 已连接" : "○ 未连接"}
+              </span>
+              {server.error ? <span className="mcpServerError">{server.error.slice(0, 100)}</span> : null}
+            </div>
+            {expandedTools.has(server.id) && server.toolNames?.length ? (
+              <div className="mcpToolList">
+                {server.toolNames.map((name) => (
+                  <code key={name} className="mcpToolName">{name}</code>
+                ))}
+              </div>
+            ) : null}
           </article>
         ))}
       </div>

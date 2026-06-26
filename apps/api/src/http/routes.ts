@@ -417,11 +417,13 @@ export function createAgentRouter() {
             id: s.id,
             name: s.name,
             description: s.type === "local" ? "本地 stdio" : s.type === "sse" ? "远程 SSE" : "远程 HTTP",
-            toolCount: s.connected ? undefined : 0,
+            toolCount: s.toolCount,
+            toolNames: s.toolNames,
             kind: s.type,
             enabled: s.enabled,
             builtIn: s.builtIn,
             connected: s.connected,
+            error: s.error,
             type: s.type
           })),
           {
