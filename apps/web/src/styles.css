@@ -2477,6 +2477,49 @@ label span {
   width: 180px;
 }
 
+/* 设置页竖排菜单（右栏 agentPanel slot） */
+.settingsMenuVertical {
+  border-left: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  height: 100%;
+  padding: 16px 12px;
+  width: 100%;
+}
+
+.settingsMenuTitle {
+  color: var(--faint);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  margin-bottom: 10px;
+  padding: 0 8px;
+  text-transform: uppercase;
+}
+
+.settingsMenuVerticalBtn {
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 14px;
+  min-height: 40px;
+  padding: 10px 14px;
+  text-align: left;
+  transition: background 0.15s, color 0.15s;
+  width: 100%;
+}
+
+.settingsMenuVerticalBtn:hover { background: var(--status-bg); }
+
+.settingsMenuVerticalBtn.active {
+  background: var(--status-bg);
+  color: var(--accent);
+  font-weight: 600;
+}
+
 .settingsMenuItem {
   background: transparent;
   border: 0;
