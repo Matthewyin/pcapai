@@ -2465,9 +2465,9 @@ label span {
   overflow: hidden;
 }
 
-/* 左侧菜单 */
+/* 右侧菜单 */
 .settingsMenu {
-  border-right: 1px solid var(--line);
+  border-left: 1px solid var(--line);
   display: flex;
   flex-direction: column;
   flex-shrink: 0;

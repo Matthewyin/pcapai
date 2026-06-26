@@ -62,7 +62,15 @@ export function SettingsPage(props: SettingsPageProps) {
 
   return (
     <section className="settingsPage">
-      {/* 左侧菜单 */}
+      {/* 内容区（中间） */}
+      <div className="settingsContent">
+        {activeTab === "llm" ? <LlmPanel {...props} /> : null}
+        {activeTab === "mcp" ? <McpServersPanel /> : null}
+        {activeTab === "skills" ? <SkillsPanel /> : null}
+        {activeTab === "rfc" ? <RfcLibraryPanel /> : null}
+      </div>
+
+      {/* 右侧菜单 */}
       <nav className="settingsMenu">
         {tabs.map((tab) => (
           <button
@@ -74,14 +82,6 @@ export function SettingsPage(props: SettingsPageProps) {
           </button>
         ))}
       </nav>
-
-      {/* 右侧内容区（每个 tab 独立渲染） */}
-      <div className="settingsContent">
-        {activeTab === "llm" ? <LlmPanel {...props} /> : null}
-        {activeTab === "mcp" ? <McpServersPanel /> : null}
-        {activeTab === "skills" ? <SkillsPanel /> : null}
-        {activeTab === "rfc" ? <RfcLibraryPanel /> : null}
-      </div>
     </section>
   );
 }
