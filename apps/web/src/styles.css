@@ -1829,11 +1829,10 @@ a,
   border: 1px solid var(--line);
   border-radius: 8px;
   display: grid;
-  flex: 0 0 210px;
+  flex: 0 0 240px;
   gap: 5px;
-  max-height: 124px;
   min-width: 0;
-  overflow: hidden;
+  overflow: visible;
   padding: 10px;
 }
 
@@ -1846,11 +1845,8 @@ a,
 
 .queryHop span,
 .queryHop small {
-  display: -webkit-box;
-  line-clamp: 2;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
+  display: block;
+  overflow: visible;
 }
 
 .queryHop.observed {
