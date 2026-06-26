@@ -2472,6 +2472,7 @@ label span {
   flex-direction: column;
   flex-shrink: 0;
   gap: 4px;
+  margin-left: auto;
   padding: 16px 8px;
   width: 180px;
 }
