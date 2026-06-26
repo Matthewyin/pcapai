@@ -159,8 +159,56 @@ export function deleteSkill(name: string): { deleted: boolean; filePath: string 
 }
 
 export function skillsIndexStatus(): { built: boolean; skillCount: number; dir: string } {
-  const dir = apiConfig.skills.dir;
-  if (!existsSync(dir)) return { built: false, skillCount: 0, dir };
-  const count = readdirSync(dir).filter((f) => f.endsWith(".md")).length;
-  return { built: true, skillCount: count, dir };
+  const dirs = allSkillDirs();
+  let count = 0;
+  for (const dir of dirs) {
+    try { count += readdirSync(dir).filter((f) => f.endsWith(".md")).length; } catch { /* ignore */ }
+  }
+  return { built: dirs.length > 0, skillCount: count, dir: dirs.join(", ") };
+}
+
+// ===== Skill 开关（禁用列表，持久化到 userData/skills-config.json） =====
+
+function skillsConfigPath(): string {
+  const userDataDir = process.env.PCAPAI_USERDATA_DIR;
+  return userDataDir ? path.join(userDataDir, "skills-config.json") : "";
+}
+
+function loadDisabledSkills(): Set<string> {
+  const cfgPath = skillsConfigPath();
+  if (!cfgPath || !existsSync(cfgPath)) return new Set();
+  try {
+    const cfg = JSON.parse(readFileSync(cfgPath, "utf8"));
+    return new Set(Array.isArray(cfg.disabledSkills) ? cfg.disabledSkills : []);
+  } catch { return new Set(); }
+}
+
+function saveDisabledSkills(disabled: Set<string>): void {
+  const cfgPath = skillsConfigPath();
+  if (!cfgPath) return;
+  try {
+    // 读已有配置（保留 directories）
+    let cfg: { directories?: string[]; disabledSkills?: string[] } = {};
+    if (existsSync(cfgPath)) cfg = JSON.parse(readFileSync(cfgPath, "utf8"));
+    cfg.disabledSkills = [...disabled];
+    writeFileSync(cfgPath, JSON.stringify(cfg, null, 2), "utf8");
+  } catch { /* ignore */ }
+}
+
+/** 列出所有 skill（含启用/禁用状态） */
+export function listSkillsWithStatus(): Array<Pick<Skill, "name" | "description" | "triggers"> & { enabled: boolean }> {
+  const disabled = loadDisabledSkills();
+  return listSkills().map((s) => ({ ...s, enabled: !disabled.has(s.name) }));
+}
+
+/** 切换 skill 启用/禁用 */
+export function toggleSkill(name: string): boolean {
+  const disabled = loadDisabledSkills();
+  if (disabled.has(name)) {
+    disabled.delete(name);
+  } else {
+    disabled.add(name);
+  }
+  saveDisabledSkills(disabled);
+  return !disabled.has(name); // 返回新状态（true=启用）
 }

@@ -17,6 +17,7 @@ import { AgentPanel } from "./components/agent-panel/AgentPanel";
 import { HelpPage } from "./components/shared/HelpPage";
 import { HistoryPage } from "./components/shared/HistoryPage";
 import { SettingsPage } from "./components/shared/SettingsPage";
+import { SettingsMenu } from "./components/shared/SettingsMenu";
 import { KnowledgePage } from "./components/shared/KnowledgePage";
 
 import type { PacketSummary, CaseGraph, PacketInsight, Conversation, QueryDiagnosis, EvidenceCard, ProtocolCorrelation, AccessCandidateGroup, QueryPath, QueryRun, AnalysisRun, ToolRun, MappingHint, TimeOffsetHint, DiagnosticTag, CaseSummary, LlmProfile, LlmRuntimeStatus, McpServerInfo, CaptureDraft, DetailView, DiagnosticHypothesis, ChatMessage } from "./types";
@@ -1460,8 +1461,7 @@ function openWireshark(pcap,filter){fetch("${window.location.origin}/api/cases/$
   // 阶段 2c：右栏抽成 AgentPanel 组件（三 Tab：知识脉络/推理轨迹/诊断档案）
   // 业务数据 + handlers 通过 props 聚合传入；UI 态（activeTab/toolTraceOpen/insightsOpen）在组件内读 useAgentStore
   const agentPanelNode: React.ReactNode = page === "workbench" ? (
-    <AgentPanel
-      graph={graph}
+    <AgentPanel      graph={graph}
       activeQueryRun={activeQueryRun}
       rootCauses={lastRootCauses}
       report={report}
@@ -1523,6 +1523,8 @@ function openWireshark(pcap,filter){fetch("${window.location.origin}/api/cases/$
       diagnosisCheckState={diagnosisCheckState}
       packetMarkers={packetMarkers}
     />
+  ) : page === "settings" ? (
+    <SettingsMenu />
   ) : null;
 
 

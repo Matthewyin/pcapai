@@ -17,6 +17,7 @@ import type { DetailView } from "../types";
 
 export type Page = "workbench" | "history" | "settings" | "help" | "knowledge";
 export type Theme = "dark" | "light";
+export type SettingsTab = "llm" | "mcp" | "skills" | "rfc";
 
 // 三栏宽度约束（来自交接文档约束 #4）
 export const SIDEBAR_MIN = 180;
@@ -40,6 +41,8 @@ type UIState = {
   /** 左右栏折叠态（true=隐藏）。折叠按钮在栏顶部，展开按钮浮在边缘 */
   sidebarCollapsed: boolean;
   agentPanelCollapsed: boolean;
+  /** 设置页当前选中的配置 tab（LLM/MCP/Skills/RFC） */
+  settingsTab: SettingsTab;
 
   setPage: (page: Page) => void;
   setTheme: (theme: Theme) => void;
@@ -49,6 +52,7 @@ type UIState = {
   setAgentPanelWidth: (width: number) => void;
   toggleSidebar: () => void;
   toggleAgentPanel: () => void;
+  setSettingsTab: (tab: SettingsTab) => void;
 };
 
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
@@ -64,6 +68,7 @@ export const useUIStore = create<UIState>()(
       agentPanelWidth: AGENT_PANEL_DEFAULT,
       sidebarCollapsed: false,
       agentPanelCollapsed: false,
+      settingsTab: "llm",
 
       setPage: (page) => set({ page }),
       setTheme: (theme) => set({ theme }),
@@ -72,7 +77,8 @@ export const useUIStore = create<UIState>()(
       setSidebarWidth: (width) => set({ sidebarWidth: clamp(width, SIDEBAR_MIN, SIDEBAR_MAX) }),
       setAgentPanelWidth: (width) => set({ agentPanelWidth: clamp(width, AGENT_PANEL_MIN, AGENT_PANEL_MAX) }),
       toggleSidebar: () => set({ sidebarCollapsed: !get().sidebarCollapsed }),
-      toggleAgentPanel: () => set({ agentPanelCollapsed: !get().agentPanelCollapsed })
+      toggleAgentPanel: () => set({ agentPanelCollapsed: !get().agentPanelCollapsed }),
+      setSettingsTab: (settingsTab) => set({ settingsTab })
     }),
     {
       name: "pcapai-ui",

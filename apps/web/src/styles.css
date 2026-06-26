@@ -3991,6 +3991,33 @@ pre {
 
 .skillItemDesc { color: var(--faint); display: block; font-size: 12px; margin-top: 2px; }
 
+.skillItem.disabled { opacity: 0.5; }
+
+.skillItemMain { flex: 1; min-width: 0; }
+
+.skillItem { align-items: center; display: flex; gap: 12px; }
+
+.skillToggle {
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 600;
+  min-height: 28px;
+  padding: 4px 12px;
+  white-space: nowrap;
+}
+
+.skillToggle.on {
+  background: var(--rc-verified-accent);
+  border-color: var(--rc-verified-accent);
+  color: #fff;
+}
+
+.skillToggle.off {
+  background: var(--control);
+  border-color: var(--line);
+  color: var(--faint);
+}
+
 .llmFormActions { display: flex; gap: 8px; flex-wrap: wrap; }
 
 /* MCP Server 注册制管理面板（设置页） */

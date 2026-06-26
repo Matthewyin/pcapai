@@ -142,6 +142,17 @@ function registerIpcHandlers() {
     await keytar.deletePassword(KEYCHAIN_SERVICE, KEYCHAIN_LLM_ACCOUNT);
     return { ok: true, restartRequired: Boolean(apiChild) };
   });
+  // 目录选择器（设置页 Skills 目录选择）
+  ipcMain.handle("pcapai:select-directory", async () => {
+    const win = BrowserWindow.getFocusedWindow();
+    if (!win) return null;
+    const result = await dialog.showOpenDialog(win, {
+      properties: ["openDirectory"],
+      title: "选择 Skills 目录"
+    });
+    if (result.canceled || !result.filePaths.length) return null;
+    return result.filePaths[0];
+  });
 }
 
 function buildSidecarEnv() {
@@ -272,13 +283,13 @@ function seedPluginConfig() {
     };
     try { writeFileSync(mcpRegPath, JSON.stringify(mcpServers, null, 2), "utf8"); } catch { /* ignore */ }
   }
-  // Skills 目录配置：内置目录（只读）+ userData 目录（可写）
+  // Skills 目录配置：只 seed 内置目录（只读）。userData/skills 已作为主目录（PCAPAI_SKILLS_DIR），
+  // 不需要再列为额外目录（避免重复）。
   const skillsCfgPath = path.join(userData, "skills-config.json");
   if (!existsSync(skillsCfgPath)) {
     const skillsCfg = {
       directories: [
-        "${resources}/data/skills",
-        "${userData}/skills"
+        "${resources}/data/skills"
       ]
     };
     try { writeFileSync(skillsCfgPath, JSON.stringify(skillsCfg, null, 2), "utf8"); } catch { /* ignore */ }

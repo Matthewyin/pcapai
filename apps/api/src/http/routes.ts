@@ -17,7 +17,7 @@ import { rfcIndexStatus, searchRfc } from "../services/rfcRagService.js";
 import { startDownload, getDownloadStatus, cancelDownload, deleteDownloadedDb } from "../services/rfcDownloadService.js";
 import { listStatus as listMcpStatus, upsertServer, removeServer, toggleServer, loadServers as loadMcpServers, type McpServerConfig } from "../mcp/mcpRegistry.js";
 import { fieldNotesIndexStatus, listAllFieldNotes, getFieldNote, verifyFieldNote, disputeFieldNote, createFieldNote, deleteFieldNote, extractPacketFeatures, searchFieldNotes } from "../services/fieldNotesService.js";
-import { listSkills, getSkill, createSkill, deleteSkill, skillsIndexStatus } from "../services/skillsService.js";
+import { listSkills, listSkillsWithStatus, getSkill, createSkill, deleteSkill, toggleSkill, skillsIndexStatus } from "../services/skillsService.js";
 import { deleteLearnedPattern, listLearnedPatterns } from "../services/patternLearner.js";
 import { apiConfig } from "../config.js";
 import { getCaptureTimeRangeWithMcp, listTcpStreamsWithMcp, followTcpStreamWithMcp } from "../mcp/tsharkQueryClient.js";
@@ -670,7 +670,16 @@ export function createAgentRouter() {
   // Skills：列表/详情/创建/删除
   router.get("/skills", (_req, res) => {
     try {
-      return res.json({ skills: listSkills(), status: skillsIndexStatus() });
+      return res.json({ skills: listSkillsWithStatus(), status: skillsIndexStatus() });
+    } catch (error) {
+      return res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  router.post("/skills/:name/toggle", (req, res) => {
+    try {
+      const enabled = toggleSkill(String(req.params.name));
+      return res.json({ name: req.params.name, enabled });
     } catch (error) {
       return res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
     }

@@ -1,8 +1,9 @@
 /*
- * SettingsPage — 设置页（左菜单 + 右内容布局）。
+ * SettingsPage — 配置内容区（渲染在中栏）。
  *
- * 4 个菜单：LLM 配置 / MCP Server / Skills / RFC 知识库。
- * 每个菜单独立页面，不混在同一个滚动页面里。
+ * 三栏布局：左栏（Sidebar）+ 中栏（本组件，配置内容）+ 右栏（SettingsMenu 菜单）。
+ * 菜单组件由 main.tsx 渲染到 AppShell 的 agentPanel slot（右栏）。
+ * activeTab 状态在 useUIStore 共享。
  */
 import React from "react";
 import { CheckCircle, Eye, EyeOff, Pencil, Save, Trash2 } from "lucide-react";
@@ -10,6 +11,7 @@ import type { LlmProfile, LlmRuntimeStatus, McpServerInfo } from "../../types";
 import { RfcLibraryPanel } from "./RfcLibraryPanel";
 import { McpServersPanel } from "./McpServersPanel";
 import { SkillsPanel } from "./SkillsPanel";
+import { useUIStore } from "../../store/useUIStore";
 
 type LlmFormState = {
   baseURL: string;
@@ -40,53 +42,19 @@ type SettingsPageProps = {
   mcpServers: McpServerInfo[];
 };
 
-type SettingsTab = "llm" | "mcp" | "skills" | "rfc";
-
 export function SettingsPage(props: SettingsPageProps) {
-  const [activeTab, setActiveTab] = React.useState<SettingsTab>("llm");
-  const {
-    llmForm, setLlmForm, showLlmApiKey, setShowLlmApiKey,
-    llmStatus, llmRuntime,
-    onSaveLlm, onTestLlm, onTestAgentCompatibility, onReloadLlmConfig,
-    llmProfiles, selectedProfileIds,
-    onToggleProfileSelect, onSelectAllProfiles, onClearProfileSelection,
-    onDeleteSelectedProfiles, onEditProfile, onActivateProfile,
-  } = props;
-
-  const tabs: Array<{ id: SettingsTab; label: string }> = [
-    { id: "llm", label: "LLM 配置" },
-    { id: "mcp", label: "MCP Server" },
-    { id: "skills", label: "Skills" },
-    { id: "rfc", label: "RFC 知识库" },
-  ];
-
+  const settingsTab = useUIStore((s) => s.settingsTab);
   return (
-    <section className="settingsPage">
-      {/* 内容区（中间） */}
-      <div className="settingsContent">
-        {activeTab === "llm" ? <LlmPanel {...props} /> : null}
-        {activeTab === "mcp" ? <McpServersPanel /> : null}
-        {activeTab === "skills" ? <SkillsPanel /> : null}
-        {activeTab === "rfc" ? <RfcLibraryPanel /> : null}
-      </div>
-
-      {/* 右侧菜单 */}
-      <nav className="settingsMenu">
-        {tabs.map((tab) => (
-          <button
-            key={tab.id}
-            className={`settingsMenuItem ${activeTab === tab.id ? "active" : ""}`}
-            onClick={() => setActiveTab(tab.id)}
-          >
-            {tab.label}
-          </button>
-        ))}
-      </nav>
-    </section>
+    <div className="settingsContent">
+      {settingsTab === "llm" ? <LlmPanel {...props} /> : null}
+      {settingsTab === "mcp" ? <McpServersPanel /> : null}
+      {settingsTab === "skills" ? <SkillsPanel /> : null}
+      {settingsTab === "rfc" ? <RfcLibraryPanel /> : null}
+    </div>
   );
 }
 
-// ===== LLM 配置面板（表单 + 列表合为一个页面） =====
+// ===== LLM 配置面板 =====
 function LlmPanel(props: SettingsPageProps) {
   const {
     llmForm, setLlmForm, showLlmApiKey, setShowLlmApiKey,
