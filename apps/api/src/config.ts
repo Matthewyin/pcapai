@@ -90,6 +90,8 @@ const defaults = JSON.parse(readFileSync(configPath, "utf8")) as {
     session: {
       compressThreshold: number;
       keepRecent: number;
+      maxToolResultChars: number;
+      maxDialogueChars: number;
     };
     diagnosis: {
       shortConversationPacketThreshold: number;
@@ -146,6 +148,8 @@ const defaults = JSON.parse(readFileSync(configPath, "utf8")) as {
     useResponses: boolean;
     maxTurns: number;
     traceIncludeSensitiveData: boolean;
+    temperature?: number;
+    maxTokens?: number;
   };
 };
 
@@ -235,7 +239,9 @@ export const apiConfig = {
   },
   session: {
     compressThreshold: numberFromEnv(process.env.PCAPAI_SESSION_COMPRESS_THRESHOLD, defaults.api.session.compressThreshold),
-    keepRecent: numberFromEnv(process.env.PCAPAI_SESSION_KEEP_RECENT, defaults.api.session.keepRecent)
+    keepRecent: numberFromEnv(process.env.PCAPAI_SESSION_KEEP_RECENT, defaults.api.session.keepRecent),
+    maxToolResultChars: numberFromEnv(process.env.PCAPAI_SESSION_MAX_TOOL_RESULT_CHARS, defaults.api.session.maxToolResultChars),
+    maxDialogueChars: numberFromEnv(process.env.PCAPAI_SESSION_MAX_DIALOGUE_CHARS, defaults.api.session.maxDialogueChars)
   },
   diagnosis: {
     shortConversationPacketThreshold: numberFromEnv(process.env.PCAPAI_SHORT_CONVERSATION_PACKET_THRESHOLD, defaults.api.diagnosis.shortConversationPacketThreshold),
@@ -284,11 +290,13 @@ export const apiConfig = {
     maxTurns: numberFromEnv(process.env.PCAPAI_LLM_MAX_TURNS, defaults.llm.maxTurns),
     traceIncludeSensitiveData: process.env.PCAPAI_TRACE_INCLUDE_SENSITIVE_DATA
       ? process.env.PCAPAI_TRACE_INCLUDE_SENSITIVE_DATA === "true"
-      : defaults.llm.traceIncludeSensitiveData
+      : defaults.llm.traceIncludeSensitiveData,
+    temperature: process.env.PCAPAI_LLM_TEMPERATURE ? Number(process.env.PCAPAI_LLM_TEMPERATURE) || undefined : undefined,
+    maxTokens: process.env.PCAPAI_LLM_MAX_TOKENS ? Number(process.env.PCAPAI_LLM_MAX_TOKENS) || undefined : undefined
   }
 };
 
-export function updateLlmConfig(input: { apiKey?: string; baseURL?: string; model?: string; providerData?: Record<string, unknown> }) {
+export function updateLlmConfig(input: { apiKey?: string; baseURL?: string; model?: string; providerData?: Record<string, unknown>; temperature?: number; maxTokens?: number }) {
   if (input.apiKey !== undefined) {
     apiConfig.llm.apiKey = input.apiKey;
     process.env.PCAPAI_LLM_API_KEY = input.apiKey;
@@ -304,6 +312,16 @@ export function updateLlmConfig(input: { apiKey?: string; baseURL?: string; mode
   if (input.providerData !== undefined) {
     apiConfig.llm.providerData = input.providerData;
     process.env.PCAPAI_LLM_PROVIDER_DATA = JSON.stringify(input.providerData);
+  }
+  // temperature/maxTokens：undefined 表示该 profile 没配（清除旧值），需显式赋 undefined 而非跳过，
+  // 否则从「配了 temperature 的 profile」切到「没配的 profile」时旧值会残留。
+  if ("temperature" in input) {
+    apiConfig.llm.temperature = input.temperature;
+    process.env.PCAPAI_LLM_TEMPERATURE = input.temperature !== undefined ? String(input.temperature) : "";
+  }
+  if ("maxTokens" in input) {
+    apiConfig.llm.maxTokens = input.maxTokens;
+    process.env.PCAPAI_LLM_MAX_TOKENS = input.maxTokens !== undefined ? String(input.maxTokens) : "";
   }
 }
 

@@ -84,10 +84,23 @@ function diagnosticStats(graph: CaseGraph) {
   };
 }
 
+function formatBeijingTime(epochSeconds: number) {
+  return new Date(epochSeconds * 1000).toLocaleString("zh-CN", {
+    timeZone: "Asia/Shanghai",
+    hour12: false,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit"
+  });
+}
+
 function packetTimeRangeStats(packets: Array<{ timestamp?: number }>) {
   const timestamps = packets.map((packet) => packet.timestamp).filter((timestamp): timestamp is number => Number.isFinite(timestamp));
   if (!timestamps.length) {
-    return { packetCount: packets.length, timestampCount: 0, startEpoch: null, endEpoch: null, startIso: null, endIso: null, durationSeconds: null };
+    return { packetCount: packets.length, timestampCount: 0, startEpoch: null, endEpoch: null, startIso: null, endIso: null, startBeijing: null, endBeijing: null, durationSeconds: null };
   }
   const startEpoch = Math.min(...timestamps);
   const endEpoch = Math.max(...timestamps);
@@ -96,8 +109,11 @@ function packetTimeRangeStats(packets: Array<{ timestamp?: number }>) {
     timestampCount: timestamps.length,
     startEpoch,
     endEpoch,
+    // UTC ISO 保留给机器/调试使用；面向用户输出请优先使用 startBeijing/endBeijing。
     startIso: new Date(startEpoch * 1000).toISOString(),
     endIso: new Date(endEpoch * 1000).toISOString(),
+    startBeijing: formatBeijingTime(startEpoch),
+    endBeijing: formatBeijingTime(endEpoch),
     durationSeconds: Math.max(0, endEpoch - startEpoch)
   };
 }
@@ -495,8 +511,10 @@ export function createCaseGraphTools(input: CaseGraphToolsInput): Tool[] {
         const graph = input.loadGraph();
         const memory: CaseMemory = { ...defaultCaseMemory(), ...graph.memory };
         if (topology) memory.topology = topology;
+        // userNotes 与 findings 追加后做 cap（避免长生命周期 case 无限堆积，保留最近 50 条）
         if (userNotes) memory.userNotes = [...memory.userNotes, userNotes];
         if (findings && findings.length) memory.userNotes = [...memory.userNotes, ...findings.map((f) => `[发现] ${f}`)];
+        if (memory.userNotes.length > 50) memory.userNotes = memory.userNotes.slice(-50);
         input.saveGraph({ ...graph, memory });
         return json({ updated: true, memory });
       }

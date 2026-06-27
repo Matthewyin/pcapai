@@ -56,8 +56,10 @@
       "extraDirs": []
     },
     "session": {
-      "compressThreshold": 40,
-      "keepRecent": 12
+      "compressThreshold": 32,
+      "keepRecent": 8,
+      "maxToolResultChars": 80000,
+      "maxDialogueChars": 40000
     },
     "diagnosis": {
       "shortConversationPacketThreshold": 2,

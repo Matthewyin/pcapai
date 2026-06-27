@@ -4,6 +4,7 @@ import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { AgentIntentEnum, AnalysisChainPlanSchema, type AgentAnswer, type AnalysisChainPlan, type AnalysisChainStep, type CaseGraph } from "../../../../packages/shared/src/index.js";
 import { apiConfig } from "../config.js";
+import { depthToProviderData } from "../http/llmSettings.js";
 import { createAgentServers, resetAgentServers } from "../mcp/mcpRegistry.js";
 import { SqliteSession } from "./sqliteSession.js";
 
@@ -42,6 +43,13 @@ type RuntimeInput = {
   tools?: Tool[];
   // session 持久化目录（通常是 case 目录）。传入则用 SqliteSession 跨轮持久化；不传则无 session（降级）。
   sessionDir?: string;
+  // 思考/推理深度（聊天窗口可临时覆盖 profile 默认值）。snapshotLlmRunner 会把它转成
+  // 供应商参数合并进 providerData，真正下发模型（而非仅靠中文提示词）。
+  thinkingDepth?: string;
+  reasoningDepth?: string;
+  // 未经 buildAgentQuestion 预拼历史的原始用户问题。session 开启时优先用它作为 contextMessage，
+  // 避免与 session.db 里已有的完整历史重复计入（双重计入会膨胀 context 且不受 clearing/compaction 管理）。
+  rawQuestion?: string;
 };
 
 export const AgentIntentSchema = z.object({
@@ -80,7 +88,8 @@ const jsonOutputInstruction = [
   "如果调用过 suggest_next_query，把返回的建议放入 suggestedQueries。",
   "rootCauses 是根因结论清单（防幻觉核心）。每个元素：cause（根因描述）、rfcDocId（RFC 编号，无则省略）、rfcSection（章节）、rfcVerified（boolean，true=已用 get_rfc_section 回读原文并引用）、confidence（certain/high/low/needs_context）、evidencePacketIds（支撑该根因的包 ID）、skillIds（用到的技能名）。",
   "rootCauses 规则：只有经 get_rfc_section 回读 RFC 原文并引用的根因才能 rfcVerified=true；其余根因 rfcVerified=false 表示经验推测。诊断阶段（interview/hypothesis）无根因时填 []。",
-  "没有内容的数组填 []，没有 confidence 或 handoffAgent 时填 null。"
+  "没有内容的数组填 []，没有 confidence 或 handoffAgent 时填 null。",
+  "## 时间显示规则：所有面向用户的时间必须显示为北京时间 UTC+8。工具返回的 startBeijing/endBeijing 字段已经是北京时间，优先使用；如只有 startIso/endIso（UTC ISO），需要加 8 小时转换后显示为北京时间。禁止直接展示 Z 后缀的 UTC 时间。"
 ].join("\n");
 
 function stringArrayFrom(value: unknown) {
@@ -306,13 +315,24 @@ function intentPlannerContext(graph: CaseGraph, question: string, chatHistory?: 
   };
 }
 
-function modelSettingsFrom(providerData: Record<string, unknown>) {
-  return Object.keys(providerData).length ? { providerData } : {};
+function modelSettingsFrom(providerData: Record<string, unknown>, temperature?: number, maxTokens?: number) {
+  const settings: Record<string, unknown> = {};
+  if (Object.keys(providerData).length) settings.providerData = providerData;
+  if (temperature !== undefined) settings.temperature = temperature;
+  if (maxTokens !== undefined) settings.maxTokens = maxTokens;
+  return settings;
 }
 
-// 每次运行入口快照 LLM 配置并构造局部 Runner，避免请求间通过全局 provider 互相覆盖
-function snapshotLlmRunner() {
+// 每次运行入口快照 LLM 配置并构造局部 Runner，避免请求间通过全局 provider 互相覆盖。
+// thinkingDepth/reasoningDepth（聊天窗口临时覆盖）会通过 depthToProviderData 转成供应商参数，
+// 覆盖写进 providerData（SDK 顶层 spread 时优先级最高）——真正下发模型，而非仅靠中文提示词。
+function snapshotLlmRunner(thinkingDepth?: string, reasoningDepth?: string) {
   const llm = { ...apiConfig.llm, providerData: { ...apiConfig.llm.providerData } };
+  // 聊天窗口临时覆盖：把深度转成参数覆盖进 providerData
+  if (thinkingDepth || reasoningDepth) {
+    const override = depthToProviderData(llm.baseURL, thinkingDepth || "标准", reasoningDepth || "标准");
+    llm.providerData = { ...llm.providerData, ...override };
+  }
   const runner = new Runner({
     modelProvider: new OpenAIProvider({
       apiKey: llm.apiKey,
@@ -536,8 +556,52 @@ function extractToolCalls(result: any): string[] {
   return tools;
 }
 
+// 从 SDK 运行结果提取 token usage（聚合 input/output/total）。
+// 优先读 result.state.usage（SDK 聚合值）；不可用时从 result.rawResponses 各次调用的 usage 累加。
+// 不同 SDK 版本字段路径有差异，全 try/catch 包裹，失败返回 undefined 不阻塞。
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function extractUsage(result: any, model?: string): { inputTokens: number; outputTokens: number; totalTokens: number; model?: string } | undefined {
+  try {
+    let inputTokens = 0;
+    let outputTokens = 0;
+    let totalTokens = 0;
+    let found = false;
+    // 路径 1：result.state.usage（SDK 聚合）
+    const stateUsage = result?.state?.usage;
+    if (stateUsage && typeof stateUsage === "object") {
+      const i = Number(stateUsage.inputTokens) || 0;
+      const o = Number(stateUsage.outputTokens) || 0;
+      const t = Number(stateUsage.totalTokens) || (i + o);
+      if (i || o || t) {
+        inputTokens += i; outputTokens += o; totalTokens += t; found = true;
+      }
+    }
+    // 路径 2：result.rawResponses[].usage（各次调用累加）
+    const responses = result?.rawResponses;
+    if (Array.isArray(responses) && responses.length) {
+      for (const resp of responses) {
+        const u = resp?.usage;
+        if (u && typeof u === "object") {
+          const i = Number(u.inputTokens) || 0;
+          const o = Number(u.outputTokens) || 0;
+          const t = Number(u.totalTokens) || (i + o);
+          if (i || o || t) {
+            // 若路径1已拿到聚合值，不重复累加（state.usage 已包含 rawResponses 的和）
+            if (!found) { inputTokens += i; outputTokens += o; totalTokens += t; }
+            found = true;
+          }
+        }
+      }
+    }
+    if (!found) return undefined;
+    return { inputTokens, outputTokens, totalTokens, ...(model ? { model } : {}) };
+  } catch {
+    return undefined;
+  }
+}
+
 export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<AgentAnswerWithToolCalls> {
-  const { llm, runner } = snapshotLlmRunner();
+  const { llm, runner } = snapshotLlmRunner(input.thinkingDepth, input.reasoningDepth);
   input.onTrace?.(`Agent 使用模型：${llm.model}，端点：${llm.baseURL}`);
 
   input.onTrace?.("正在获取 MCP server 连接（注册制）。");
@@ -622,7 +686,7 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
       jsonOutputInstruction
     ].join("\n"),
     model: llm.model,
-    modelSettings: modelSettingsFrom(llm.providerData),
+    modelSettings: modelSettingsFrom(llm.providerData, llm.temperature, llm.maxTokens),
     mcpServers,
     tools: localTools
   });
@@ -642,7 +706,7 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
       jsonOutputInstruction
     ].join("\n"),
     model: llm.model,
-    modelSettings: modelSettingsFrom(llm.providerData),
+    modelSettings: modelSettingsFrom(llm.providerData, llm.temperature, llm.maxTokens),
     mcpServers,
     tools: localTools
   });
@@ -666,7 +730,7 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
       jsonOutputInstruction
     ].join("\n"),
     model: llm.model,
-    modelSettings: modelSettingsFrom(llm.providerData),
+    modelSettings: modelSettingsFrom(llm.providerData, llm.temperature, llm.maxTokens),
     mcpServers,
     tools: localTools
   });
@@ -734,7 +798,7 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
     ].join("\n"),
     handoffs: [evidenceAgent, pathAgent, protocolAgent],
     model: llm.model,
-    modelSettings: modelSettingsFrom(llm.providerData),
+    modelSettings: modelSettingsFrom(llm.providerData, llm.temperature, llm.maxTokens),
     mcpServers,
     tools: localTools
   });
@@ -752,8 +816,25 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
     const streamed = await runner.run(leaderAgent, contextMessage, { maxTurns: llm.maxTurns, stream: true, ...(session ? { session } : {}) });
     for await (const event of streamed) {
       if (event.type === "run_item_stream_event") {
-        const item = event.item as { type?: string; output?: unknown; rawItem?: { name?: string; output?: unknown } };
-        if (item.type === "tool_call_item" && item.rawItem?.name) {
+        // 捕获模型推理过程（reasoning_item）。
+        // Chat Completions 模式下 reasoning 在流末一次性出（非逐 token），文本在 rawItem.rawContent[].text 或 content[].text。
+        // 通过 onTrace 透传到前端 thought 面板，与工具调用 trace 合并展示。
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const eventName = (event as any).name as string | undefined;
+        const item = event.item as { type?: string; output?: unknown; rawItem?: { name?: string; output?: unknown; rawContent?: Array<{ text?: string }>; content?: Array<{ text?: string }> } };
+        if (eventName === "reasoning_item_created" || item.type === "reasoning_item") {
+          const segments: string[] = [];
+          const rawContent = item.rawItem?.rawContent;
+          const content = item.rawItem?.content;
+          if (Array.isArray(rawContent)) for (const seg of rawContent) if (seg?.text) segments.push(seg.text);
+          if (Array.isArray(content)) for (const seg of content) if (seg?.text) segments.push(seg.text);
+          if (segments.length) {
+            // 单条推理可能很长，截断防爆 thought（保留头部 2000 字符 + 省略提示）
+            const joined = segments.join("\n");
+            const truncated = joined.length > 2000 ? `${joined.slice(0, 2000)}…(推理已截断，共 ${joined.length} 字符)` : joined;
+            input.onTrace?.(`💭 推理：\n${truncated}`);
+          }
+        } else if (item.type === "tool_call_item" && item.rawItem?.name) {
           lastToolName = item.rawItem.name;
           input.onTrace?.(`正在调用工具：${item.rawItem.name}`);
         } else if (item.type === "tool_call_output_item") {
@@ -792,7 +873,8 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
         `用户问题：${input.question}\n\n已收集的工具结果：\n${evidence}\n\n基于以上信息输出最终 JSON 结论。`,
         { maxTurns: 2 }
       );
-      return { ...parseAgentOutput(result.finalOutput), toolCalls };
+      const closerUsage = extractUsage(result, llm.model);
+      return { ...parseAgentOutput(result.finalOutput), toolCalls, ...(closerUsage ? { usage: closerUsage } : {}) };
     } catch {
       // 收口器自身失败（如再次超 turn）时退化为纯文本，保证永远返回一个 AgentAnswer
       return {
@@ -814,20 +896,47 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
 
   // 应用层上下文管理（参考 Anthropic context engineering 文章的三原语）：
   // 1. Tool-result clearing（主要策略）：保留最近 N 个工具输出原文，清除更早的 payload。
-  //    保留 function_call + function_call_output 的配对结构（避免 DeepSeek 400），
+  //    保留 function_call + function_call_result 的配对结构（避免 DeepSeek 400），
   //    Agent 看到 [cleared] 知道调过但结果被清，需要时可重调（无损——工具可重新调用）。
   // 2. Compaction（辅助策略）：只压缩对话文本（用户消息 + assistant 推理），
   //    不碰工具输出（工具输出由 clearing 管理）。
   async function clearStaleToolResults(session: SqliteSession) {
     const items = await session.getItems();
-    if (items.length <= apiConfig.session.compressThreshold) return;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const typed = items as any[];
-    // 收集所有 function_call_output 的位置 + call_id
+    // SDK 实际字段：type="function_call_result"，callId（驼峰），output
+    // 注意：不是 function_call_output / call_id（那是旧 SDK / OpenAI 原生格式）
     const outputs = typed
       .map((item, idx) => ({ idx, item }))
-      .filter(({ item }) => item?.type === "function_call_output");
+      .filter(({ item }) => item?.type === "function_call_result");
+    // 字节预算优先触发，条目数兜底（防单条大输出在条目还很少时就撑爆 context）
+    const toolResultChars = outputs.reduce((sum, { item }) => {
+      const out = item.output;
+      return sum + (typeof out === "string" ? out.length : JSON.stringify(out ?? "").length);
+    }, 0);
+    const maxToolChars = apiConfig.session.maxToolResultChars;
+    const itemCountTrigger = items.length > apiConfig.session.compressThreshold;
+    const bytesTrigger = toolResultChars > maxToolChars;
+    if (!itemCountTrigger && !bytesTrigger) {
+      input.onTrace?.(`工具结果当前 ~${toolResultChars} 字符，未超阈值 ${maxToolChars}，跳过清理。`);
+      return;
+    }
     if (outputs.length <= apiConfig.session.keepRecent) return; // 工具输出不够多，不需要清理
+    // memory 类工具白名单：其结果记录"Agent 刚写过/读到什么"，清掉会让 Agent 失去对自己记忆操作的短期认知
+    // （真值落在 case.json 不会丢，但 session 内的回执被清可能引发重复写或困惑）。
+    const memoryToolNames = new Set([
+      "update_case_memory", "get_case_memory",
+      "update_network_topology", "get_network_topology",
+      "export_report", "create_skill", "search_field_notes", "get_skill"
+    ]);
+    // function_call_result 上没有 name 字段，需通过 callId 反查同 session 内 function_call.rawItem.name
+    const callIdToName = new Map<string, string>();
+    for (const item of typed) {
+      if (item?.type === "function_call" && typeof item.callId === "string") {
+        const name = item.rawItem?.name || item.name;
+        if (typeof name === "string") callIdToName.set(item.callId, name);
+      }
+    }
     // 保留最近 keepRecent 个工具输出原文，清除更早的
     const keepCount = apiConfig.session.keepRecent;
     const outputsToClear = outputs.slice(0, outputs.length - keepCount);
@@ -835,19 +944,28 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
     const cleared = typed.map((item) => ({ ...item })) as any[];
     let clearedCount = 0;
     let clearedTokens = 0;
+    let skippedMemory = 0;
     for (const { idx, item } of outputsToClear) {
+      // 排除 memory 类工具：其结果对 Agent 维持"刚写过什么"的认知重要，清掉得不偿失
+      const toolName = typeof item.callId === "string" ? callIdToName.get(item.callId) : undefined;
+      if (toolName && memoryToolNames.has(toolName)) {
+        skippedMemory += 1;
+        continue;
+      }
       const out = item.output;
       const outLen = typeof out === "string" ? out.length : JSON.stringify(out).length;
       if (outLen > 100) {
         // 只清除较大的 payload（>100 字符），小的保留（不值得清）
         clearedTokens += outLen;
-        cleared[idx].output = "[cleared to save context — 调用同名工具可重新获取完整结果]";
+        cleared[idx].output = { type: "text", text: "[cleared to save context — 调用同名工具可重新获取完整结果]" };
         clearedCount += 1;
       }
     }
     if (clearedCount > 0) {
       session.replaceAllWith(cleared as AgentInputItem[]);
-      input.onTrace?.(`工具输出清理：清除 ${clearedCount} 个旧工具结果（保留最近 ${keepCount} 个原文）。`);
+      const triggerLabel = bytesTrigger ? `字节触发（~${toolResultChars}>${maxToolChars}）` : "条目触发";
+      const memNote = skippedMemory > 0 ? `，跳过 ${skippedMemory} 个 memory 类工具结果` : "";
+      input.onTrace?.(`工具输出清理：清除 ${clearedCount} 个旧工具结果，释放 ~${clearedTokens} 字符（工具结果 ~${toolResultChars}→~${toolResultChars - clearedTokens}，保留最近 ${keepCount} 个原文${memNote}，${triggerLabel}）。`);
     }
   }
 
@@ -859,29 +977,90 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
     const typed = items as any[];
     // 只看对话类条目（message），不含 function_call
     const dialogueItems = typed.filter((item) => item?.type === "message" && item?.role !== "system");
-    if (dialogueItems.length <= 20) return; // 对话条目不够多，不压缩
+    // 字节预算优先触发，条目数兜底
+    const dialogueChars = dialogueItems.reduce((sum, item) => {
+      const content = item.content;
+      const text = typeof content === "string" ? content : (Array.isArray(content) ? content.map((c: { text?: string }) => c?.text || "").join(" ") : "");
+      return sum + text.length;
+    }, 0);
+    const maxDialogueChars = apiConfig.session.maxDialogueChars;
+    const itemTrigger = dialogueItems.length > 20;
+    const bytesTrigger = dialogueChars > maxDialogueChars;
+    if (!itemTrigger && !bytesTrigger) {
+      input.onTrace?.(`对话当前 ~${dialogueChars} 字符 ${dialogueItems.length} 条，未超阈值 ${maxDialogueChars}，跳过压缩。`);
+      return;
+    }
     // 保留最近 8 条对话原文，更早的聚合成摘要
     const oldDialogue = dialogueItems.slice(0, -8);
     const recentDialogue = dialogueItems.slice(-8);
-    // 构建 oldDialogue 的摘要（提取每条的核心内容）
-    const summaries: string[] = [];
+    // 把 oldDialogue 渲染成纯文本喂给 summarizer（保留完整内容，不截断）
+    const dialogueLines: string[] = [];
     for (const item of oldDialogue) {
       const content = item.content;
       let text = "";
       if (typeof content === "string") text = content;
       else if (Array.isArray(content)) text = content.map((c: { text?: string }) => c?.text || "").join(" ");
-      if (text.trim()) summaries.push(`[${item.role}] ${text.slice(0, 150)}`);
+      if (text.trim()) dialogueLines.push(`[${item.role}] ${text}`);
     }
-    // 用摘要替换 oldDialogue，保留 recentDialogue + 所有 function_call/function_call_output
+    const oldDialogueText = dialogueLines.join("\n\n");
+
+    // 生成摘要：优先用 LLM（high-fidelity，保留帧号/RFC/假设状态等关键细节），
+    // 失败降级回机械截断（每条 150 字符，保证不阻塞）。
+    let summaryText: string;
+    let summaryMethod: string;
+    try {
+      input.onTrace?.(`对话压缩：用 LLM 摘要 ${oldDialogue.length} 条早期对话...`);
+      // 复用当前 runner（与 leader 同模型/provider），单轮无工具
+      const compactorAgent = new Agent({
+        name: "DialogueCompactor",
+        instructions: [
+          "你是 pcapAI 的对话历史压缩器。把给定的早期对话压缩成一条高保真摘要，供后续推理继续使用。",
+          "## 必须保留（丢了会影响排障质量）",
+          "- 具体帧号（如 Frame 1234）、端口号、IP 地址、重传/RST/Zero Window 的具体数字",
+          "- RFC 编号和章节引用（如 RFC 9293 §3.4）",
+          "- 已确认 vs 待验证的假设状态（哪些 confirmed，哪些 ruled_out）",
+          "- 用户提供的拓扑、症状、抓包位置等关键上下文",
+          "## 可以丢弃",
+          "- 礼貌用语、重复的解释、工具调用的中间过程描述",
+          "- 已被后续消息修正或推翻的早期推测",
+          "## 输出",
+          "直接输出摘要正文（中文），不要 Markdown 标题，不要解释你在做什么。控制在 800 字以内。"
+        ].join("\n"),
+        model: llm.model,
+        modelSettings: modelSettingsFrom(llm.providerData, llm.temperature, llm.maxTokens)
+      });
+      const compactResult = await runner.run(
+        compactorAgent,
+        `以下是需要压缩的 ${oldDialogue.length} 条早期对话（按时间顺序）：\n\n${oldDialogueText}`,
+        { maxTurns: 1 }
+      );
+      summaryText = `[对话历史摘要·LLM] ${oldDialogue.length} 条早期对话压缩：\n${String(compactResult.finalOutput || "").trim()}`;
+      summaryMethod = "LLM";
+    } catch {
+      // 降级：机械截断每条 150 字符（原行为）
+      const summaries: string[] = [];
+      for (const item of oldDialogue) {
+        const content = item.content;
+        let text = "";
+        if (typeof content === "string") text = content;
+        else if (Array.isArray(content)) text = content.map((c: { text?: string }) => c?.text || "").join(" ");
+        if (text.trim()) summaries.push(`[${item.role}] ${text.slice(0, 150)}`);
+      }
+      summaryText = `[对话历史摘要·降级] ${oldDialogue.length} 条早期对话：\n${summaries.join("\n")}`;
+      summaryMethod = "降级截断";
+      input.onTrace?.("对话压缩：LLM 摘要失败，降级为机械截断。");
+    }
+
+    // 用摘要替换 oldDialogue，保留 recentDialogue + 所有 function_call/function_call_result
     const summaryItem: AgentInputItem = {
       type: "message",
       role: "user",
-      content: [{ type: "input_text", text: `[对话历史摘要] ${oldDialogue.length} 条早期对话：\n${summaries.join("\n")}` }]
+      content: [{ type: "input_text", text: summaryText }]
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } as any;
     // 重建 items：摘要 + 保留的非对话条目（按原顺序） + recentDialogue
     // 策略：遍历原 items，对话类的如果不在 recentDialogue 就跳过（用摘要替代），
-    // 非对话类（function_call/output）全部保留
+    // 非对话类（function_call/function_call_result）全部保留
     const recentSet = new Set(recentDialogue);
     const rebuilt: AgentInputItem[] = [summaryItem];
     for (const item of typed) {
@@ -893,71 +1072,90 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
       // oldDialogue 跳过（已被摘要替代）
     }
     session.replaceAllWith(rebuilt);
-    input.onTrace?.(`对话压缩：${oldDialogue.length} 条早期对话 → 1 条摘要。`);
+    const rebuiltChars = summaryText.length;
+    const triggerLabel = bytesTrigger ? `字节触发（~${dialogueChars}>${maxDialogueChars}）` : "条目触发";
+    input.onTrace?.(`对话压缩：${oldDialogue.length} 条早期对话 → 1 条摘要（${summaryMethod}），~${dialogueChars}→~${rebuiltChars} 字符（${triggerLabel}）。`);
+  }
+
+  /**
+   * 模拟 SDK 的 itemsToMessages（@openai/agents-openai/openaiChatCompletionsConverter）
+   * 把 session items 转成 Chat Completions 消息序列后校验合法性：
+   * - 每条 role:"tool" 消息之前，必须有 assistant 消息带相同 callId 的 tool_call
+   * - assistant 的 tool_calls 中每个 id 都必须在后续找到 role:"tool" 响应
+   * 不合法的孤立项被丢弃。这是 DeepSeek 等严格校验模型的 400 防线。
+   *
+   * 注意：SDK 在 Chat Completions 模式下会把连续的 function_call 合并进
+   * "当前 assistant 消息"的 tool_calls 数组，function_call_result 变成独立 role:"tool" 消息。
+   * 我们直接在 items 层面做配对校验，等价于检查转换后的消息序列。
+   */
+  function ensureValidToolCallSequence(items: AgentInputItem[]): AgentInputItem[] {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const typed = items as any[];
+    // 第一遍：收集所有 callId（function_call 定义 + function_call_result 响应）
+    const definedCalls = new Set<string>();
+    const respondedCalls = new Set<string>();
+    for (const it of typed) {
+      if (it?.type === "function_call" && typeof it.callId === "string") {
+        definedCalls.add(it.callId);
+      } else if (it?.type === "function_call_result" && typeof it.callId === "string") {
+        respondedCalls.add(it.callId);
+      }
+    }
+    // 第二遍：过滤孤立项
+    // - function_call 没有对应 result → 丢弃（assistant 声明要调但没结果，DeepSeek 会 400）
+    // - function_call_result 找不到对应 call → 丢弃（tool 响应无主，DeepSeek 会 400）
+    const pass1 = typed.filter((it) => {
+      if (it?.type === "function_call") {
+        return typeof it.callId === "string" && respondedCalls.has(it.callId);
+      }
+      if (it?.type === "function_call_result") {
+        return typeof it.callId === "string" && definedCalls.has(it.callId);
+      }
+      return true;
+    });
+    // 第三遍：清理 assistant message 残留的 tool_calls 字段
+    // SDK 在 run 过程中有时会把 tool_calls 直接写进 assistant message（而非用独立的 function_call item），
+    // 这些 tool_calls 引用的 callId 可能没有对应的 function_call_result。
+    // 重新扫描：pass1 之后还存在的 respondedCalls 集合（未被孤立项丢弃影响的）
+    const stillResponded = new Set<string>();
+    for (const it of pass1) {
+      if (it?.type === "function_call_result" && typeof it.callId === "string") {
+        stillResponded.add(it.callId);
+      }
+    }
+    const pass2 = pass1.map((it) => {
+      if (it?.role === "assistant" && Array.isArray(it.tool_calls)) {
+        const valid = it.tool_calls.filter(
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (tc: any) => typeof tc?.id === "string" && stillResponded.has(tc.id)
+        );
+        if (valid.length === 0) {
+          // 所有 tool_calls 都成孤儿 → 移除整个 tool_calls 字段，保留纯文本（如果有）
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const { tool_calls: _tc, ...rest } = it as any;
+          return rest as AgentInputItem;
+        }
+        if (valid.length < it.tool_calls.length) {
+          return { ...it, tool_calls: valid } as AgentInputItem;
+        }
+      }
+      return it as AgentInputItem;
+    });
+    return pass2;
   }
 
   /**
    * 清理 session 中不完整的 tool_call 对：
-   * - 孤立的 function_call（没有对应的 function_call_output）→ 丢弃
-   * - 孤立的 function_call_output（对应的 function_call 被截走）→ 丢弃
+   * - 孤立的 function_call（没有对应的 function_call_result）→ 丢弃
+   * - 孤立的 function_call_result（对应的 function_call 被截走）→ 丢弃
    * - assistant message 带 tool_calls 但后续没有完整 tool response → 移除 tool_calls
    * DeepSeek 等模型严格要求 tool_call 链完整，否则 400。
    */
   async function sanitizeSessionToolCalls(session: SqliteSession) {
     const items = await session.getItems();
     if (!items.length) return;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const typed = items as any[];
-    // 收集所有有 output 的 function_call id
-    const callIdsWithOutput = new Set<string>();
-    for (const item of typed) {
-      if (item?.type === "function_call_output" && item.call_id) {
-        callIdsWithOutput.add(item.call_id);
-      }
-    }
-    // 收集所有 function_call 的 id
-    const callIdsDefined = new Set<string>();
-    for (const item of typed) {
-      if (item?.type === "function_call" && item.call_id) {
-        callIdsDefined.add(item.call_id);
-      }
-    }
-    // 过滤：保留 message + 成对的 function_call/function_call_output
-    const cleaned: AgentInputItem[] = [];
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    for (const item of typed) {
-      if (item?.type === "function_call") {
-        // 只保留有对应 output 的 function_call
-        if (item.call_id && callIdsWithOutput.has(item.call_id)) {
-          cleaned.push(item as AgentInputItem);
-        }
-      } else if (item?.type === "function_call_output") {
-        // 只保留有对应 function_call 的 output
-        if (item.call_id && callIdsDefined.has(item.call_id)) {
-          cleaned.push(item as AgentInputItem);
-        }
-      } else {
-        // message / handoff 等正常保留，但检查 assistant message 的 tool_calls 字段
-        if (item?.role === "assistant" && Array.isArray(item.tool_calls)) {
-          const validToolCalls = item.tool_calls.filter(
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            (tc: any) => tc.id && callIdsWithOutput.has(tc.id)
-          );
-          if (validToolCalls.length < item.tool_calls.length) {
-            if (validToolCalls.length === 0) {
-              // 所有 tool_calls 都没响应 → 移除 tool_calls 字段，保留纯文本消息
-              const { tool_calls: _tc, ...rest } = item;
-              cleaned.push(rest as AgentInputItem);
-            } else {
-              cleaned.push({ ...item, tool_calls: validToolCalls });
-            }
-            continue;
-          }
-        }
-        cleaned.push(item as AgentInputItem);
-      }
-    }
-    if (cleaned.length !== items.length) {
+    const cleaned = ensureValidToolCallSequence(items);
+    if (cleaned.length !== items.length || JSON.stringify(cleaned) !== JSON.stringify(items)) {
       session.replaceAllWith(cleaned);
     }
   }
@@ -969,15 +1167,17 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
     const session = input.sessionDir ? new SqliteSession({ baseDir: input.sessionDir, sessionId: input.graph.spec.caseId }) : undefined;
     if (session) {
       // 清理 session 中可能存在的不完整 tool_call 对（上一轮中断/收口导致）。
-      // DeepSeek 等模型严格要求 function_call 后面紧跟 function_call_output，
-      // 孤立的 function_call 或 function_call_output 会触发 400 "tool_call_ids did not have response"。
+      // DeepSeek 等模型严格要求 function_call 后面紧跟 function_call_result，
+      // 孤立的 function_call 或 function_call_result 会触发 400 "tool_call_ids did not have response"。
       // 运行前先清理上一轮遗留的旧工具输出 + 不完整 tool_call 对
       await clearStaleToolResults(session);
       await sanitizeSessionToolCalls(session);
       input.onTrace?.(`已启用持久化 session（${session.itemCount()} 条历史）。`);
     }
     const contextMessage = session
-      ? input.question
+      // session 开启时优先用 rawQuestion（原始用户问题），历史由 session.db 管理；
+      // 没有 rawQuestion 则降级用 input.question（可能已被 buildAgentQuestion 拼过历史，会与 session 重复）。
+      ? (input.rawQuestion || input.question)
       : (input.chatHistory?.length
         ? `之前的对话上下文：\n${input.chatHistory.map((m) => `${m.role === "user" ? "用户" : "Agent"}：${m.content}`).join("\n")}\n\n用户最新回复：${input.question}`
         : input.question);
@@ -1017,6 +1217,7 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
     if (!result) throw new Error("Agent 运行未产生结果（重试耗尽）。");
     const toolCalls = extractToolCalls(result);
     let finalOutput: unknown = result.finalOutput;
+    let usage = extractUsage(result, llm.model);
     // 部分模型会以"纯 <think> 无正文"的消息中途收尾；带上下文追加一轮催收最终 JSON
     const strippedFinal = String(finalOutput ?? "").replace(/<think>[\s\S]*?<\/think>/g, "").trim();
     if (!strippedFinal && toolCalls.length) {
@@ -1027,9 +1228,24 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
         { maxTurns: 4 }
       );
       finalOutput = followup.finalOutput;
+      // followup 轮的 usage 累加进总数（若两轮都拿到了 usage）
+      const followupUsage = extractUsage(followup, llm.model);
+      if (usage && followupUsage) {
+        usage = {
+          inputTokens: usage.inputTokens + followupUsage.inputTokens,
+          outputTokens: usage.outputTokens + followupUsage.outputTokens,
+          totalTokens: usage.totalTokens + followupUsage.totalTokens,
+          model: llm.model
+        };
+      } else if (followupUsage) {
+        usage = followupUsage;
+      }
     }
     input.onTrace?.("Agents SDK 运行完成，正在归一化模型输出为 AgentAnswer。");
     const answer = parseAgentOutput(finalOutput);
+    if (usage) {
+      input.onTrace?.(`本轮 token：输入 ${usage.inputTokens}，输出 ${usage.outputTokens}，共 ${usage.totalTokens}。`);
+    }
     // 应用层上下文管理（Anthropic context engineering 三原语适配）：
     // 1. Tool-result clearing：保留最近 N 个工具输出原文，清除旧 payload（保留配对结构）
     // 2. Dialogue compaction：只压缩对话文本，不碰工具输出
@@ -1039,7 +1255,7 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
       await compressDialogueIfNeeded(session);
       await sanitizeSessionToolCalls(session);
     }
-    return { ...answer, toolCalls };
+    return { ...answer, toolCalls, ...(usage ? { usage } : {}) };
   } catch (error) {
     if (error instanceof MaxTurnsExceededError && collectedToolResults.length) {
       input.onTrace?.(`回合预算（${llm.maxTurns}）耗尽，基于已收集的 ${collectedToolResults.length} 条工具结果强制收口。`);

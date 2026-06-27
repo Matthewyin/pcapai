@@ -182,9 +182,9 @@ function App() {
   const [mappingHints, setMappingHints] = React.useState<MappingHint[]>([]);
   const [timeOffsetHints, setTimeOffsetHints] = React.useState<TimeOffsetHint[]>([]);
   const [captureDrafts, setCaptureDrafts] = React.useState<CaptureDraft[]>([]);
-  const [llmForm, setLlmForm] = React.useState({ baseURL: "", model: "", apiKey: "", providerData: "" });
+  const [llmForm, setLlmForm] = React.useState({ baseURL: "", model: "", apiKey: "", thinkingDepth: "标准", reasoningDepth: "标准", temperature: "", maxTokens: "" });
   const [showLlmApiKey, setShowLlmApiKey] = React.useState(false);
-  const [llmProfileForm, setLlmProfileForm] = React.useState({ profileId: "", name: "", baseURL: "", model: "", apiKey: "", providerData: "" });
+  const [llmProfileForm, setLlmProfileForm] = React.useState({ profileId: "", name: "", baseURL: "", model: "", apiKey: "", thinkingDepth: "标准", reasoningDepth: "标准", temperature: "", maxTokens: "" });
   const [llmProfiles, setLlmProfiles] = React.useState<LlmProfile[]>([]);
   const [mcpServers, setMcpServers] = React.useState<McpServerInfo[]>([]);
   const [chatProfileId, setChatProfileId] = React.useState(() => localStorage.getItem(CHAT_PROFILE_ID_KEY) ?? "");
@@ -640,7 +640,7 @@ function App() {
   async function loadLlmSettings() {
     const response = await fetch("/api/settings/llm");
     const data = await response.json();
-    setLlmForm({ baseURL: data.baseURL || "", model: data.model || "", apiKey: "", providerData: data.providerData || "" });
+    setLlmForm({ baseURL: data.baseURL || "", model: data.model || "", apiKey: "", thinkingDepth: data.thinkingDepth || "标准", reasoningDepth: data.reasoningDepth || "标准", temperature: data.temperature || "", maxTokens: data.maxTokens || "" });
     setLlmStatus(data.hasKey ? "已配置 Key。" : "未配置 Key。");
   }
 
@@ -678,7 +678,7 @@ function App() {
     });
     const data = await response.json();
     setLlmStatus(response.ok ? (data.hasKey ? "LLM 配置已保存，并已自动生成模型档案。" : "LLM 配置已保存，并已自动生成模型档案，尚未配置 Key。") : formatApiError(data));
-    if (response.ok) setLlmForm({ baseURL: data.baseURL, model: data.model, apiKey: "", providerData: data.providerData || "" });
+    if (response.ok) setLlmForm({ baseURL: data.baseURL, model: data.model, apiKey: "", thinkingDepth: data.thinkingDepth || "标准", reasoningDepth: data.reasoningDepth || "标准", temperature: data.temperature || "", maxTokens: data.maxTokens || "" });
     if (response.ok && data.activeProfileId) setChatProfileId(data.activeProfileId);
     if (response.ok && data.profiles) setLlmProfiles(data.profiles);
     if (response.ok) {
@@ -718,7 +718,7 @@ function App() {
   }
 
   function editLlmProfile(profile: LlmProfile) {
-    setLlmForm({ baseURL: profile.baseURL, model: profile.model, apiKey: "", providerData: profile.providerData || "" });
+    setLlmForm({ baseURL: profile.baseURL, model: profile.model, apiKey: "", thinkingDepth: profile.thinkingDepth || "标准", reasoningDepth: profile.reasoningDepth || "标准", temperature: profile.temperature || "", maxTokens: profile.maxTokens || "" });
     setLlmStatus(`已加载 ${profile.name} 到左侧表单。`);
   }
 
@@ -739,8 +739,8 @@ function App() {
     const data = await response.json();
     if (response.ok) {
       setLlmProfiles(data.profiles || []);
-      setLlmForm({ baseURL: data.settings.baseURL || "", model: data.settings.model || "", apiKey: "", providerData: data.settings.providerData || "" });
-      setLlmProfileForm({ profileId: "", name: "", baseURL: "", model: "", apiKey: "", providerData: "" });
+      setLlmForm({ baseURL: data.settings.baseURL || "", model: data.settings.model || "", apiKey: "", thinkingDepth: data.settings.thinkingDepth || "标准", reasoningDepth: data.settings.reasoningDepth || "标准", temperature: data.settings.temperature || "", maxTokens: data.settings.maxTokens || "" });
+      setLlmProfileForm({ profileId: "", name: "", baseURL: "", model: "", apiKey: "", thinkingDepth: "标准", reasoningDepth: "标准", temperature: "", maxTokens: "" });
       setChatProfileId(data.settings.activeProfileId || "");
       await loadLlmRuntime();
     }
@@ -767,11 +767,11 @@ function App() {
     const data = await response.json();
     if (response.ok) {
       setLlmProfiles(data.profiles || []);
-      setLlmForm({ baseURL: data.settings.baseURL || "", model: data.settings.model || "", apiKey: "", providerData: data.settings.providerData || "" });
-      setChatProfileId(profileId);
+      setLlmForm({ baseURL: data.settings.baseURL || "", model: data.settings.model || "", apiKey: "", thinkingDepth: data.settings.thinkingDepth || "标准", reasoningDepth: data.settings.reasoningDepth || "标准", temperature: data.settings.temperature || "", maxTokens: data.settings.maxTokens || "" });
+      setChatProfileId(data.settings.activeProfileId || "");
       await loadLlmRuntime();
     }
-    setLlmStatus(response.ok ? "模型配置档案已启用。" : formatApiError(data));
+    setLlmStatus(response.ok ? "已启用选中的模型配置。" : formatApiError(data));
   }
 
   async function deleteSelectedProfiles() {
@@ -785,7 +785,7 @@ function App() {
     if (response.ok) {
       setLlmProfiles(data.profiles || []);
       setSelectedProfileIds([]);
-      setLlmForm({ baseURL: data.settings.baseURL || "", model: data.settings.model || "", apiKey: "", providerData: data.settings.providerData || "" });
+      setLlmForm({ baseURL: data.settings.baseURL || "", model: data.settings.model || "", apiKey: "", thinkingDepth: data.settings.thinkingDepth || "标准", reasoningDepth: data.settings.reasoningDepth || "标准", temperature: data.settings.temperature || "", maxTokens: data.settings.maxTokens || "" });
       setChatProfileId(data.settings.activeProfileId || "");
       await loadLlmRuntime();
     }
@@ -1114,7 +1114,7 @@ function App() {
         setChatMessages((messages) => messages.map((message) => message.id === assistantId ? { ...message, content: message.content + data.text } : message));
       } else if (event === "done") {
         setAnswer(data.answer || "");
-        setChatMessages((messages) => messages.map((message) => message.id === assistantId ? { ...message, content: data.answer || message.content, evidenceCards: data.evidenceCards || [], suggestedQueries: data.suggestedQueries || [], evidenceIds: data.evidenceIds || [], packetIds: data.packetIds || [], findingIds: data.findingIds || [], sessionLinkIds: data.sessionLinkIds || [], handoffAgent: friendlyAgentName(data.handoffAgent) || undefined, confidence: data.confidence || undefined, missingContext: data.missingContext || [], suggestedActions: data.suggestedActions || [], protocolCorrelations: data.protocolCorrelations || [], followUpQuestions: data.followUpQuestions || [], diagnosticPhase: data.diagnosticPhase || undefined, hypotheses: data.hypotheses || [], streaming: false } : message));
+        setChatMessages((messages) => messages.map((message) => message.id === assistantId ? { ...message, content: data.answer || message.content, evidenceCards: data.evidenceCards || [], suggestedQueries: data.suggestedQueries || [], evidenceIds: data.evidenceIds || [], packetIds: data.packetIds || [], findingIds: data.findingIds || [], sessionLinkIds: data.sessionLinkIds || [], handoffAgent: friendlyAgentName(data.handoffAgent) || undefined, confidence: data.confidence || undefined, missingContext: data.missingContext || [], suggestedActions: data.suggestedActions || [], protocolCorrelations: data.protocolCorrelations || [], followUpQuestions: data.followUpQuestions || [], diagnosticPhase: data.diagnosticPhase || undefined, hypotheses: data.hypotheses || [], usage: data.usage || undefined, streaming: false } : message));
         void refreshGraph(currentCaseId);
       } else if (event === "error") {
         setChatMessages((messages) => messages.map((message) => message.id === assistantId ? { ...message, content: data.error, streaming: false } : message));
@@ -1357,6 +1357,16 @@ function openWireshark(pcap,filter){fetch("${window.location.origin}/api/cases/$
   React.useEffect(() => {
     localStorage.setItem(CHAT_PROFILE_ID_KEY, chatProfileId);
   }, [chatProfileId]);
+
+  // 切换模型时，composer 的思考/推理深度跟随该 profile 的默认值（用户可在本次对话临时覆盖）
+  React.useEffect(() => {
+    if (!chatProfileId) return;
+    const profile = llmProfiles.find((p) => p.profileId === chatProfileId);
+    if (profile) {
+      setThinkingDepth(profile.thinkingDepth || "标准");
+      setReasoningDepth(profile.reasoningDepth || "标准");
+    }
+  }, [chatProfileId, llmProfiles]);
 
   React.useEffect(() => {
     localStorage.setItem(THINKING_DEPTH_KEY, thinkingDepth);
@@ -1857,7 +1867,12 @@ function openWireshark(pcap,filter){fetch("${window.location.origin}/api/cases/$
                 accept=".pcap,.pcapng,.cap"
                 multiple
                 hidden
-                onChange={(event) => addComposerFiles(Array.from(event.target.files || []))}
+                onChange={(event) => {
+                  addComposerFiles(Array.from(event.target.files || []));
+                  // 重置 value：否则切换 case 后再选「同一个文件」时 input.value 未变，
+                  // 浏览器不触发 change 事件，附件不会显示。
+                  event.target.value = "";
+                }}
               />
               <div className="composerToolbar">
                 <div className="composerTools">

@@ -9,6 +9,12 @@ import { Copy } from "lucide-react";
 import type { ChatMessage } from "../../types";
 import { renderMarkdown, displayThoughts } from "../../lib/markdown";
 
+// token 数格式化：1234 → "1.2k"，<1000 原样
+function formatTokens(n: number): string {
+  if (n >= 1000) return `${(n / 1000).toFixed(1).replace(/\.0$/, "")}k`;
+  return String(n);
+}
+
 type MessageBubbleProps = {
   message: ChatMessage;
   /** 当前复制态消息 id（用于"已复制"反馈） */
@@ -38,10 +44,19 @@ export function MessageBubble(props: MessageBubbleProps) {
           {message.role === "user" ? "你" : "Agent"}
           {message.streaming ? " 正在输出..." : ""}
         </strong>
-        <button className="copyButton" onClick={() => onCopy(message)} type="button">
-          <Copy size={14} />
-          {copiedMessageId === message.id ? "已复制" : "复制"}
-        </button>
+        <div className="chatBubbleHeaderRight">
+          {message.usage ? (
+            <span className="usageBadge" title={message.usage.model ? `模型：${message.usage.model}` : undefined}>
+              <span className="usageIn">↓{formatTokens(message.usage.inputTokens)}</span>
+              <span className="usageOut">↑{formatTokens(message.usage.outputTokens)}</span>
+              <span className="usageTotal">共{formatTokens(message.usage.totalTokens)}</span>
+            </span>
+          ) : null}
+          <button className="copyButton" onClick={() => onCopy(message)} type="button">
+            <Copy size={14} />
+            {copiedMessageId === message.id ? "已复制" : "复制"}
+          </button>
+        </div>
       </div>
 
       {thoughts.length ? (

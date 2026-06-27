@@ -163,11 +163,16 @@ export function createAgentRuntimeService(deps: AgentRuntimeDependencies) {
     }
     const answer = await runPcapTroubleshootingAgent({
       graph,
+      // question 仍传 buildAgentQuestion 的结果：无 session 降级时用于拼历史。
       question: deps.buildAgentQuestion(request),
+      // rawQuestion 传原始用户问题：session 开启时优先用它，避免与 session.db 历史双重计入。
+      rawQuestion: request.question,
       chatHistory: request.chatHistory,
       onTrace,
       tools: deps.createAgentTools(graph.spec.caseId, request.question),
-      sessionDir: path.join(apiConfig.caseDataDir, graph.spec.caseId)
+      sessionDir: path.join(apiConfig.caseDataDir, graph.spec.caseId),
+      thinkingDepth: request.thinkingDepth,
+      reasoningDepth: request.reasoningDepth
     });
     // 只学习有据可依的高置信回答，避免低质量回答固化成错误路由
     if ((answer.confidence === "high" || answer.confidence === "certain") && (answer.evidenceCards?.length || answer.packetIds.length)) {

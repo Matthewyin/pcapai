@@ -1950,6 +1950,36 @@ a,
   border-color: var(--accent);
 }
 
+.chatBubbleHeaderRight {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+}
+
+/* token 消耗徽标：药丸形，输入/输出/总计三段 */
+.usageBadge {
+  align-items: center;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--text-muted);
+  display: inline-flex;
+  font-size: 11px;
+  gap: 6px;
+  padding: 3px 9px;
+}
+
+.usageBadge .usageIn,
+.usageBadge .usageOut {
+  white-space: nowrap;
+}
+
+.usageBadge .usageTotal {
+  color: var(--text);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
 .assistantBubble {
   background: var(--card);
 }
@@ -2408,6 +2438,16 @@ a,
   display: grid;
   gap: 9px;
   margin-bottom: 16px;
+}
+
+.formRow {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 9px;
+}
+
+.form select {
+  width: 100%;
 }
 
 label {

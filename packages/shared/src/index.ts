@@ -685,7 +685,14 @@ export const AgentAnswerSchema = z.object({
   hypotheses: z.array(DiagnosticHypothesisSchema).optional(),
   // 结论分层：根因清单（防幻觉核心，Agent 专属）。每个根因要么 rfcVerified=true（挂 RFC），要么 false（经验推测）。
   // 确定性 adapter 答案无根因（根因是 Agent 归因产物），故 optional。
-  rootCauses: z.array(RootCauseSchema).optional()
+  rootCauses: z.array(RootCauseSchema).optional(),
+  // 本轮 Agent 运行的 token 消耗（运行结束后从 result.state.usage 聚合）。确定性 adapter 无此字段。
+  usage: z.object({
+    inputTokens: z.number(),
+    outputTokens: z.number(),
+    totalTokens: z.number(),
+    model: z.string().optional()
+  }).optional()
 });
 export type AgentAnswer = z.infer<typeof AgentAnswerSchema>;
 

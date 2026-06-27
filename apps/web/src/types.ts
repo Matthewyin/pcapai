@@ -319,7 +319,10 @@ export type LlmProfile = {
   name: string;
   baseURL: string;
   model: string;
-  providerData: string;
+  thinkingDepth: string;
+  reasoningDepth: string;
+  temperature: string;
+  maxTokens: string;
   hasKey: boolean;
   active: boolean;
 };
@@ -328,7 +331,10 @@ export type LlmRuntimeStatus = {
   settings: {
     baseURL: string;
     model: string;
-    providerData: string;
+    thinkingDepth: string;
+    reasoningDepth: string;
+    temperature: string;
+    maxTokens: string;
     hasKey: boolean;
     activeProfileId: string;
   };
@@ -410,4 +416,6 @@ export type ChatMessage = {
    * 右栏诊断档案 Tab 据此用 verified / speculative 颜色分层（防幻觉边界）。
    */
   rootCauses?: RootCauseEntry[];
+  /** 本轮 Agent 运行的 token 消耗（运行结束后聚合）。确定性 adapter 无此字段。 */
+  usage?: { inputTokens: number; outputTokens: number; totalTokens: number; model?: string };
 };
