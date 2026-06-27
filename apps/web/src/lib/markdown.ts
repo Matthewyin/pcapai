@@ -9,8 +9,29 @@ import type { ChatMessage } from "../types";
 // 全局 marked 配置（与原 main.tsx 一致：单换行 = <br>，启用 GFM）
 marked.setOptions({ breaks: true, gfm: true });
 
+/**
+ * 剥掉"整体代码块包裹"：当 LLM 把整段回答包在 ``` 围栏里时，
+ * marked 会渲染成一个 <pre><code>，内部的 markdown 语法（##、**、|）不再解析，
+ * 视觉上就是一个带边框的文本框里显示着 markdown 源码。
+ * 这里检测这种情况（整段被单一代码块包裹），剥掉围栏后再交给 marked 渲染。
+ */
+function unwrapCodeFence(text: string): string {
+  const trimmed = text.trim();
+  // 匹配：```[lang]\n...\n```  整段只有一个围栏代码块
+  const match = trimmed.match(/^```[a-zA-Z0-9]*\n([\s\S]*?)\n```$/);
+  if (match) {
+    const inner = match[1];
+    // 只有当内部确实含 markdown 语法时才剥（避免误伤真正的代码内容）
+    // 判据：含标题/加粗/列表/表格/引用等 markdown 结构性语法
+    if (/^#{1,6}\s/m.test(inner) || /\*\*[^*]+\*\*/.test(inner) || /^\s*[-*+]\s/m.test(inner) || /^\|.*\|/m.test(inner)) {
+      return inner;
+    }
+  }
+  return text;
+}
+
 export function renderMarkdown(text: string): string {
-  const html = marked.parse(text) as string;
+  const html = marked.parse(unwrapCodeFence(text)) as string;
   return DOMPurify.sanitize(html, {
     ALLOWED_TAGS: ["h1", "h2", "h3", "h4", "h5", "h6", "p", "br", "hr", "strong", "em", "del", "ul", "ol", "li", "a", "code", "pre", "blockquote", "table", "thead", "tbody", "tr", "th", "td"],
     ALLOWED_ATTR: ["href", "target", "rel"]

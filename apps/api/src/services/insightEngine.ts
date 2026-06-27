@@ -1148,9 +1148,11 @@ function analyzeHandshakeRetry(
     const sorted = [...conn.packets].sort((a, b) => a.timestamp - b.timestamp);
 
     // SYN retransmissions: multiple SYN with same src/dst/seq
+    // 口径对齐 tshark：只有 tcp.analysis.retransmission 标记的 SYN 才计入重传统计，
+    // 否则会出现「会话级报告 N 个重传、tshark filter 返回 0」的口径矛盾。
     const syns = sorted.filter(p => {
       const flags = p.tcpFlags.map(f => f.toUpperCase());
-      return flags.includes("SYN") && !flags.includes("ACK");
+      return flags.includes("SYN") && !flags.includes("ACK") && (p.tcpAnalysis?.retransmission || p.tcpAnalysis?.fastRetransmission);
     });
 
     if (syns.length >= 2) {
@@ -1182,10 +1184,10 @@ function analyzeHandshakeRetry(
       }
     }
 
-    // SYN/ACK retransmissions
+    // SYN/ACK retransmissions（同样口径对齐 tshark）
     const synacks = sorted.filter(p => {
       const flags = p.tcpFlags.map(f => f.toUpperCase());
-      return flags.includes("SYN") && flags.includes("ACK");
+      return flags.includes("SYN") && flags.includes("ACK") && (p.tcpAnalysis?.retransmission || p.tcpAnalysis?.fastRetransmission);
     });
 
     if (synacks.length >= 2) {
@@ -1202,14 +1204,19 @@ function analyzeHandshakeRetry(
     }
 
     // Simultaneous open: both sides send SYN (rare)
-    if (syns.length >= 2) {
-      const synDirs = new Set(syns.map(s => tcpFlowKey(s)));
+    // 注意：这里用所有 SYN（不限于 tshark 重传标记），因为同时打开是连接行为判断，与重传无关
+    const allSyns = sorted.filter(p => {
+      const flags = p.tcpFlags.map(f => f.toUpperCase());
+      return flags.includes("SYN") && !flags.includes("ACK");
+    });
+    if (allSyns.length >= 2) {
+      const synDirs = new Set(allSyns.map(s => tcpFlowKey(s)));
       if (synDirs.size >= 2) {
         acc.push({
           insightId: insightId("hs-retry", idx++),
           type: "tcp_handshake_retry",
           severity: "info",
-          packetIds: syns.map(p => p.packetId),
+          packetIds: allSyns.map(p => p.packetId),
           description: `TCP 同时打开：${conn.srcIp}:${conn.srcPort} 和 ${conn.dstIp}:${conn.dstPort} 同时发起 SYN`,
           detail: { simultaneousOpen: true },
           scenario: "双方同时发起连接（罕见），某些 P2P 协议会出现此行为"
@@ -1330,7 +1337,7 @@ function analyzeConnectionFlood(packets: PacketSummary[], acc: InsightAccumulato
       type: "tcp_connection_flood",
       severity: binSyns.length >= 200 ? "critical" : "warning",
       packetIds: binSyns.map(p => p.packetId).slice(0, 20),
-      description: `SYN 突发：${binSyns.length} 个 SYN/s 在 ${new Date(binStart * 1000).toISOString()}（目标 ${targets.size} 个）`,
+      description: `SYN 突发：${binSyns.length} 个 SYN/s 在 ${new Date(binStart * 1000).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false })}（目标 ${targets.size} 个）`,
       detail: {
         synsPerSecond: binSyns.length,
         timeWindowStart: binStart,
