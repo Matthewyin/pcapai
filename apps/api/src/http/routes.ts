@@ -23,7 +23,7 @@ import { apiConfig } from "../config.js";
 import { getCaptureTimeRangeWithMcp, listTcpStreamsWithMcp, followTcpStreamWithMcp } from "../mcp/tsharkQueryClient.js";
 import { stripPayload } from "./capturePreprocess.js";
 import { addCapture, capturesDirectory, caseDirectory, createEmptyCase, deleteCases, listCaseSummaries, readAnalysisRunSnapshot, readCaseGraph, safePathPart, writeCaseGraph } from "./caseStore.js";
-import { activateLlmProfile, deleteLlmProfiles, getLlmSettings, listLlmProfiles, parseProviderData, saveLlmProfile, saveLlmSettings } from "./llmSettings.js";
+import { activateLlmProfile, deleteLlmProfiles, depthToProviderData, getLlmSettings, listLlmProfiles, resolveApiKeyForConfig, saveLlmProfile, saveLlmSettings } from "./llmSettings.js";
 import { buildCaseReportMarkdown } from "./reportBuilder.js";
 import { extractProtocolAnomalies } from "../services/tcpPreprocessor.js";
 import { composeServices } from "./composeServices.js";
@@ -81,7 +81,10 @@ const LlmSettingsRequestSchema = z.object({
   baseURL: z.string().url(),
   model: z.string().min(1),
   apiKey: z.string().optional(),
-  providerData: z.string().optional()
+  thinkingDepth: z.string().optional(),
+  reasoningDepth: z.string().optional(),
+  temperature: z.string().optional(),
+  maxTokens: z.string().optional()
 });
 const LlmTestRequestSchema = LlmSettingsRequestSchema;
 const LlmProfileRequestSchema = LlmSettingsRequestSchema.extend({
@@ -355,8 +358,16 @@ function writeStreamEvent(res: { write: (chunk: string) => void }, event: string
 }
 
 async function testOpenAICompatibleConfig(input: z.infer<typeof LlmTestRequestSchema>) {
-  const apiKey = input.apiKey || apiConfig.llm.apiKey;
+  // 前端测试时 llmForm.apiKey 恒为空（安全设计：不回传 key）。
+  // 不能直接 fallback 到 apiConfig.llm.apiKey（那是当前激活 profile 的 key），
+  // 否则测非激活 profile 会串 key（如激活 GLM 时测 DeepSeek 会用到 GLM 的 key）。
+  // 改为按被测的 baseURL/model 反查对应 profile 的 key。
+  const apiKey = input.apiKey || resolveApiKeyForConfig(input.baseURL, input.model);
   if (!apiKey) return { ok: false, error: "API Key 不能为空，或先保存已有 Key。" };
+  const providerData = depthToProviderData(input.baseURL, input.thinkingDepth || "标准", input.reasoningDepth || "标准");
+  // temperature/max_tokens：用户配了就下发，没配用测试默认值（max_tokens:8 保证快速返回）
+  const temperature = input.temperature && input.temperature.trim() ? Number(input.temperature) : undefined;
+  const maxTokens = input.maxTokens && input.maxTokens.trim() ? Number(input.maxTokens) : 8;
   const endpoint = `${input.baseURL.replace(/\/+$/, "")}/chat/completions`;
   const response = await fetch(endpoint, {
     method: "POST",
@@ -367,9 +378,10 @@ async function testOpenAICompatibleConfig(input: z.infer<typeof LlmTestRequestSc
     body: JSON.stringify({
       model: input.model,
       messages: [{ role: "user", content: "ping" }],
-      max_tokens: 8,
+      ...(temperature !== undefined && Number.isFinite(temperature) ? { temperature } : {}),
+      max_tokens: maxTokens,
       stream: false,
-      ...parseProviderData(input.providerData)
+      ...providerData
     })
   });
   if (!response.ok) {
@@ -387,9 +399,9 @@ async function testOpenAICompatibleConfig(input: z.infer<typeof LlmTestRequestSc
 }
 
 async function testAgentCompatibleConfig(input: z.infer<typeof LlmTestRequestSchema>) {
-  const apiKey = input.apiKey || apiConfig.llm.apiKey;
+  const apiKey = input.apiKey || resolveApiKeyForConfig(input.baseURL, input.model);
   if (!apiKey) return { ok: false, error: "API Key 不能为空，或先保存已有 Key。" };
-  const providerData = parseProviderData(input.providerData);
+  const providerData = depthToProviderData(input.baseURL, input.thinkingDepth || "标准", input.reasoningDepth || "标准");
   return runAgentCompatibilityCheck({
     apiKey,
     baseURL: input.baseURL,

@@ -17,7 +17,10 @@ type LlmFormState = {
   baseURL: string;
   model: string;
   apiKey: string;
-  providerData: string;
+  thinkingDepth: string;
+  reasoningDepth: string;
+  temperature: string;
+  maxTokens: string;
 };
 
 type SettingsPageProps = {
@@ -92,10 +95,34 @@ function LlmPanel(props: SettingsPageProps) {
             <span>模型名称</span>
             <input value={llmForm.model} onChange={(e) => setLlmForm({ ...llmForm, model: e.target.value })} placeholder="模型名称" />
           </label>
-          <label>
-            <span>兼容参数 JSON</span>
-            <textarea rows={3} value={llmForm.providerData} onChange={(e) => setLlmForm({ ...llmForm, providerData: e.target.value })} placeholder='例如 {"thinking":{"type":"disabled"}}' />
-          </label>
+          <div className="formRow">
+            <label>
+              <span>思考深度</span>
+              <select value={llmForm.thinkingDepth} onChange={(e) => setLlmForm({ ...llmForm, thinkingDepth: e.target.value })}>
+                <option value="快速">快速</option>
+                <option value="标准">标准</option>
+                <option value="深入">深入</option>
+              </select>
+            </label>
+            <label>
+              <span>推理深度</span>
+              <select value={llmForm.reasoningDepth} onChange={(e) => setLlmForm({ ...llmForm, reasoningDepth: e.target.value })}>
+                <option value="低">低</option>
+                <option value="标准">标准</option>
+                <option value="高">高</option>
+              </select>
+            </label>
+          </div>
+          <div className="formRow">
+            <label>
+              <span>Temperature</span>
+              <input type="number" step="0.1" min="0" max="2" value={llmForm.temperature} onChange={(e) => setLlmForm({ ...llmForm, temperature: e.target.value })} placeholder="留空用默认" />
+            </label>
+            <label>
+              <span>Max Tokens</span>
+              <input type="number" step="1" min="1" value={llmForm.maxTokens} onChange={(e) => setLlmForm({ ...llmForm, maxTokens: e.target.value })} placeholder="留空用默认" />
+            </label>
+          </div>
           <label>
             <span>API Key</span>
             <div className="secretInput">
@@ -114,7 +141,7 @@ function LlmPanel(props: SettingsPageProps) {
           </div>
           {llmStatus ? <span className="status">{llmStatus}</span> : null}
           <p className="formHint">
-            OpenAI 兼容配置：Base URL 填 /v1 结尾的地址，模型名填文档中的精确名称。
+            OpenAI 兼容配置：Base URL 填 /v1 结尾的地址，模型名填文档中的精确名称。思考/推理深度会根据供应商自动适配（GLM → thinking + reasoning_effort，DeepSeek → reasoning_effort）。
           </p>
         </div>
       </section>
