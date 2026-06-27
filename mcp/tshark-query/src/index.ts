@@ -1133,7 +1133,7 @@ server.registerTool(
     const inputs = JSON.parse(capturesJson) as CaptureInput[];
     const validInput = inputs.find(i => i.pcapPath);
     if (!validInput?.pcapPath) return { content: [{ type: "text", text: JSON.stringify({ streams: [] }) }] };
-    const args = ["-r", validInput.pcapPath, "-Y", displayFilter ?? "tcp", "-T", "fields", "-e", "tcp.stream", "-e", "ip.src", "-e", "ip.dst", "-e", "tcp.srcport", "-e", "tcp.dstport", "-e", "frame.len", "-E", "header=n", "-E", "separator=\\t"];
+    const args = ["-r", validInput.pcapPath, "-Y", displayFilter ?? "tcp", "-T", "fields", "-e", "tcp.stream", "-e", "ip.src", "-e", "ip.dst", "-e", "tcp.srcport", "-e", "tcp.dstport", "-e", "frame.len", "-E", "header=n", "-E", "separator=/t"];
     const { stdout } = await execFileAsync(tsharkCommand, args, { maxBuffer: 20 * 1024 * 1024 });
     const streamMap = new Map<number, { srcIp: string; srcPort: number; dstIp: string; dstPort: number; packetCount: number; byteCount: number }>();
     for (const line of stdout.trim().split("\n")) {
@@ -1217,7 +1217,7 @@ server.registerTool(
     const inputs = JSON.parse(capturesJson) as CaptureInput[];
     const validInput = inputs.find(i => i.pcapPath);
     if (!validInput?.pcapPath) return { content: [{ type: "text", text: JSON.stringify({ expertInfo: [] }) }] };
-    const args = ["-r", validInput.pcapPath, "-Y", "tcp.analysis.flags || tcp.analysis.retransmission || tcp.analysis.out_of_order || tcp.analysis.duplicate_ack || tcp.analysis.zero_window || tcp.analysis.keep_alive || tcp.analysis.window_full", "-T", "fields", "-e", "frame.number", "-e", "ip.src", "-e", "ip.dst", "-e", "tcp.srcport", "-e", "tcp.dstport", "-e", "tcp.analysis.retransmission", "-e", "tcp.analysis.fast_retransmission", "-e", "tcp.analysis.out_of_order", "-e", "tcp.analysis.duplicate_ack", "-e", "tcp.analysis.zero_window", "-e", "tcp.analysis.keep_alive", "-e", "tcp.analysis.window_full", "-e", "tcp.analysis.lost_segment", "-E", "header=n", "-E", "separator=\\t"];
+    const args = ["-r", validInput.pcapPath, "-Y", "tcp.analysis.flags || tcp.analysis.retransmission || tcp.analysis.out_of_order || tcp.analysis.duplicate_ack || tcp.analysis.zero_window || tcp.analysis.keep_alive || tcp.analysis.window_full", "-T", "fields", "-e", "frame.number", "-e", "ip.src", "-e", "ip.dst", "-e", "tcp.srcport", "-e", "tcp.dstport", "-e", "tcp.analysis.retransmission", "-e", "tcp.analysis.fast_retransmission", "-e", "tcp.analysis.out_of_order", "-e", "tcp.analysis.duplicate_ack", "-e", "tcp.analysis.zero_window", "-e", "tcp.analysis.keep_alive", "-e", "tcp.analysis.window_full", "-e", "tcp.analysis.lost_segment", "-E", "header=n", "-E", "separator=/t"];
     const { stdout } = await execFileAsync(tsharkCommand, args, { maxBuffer: 20 * 1024 * 1024 });
     const entries: Array<{ frameNumber: number; srcIp: string; dstIp: string; srcPort: number; dstPort: number; flags: string[] }> = [];
     for (const line of stdout.trim().split("\n")) {
