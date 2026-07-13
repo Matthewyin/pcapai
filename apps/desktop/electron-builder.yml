@@ -1,5 +1,6 @@
 appId: com.pcapai.app
 productName: pcapAI
+artifactName: ${productName}-${version}-${arch}.${ext}
 copyright: Copyright © 2026 pcapAI
 directories:
   output: release

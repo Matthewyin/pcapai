@@ -12,7 +12,7 @@
     "check": "tsc -p tsconfig.json --noEmit",
     "dev": "npm run build && PCAPAI_DESKTOP_MODE=dev electron .",
     "start": "PCAPAI_DESKTOP_MODE=prod electron .",
-    "pack": "npm run rebuild:native && electron-builder --mac dmg --config electron-builder.yml",
+    "pack": "npm run rebuild:native && electron-builder --mac dmg --arm64 --x64 --config electron-builder.yml",
     "pack:dir": "npm run rebuild:native && electron-builder --mac dir --config electron-builder.yml"
   },
   "devDependencies": {
