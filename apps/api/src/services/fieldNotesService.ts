@@ -5,6 +5,7 @@
 // 数据流：case graph → extractPacketFeatures（确定性）→ searchFieldNotes（三层打分）→ top K 候选。
 // 候选只是提示，Agent 保留否决权，必须用抓包+RFC 验证后才能下结论。
 import { existsSync } from "node:fs";
+import path from "node:path";
 import Database from "better-sqlite3";
 import { apiConfig } from "../config.js";
 import { buildFtsMatchQuery } from "./rfcCorpus.js";
@@ -83,6 +84,19 @@ export function extractPacketFeatures(graph: CaseGraph): PacketFeatures {
 // ── 检索（三层过滤，v0 纯特征打分）──
 
 let db: Database.Database | null = null;
+let openDbPath = "";
+
+function fieldNotesIndexPath(): string {
+  return process.env.PCAPAI_FIELD_NOTES_INDEX_PATH
+    ? path.resolve(process.env.PCAPAI_FIELD_NOTES_INDEX_PATH)
+    : apiConfig.fieldNotes.indexPath;
+}
+
+export function resetFieldNotesIndexCache(): void {
+  db?.close();
+  db = null;
+  openDbPath = "";
+}
 
 export class FieldNotesIndexMissingError extends Error {
   constructor() {
@@ -91,12 +105,15 @@ export class FieldNotesIndexMissingError extends Error {
 }
 
 function getDb(): Database.Database {
-  if (db) return db;
-  if (!existsSync(apiConfig.fieldNotes.indexPath)) throw new FieldNotesIndexMissingError();
+  const indexPath = fieldNotesIndexPath();
+  if (db && openDbPath === indexPath) return db;
+  if (db) resetFieldNotesIndexCache();
+  if (!existsSync(indexPath)) throw new FieldNotesIndexMissingError();
   // 读写连接：P8 沉淀闭环需要 verify/dispute/createNote 写操作。
   // WAL 模式避免读写互斥，better-sqlite3 同步 API 天然无并发问题。
-  db = new Database(apiConfig.fieldNotes.indexPath, { fileMustExist: true });
+  db = new Database(indexPath, { fileMustExist: true });
   db.pragma("journal_mode = WAL");
+  openDbPath = indexPath;
   return db;
 }
 
@@ -212,12 +229,13 @@ export function searchFieldNotes(features: PacketFeatures, topK = apiConfig.fiel
 
 // 索引状态查询（供调试 / 健康检查用）
 export function fieldNotesIndexStatus(): { built: boolean; noteCount?: number; indexPath: string } {
-  if (!existsSync(apiConfig.fieldNotes.indexPath)) {
-    return { built: false, indexPath: apiConfig.fieldNotes.indexPath };
+  const indexPath = fieldNotesIndexPath();
+  if (!existsSync(indexPath)) {
+    return { built: false, indexPath };
   }
   const database = getDb();
   const row = database.prepare("SELECT COUNT(*) AS count FROM notes").get() as { count: number };
-  return { built: true, noteCount: row.count, indexPath: apiConfig.fieldNotes.indexPath };
+  return { built: true, noteCount: row.count, indexPath };
 }
 
 // ── P8 沉淀闭环：写操作（verify / dispute / create / list / get）──

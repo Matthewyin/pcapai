@@ -18,7 +18,8 @@ import { startDownload, getDownloadStatus, cancelDownload, deleteDownloadedDb } 
 import { listStatus as listMcpStatus, upsertServer, removeServer, toggleServer, loadServers as loadMcpServers, type McpServerConfig } from "../mcp/mcpRegistry.js";
 import { fieldNotesIndexStatus, listAllFieldNotes, getFieldNote, verifyFieldNote, disputeFieldNote, createFieldNote, deleteFieldNote, extractPacketFeatures, searchFieldNotes } from "../services/fieldNotesService.js";
 import { listSkills, listSkillsWithStatus, getSkill, createSkill, deleteSkill, toggleSkill, skillsIndexStatus } from "../services/skillsService.js";
-import { deleteLearnedPattern, listLearnedPatterns } from "../services/patternLearner.js";
+import { approveSkillProposal, listSkillProposals, rejectSkillProposal } from "../services/skillProposalsService.js";
+import { approveLearnedPattern, deleteLearnedPattern, listLearnedPatterns, rejectLearnedPattern, setLearnedPatternEnabled } from "../services/patternLearner.js";
 import { apiConfig } from "../config.js";
 import { getCaptureTimeRangeWithMcp, listTcpStreamsWithMcp, followTcpStreamWithMcp } from "../mcp/tsharkQueryClient.js";
 import { stripPayload } from "./capturePreprocess.js";
@@ -27,30 +28,9 @@ import { activateLlmProfile, deleteLlmProfiles, depthToProviderData, getLlmSetti
 import { buildCaseReportMarkdown } from "./reportBuilder.js";
 import { extractProtocolAnomalies } from "../services/tcpPreprocessor.js";
 import { composeServices } from "./composeServices.js";
+import { withCaseRunLock } from "./caseRunLock.js";
 
 const cases = new Map<string, CaseGraph>();
-
-// per-case 互斥锁：agent 运行会跨多次 read-modify-write（含 chain step 间的 reloadGraph 和
-// 末尾 syncMemoryFromQueryRuns），整个运行周期是一个逻辑临界区。并发 agent run（用户连发两条
-// 消息、或 SSE 还在跑时又发一条）会在各自的 reloadGraph 互相覆盖 QueryRun。
-// 仅串行化 agent run 入口，不覆盖同步 handler（PUT hints 等）——它们快且改不同字段，风险低。
-const caseRunLocks = new Map<string, Promise<unknown>>();
-function withCaseRunLock<T>(caseId: string, task: () => Promise<T>): Promise<T> {
-  const previous = caseRunLocks.get(caseId) || Promise.resolve();
-  const next = previous.then(task, task);
-  caseRunLocks.set(caseId, next);
-  // 用 then(_, cleanup) 而非 finally(cleanup)：前者不产生额外 Promise，
-  // 后者返回的新 Promise 会继承 next 的 rejection，task 一旦 reject 会触发 unhandledRejection。
-  next.then(
-    () => {
-      if (caseRunLocks.get(caseId) === next) caseRunLocks.delete(caseId);
-    },
-    () => {
-      if (caseRunLocks.get(caseId) === next) caseRunLocks.delete(caseId);
-    }
-  );
-  return next;
-}
 
 // 简化 LRU：重新插入刷新热度，超过上限淘汰最久未写入的 case，防止长期运行内存无限增长
 function cacheCase(caseId: string, graph: CaseGraph) {
@@ -440,8 +420,8 @@ export function createAgentRouter() {
           })),
           {
             id: "case-graph",
-            name: "case-graph-mcp",
-            description: "Agent 读写 case graph（进程内调用，22 个工具）",
+            name: "CaseGraph 工具",
+            description: "Agent 读写 CaseGraph 的进程内工具，不启动独立 MCP 进程",
             toolCount: 22,
             kind: "进程内调用",
             enabled: true,
@@ -461,27 +441,27 @@ export function createAgentRouter() {
     res.json({ servers: loadMcpServers() });
   });
 
-  router.post("/mcp-servers", (req, res) => {
+  router.post("/mcp-servers", async (req, res) => {
     try {
       const config = req.body as McpServerConfig;
       if (!config?.id || !config?.name || !config?.type) {
         return res.status(400).json({ error: "缺少必填字段：id/name/type" });
       }
-      const servers = upsertServer(config);
+      const servers = await upsertServer(config);
       res.json({ servers });
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
     }
   });
 
-  router.post("/mcp-servers/:id/toggle", (req, res) => {
-    const updated = toggleServer(String(req.params.id));
+  router.post("/mcp-servers/:id/toggle", async (req, res) => {
+    const updated = await toggleServer(String(req.params.id));
     if (!updated) return res.status(404).json({ error: "server not found" });
     res.json({ server: updated });
   });
 
-  router.delete("/mcp-servers/:id", (req, res) => {
-    const result = removeServer(String(req.params.id));
+  router.delete("/mcp-servers/:id", async (req, res) => {
+    const result = await removeServer(String(req.params.id));
     if (!result.removed) return res.status(400).json({ error: result.reason });
     res.json({ removed: true });
   });
@@ -582,10 +562,10 @@ export function createAgentRouter() {
     return res.json(getDownloadStatus());
   });
 
-  router.post("/rag/download/start", async (_req, res) => {
+  router.post("/rag/download/start", (_req, res) => {
     try {
-      const status = await startDownload();
-      return res.json(status);
+      const status = startDownload();
+      return res.status(status.state === "downloading" ? 202 : 200).json(status);
     } catch (error) {
       return res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
     }
@@ -725,6 +705,26 @@ export function createAgentRouter() {
     return res.json(result);
   });
 
+  router.get("/skill-proposals", (req, res) => {
+    const status = typeof req.query.status === "string" ? req.query.status : undefined;
+    if (status && !["pending", "overwrite_confirmation", "approved", "rejected"].includes(status)) {
+      return res.status(400).json({ error: "非法的提案状态" });
+    }
+    return res.json({ proposals: listSkillProposals(status as Parameters<typeof listSkillProposals>[0]) });
+  });
+
+  router.post("/skill-proposals/:proposalId/approve", (req, res) => {
+    const result = approveSkillProposal(String(req.params.proposalId), req.body?.confirmOverwrite === true);
+    if (result.approved) return res.json(result);
+    if (result.requiresOverwriteConfirmation) return res.status(409).json(result);
+    return res.status(result.reason === "提案不存在" ? 404 : 409).json(result);
+  });
+
+  router.post("/skill-proposals/:proposalId/reject", (req, res) => {
+    const result = rejectSkillProposal(String(req.params.proposalId), typeof req.body?.reason === "string" ? req.body.reason : undefined);
+    return result.rejected ? res.json(result) : res.status(result.reason === "提案不存在" ? 404 : 409).json(result);
+  });
+
   router.get("/settings/learned-patterns", (_req, res) => {
     res.json({ patterns: listLearnedPatterns() });
   });
@@ -734,6 +734,29 @@ export function createAgentRouter() {
     if (typeof regex !== "string" || typeof adapterId !== "string") return res.status(400).json({ error: "regex 和 adapterId 是必填字符串" });
     const deleted = deleteLearnedPattern(regex, adapterId);
     return deleted ? res.json({ deleted: true }) : res.status(404).json({ error: "未找到匹配的 learned pattern" });
+  });
+
+  router.post("/settings/learned-patterns/approve", (req, res) => {
+    const { regex, adapterId } = req.body || {};
+    if (typeof regex !== "string" || typeof adapterId !== "string") return res.status(400).json({ error: "regex 和 adapterId 是必填字符串" });
+    const pattern = approveLearnedPattern(regex, adapterId);
+    return pattern ? res.json({ pattern }) : res.status(404).json({ error: "未找到匹配的 learned pattern" });
+  });
+
+  router.post("/settings/learned-patterns/reject", (req, res) => {
+    const { regex, adapterId } = req.body || {};
+    if (typeof regex !== "string" || typeof adapterId !== "string") return res.status(400).json({ error: "regex 和 adapterId 是必填字符串" });
+    const pattern = rejectLearnedPattern(regex, adapterId);
+    return pattern ? res.json({ pattern }) : res.status(404).json({ error: "未找到匹配的 learned pattern" });
+  });
+
+  router.post("/settings/learned-patterns/toggle", (req, res) => {
+    const { regex, adapterId, enabled } = req.body || {};
+    if (typeof regex !== "string" || typeof adapterId !== "string" || typeof enabled !== "boolean") {
+      return res.status(400).json({ error: "regex、adapterId 和 enabled 是必填字段" });
+    }
+    const pattern = setLearnedPatternEnabled(regex, adapterId, enabled);
+    return pattern ? res.json({ pattern }) : res.status(404).json({ error: "未找到匹配的 learned pattern" });
   });
 
   router.post("/settings/llm/test", async (req, res) => {
@@ -756,37 +779,44 @@ export function createAgentRouter() {
     }
   });
 
-  router.post("/cases", (req, res) => {
+  router.post("/cases", async (req, res) => {
     const parsed = CreateCaseRequestSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
     const caseId = parsed.data.caseId || safePathPart(`${parsed.data.title}-${Date.now()}`);
-    const graph = createEmptyCase(CaseSpecSchema.parse({ ...parsed.data, caseId }));
-    cacheCase(caseId, graph);
-    return res.status(201).json(graph);
+    return withCaseRunLock(caseId, () => {
+      const graph = createEmptyCase(CaseSpecSchema.parse({ ...parsed.data, caseId }));
+      cacheCase(caseId, graph);
+      return res.status(201).json(graph);
+    });
   });
 
   router.get("/cases", (_req, res) => {
     return res.json({ cases: listCaseSummaries() });
   });
 
-  router.delete("/cases", (req, res) => {
+  router.delete("/cases", async (req, res) => {
     const parsed = DeleteCasesRequestSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-    const deleted = deleteCases(parsed.data.caseIds);
-    for (const caseId of parsed.data.caseIds) cases.delete(caseId);
+    const deleted = await Promise.all(parsed.data.caseIds.map((caseId) => withCaseRunLock(caseId, () => {
+      const result = deleteCases([caseId])[0];
+      cases.delete(caseId);
+      return result;
+    })));
     return res.json({ deleted, cases: listCaseSummaries() });
   });
 
-  router.put("/cases/:caseId", (req, res) => {
+  router.put("/cases/:caseId", async (req, res) => {
     const parsed = UpdateCaseRequestSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
     try {
-      const graph = loadGraph(req.params.caseId);
-      const nextGraph: CaseGraph = { ...graph, spec: { ...graph.spec, title: parsed.data.title } };
-      writeCaseGraph(nextGraph);
-      cacheCase(nextGraph.spec.caseId, nextGraph);
-      return res.json(nextGraph);
+      return await withCaseRunLock(String(req.params.caseId), () => {
+        const graph = loadGraph(req.params.caseId);
+        const nextGraph: CaseGraph = { ...graph, spec: { ...graph.spec, title: parsed.data.title } };
+        writeCaseGraph(nextGraph);
+        cacheCase(nextGraph.spec.caseId, nextGraph);
+        return res.json(nextGraph);
+      });
     } catch {
       return res.status(404).json({ error: "case not found" });
     }
@@ -811,30 +841,32 @@ export function createAgentRouter() {
     if (!metadata?.success) return res.status(400).json({ error: "capture metadata is required" });
 
     try {
-      let graph = loadGraph(caseId);
-      const addedCaptures = [];
-      for (const [index, file] of files.entries()) {
-        const fileMetadata = metadata.data[index];
-        if (!fileMetadata) return res.status(400).json({ error: `missing metadata for ${file.originalname}` });
-        const strippedPath = await stripPayload(file.path);
-        const pcapFilename = path.basename(strippedPath);
-        const nodeInput = CaptureNodeSchema.safeParse({
-          nodeId: fileMetadata.nodeId,
-          name: fileMetadata.name,
-          role: fileMetadata.role,
-          interfaceDirection: fileMetadata.interfaceDirection,
-          capturePosition: fileMetadata.capturePosition,
-          pcapFilename
-        });
-        if (!nodeInput.success) return res.status(400).json({ error: nodeInput.error.flatten() });
-        graph = addCapture(graph, nodeInput.data);
-        addedCaptures.push(nodeInput.data);
-      }
-      const ranges = await readCaptureTimeRanges(graph, addedCaptures);
-      graph = graphWithCaptureTimeRanges(resetAnalysis(graph), ranges);
-      writeCaseGraph(graph);
-      cacheCase(caseId, graph);
-      return res.status(201).json(graph);
+      return await withCaseRunLock(caseId, async () => {
+        let graph = loadGraph(caseId);
+        const addedCaptures = [];
+        for (const [index, file] of files.entries()) {
+          const fileMetadata = metadata.data[index];
+          if (!fileMetadata) return res.status(400).json({ error: `missing metadata for ${file.originalname}` });
+          const strippedPath = await stripPayload(file.path);
+          const pcapFilename = path.basename(strippedPath);
+          const nodeInput = CaptureNodeSchema.safeParse({
+            nodeId: fileMetadata.nodeId,
+            name: fileMetadata.name,
+            role: fileMetadata.role,
+            interfaceDirection: fileMetadata.interfaceDirection,
+            capturePosition: fileMetadata.capturePosition,
+            pcapFilename
+          });
+          if (!nodeInput.success) return res.status(400).json({ error: nodeInput.error.flatten() });
+          graph = addCapture(graph, nodeInput.data);
+          addedCaptures.push(nodeInput.data);
+        }
+        const ranges = await readCaptureTimeRanges(graph, addedCaptures);
+        graph = graphWithCaptureTimeRanges(resetAnalysis(graph), ranges);
+        writeCaseGraph(graph);
+        cacheCase(caseId, graph);
+        return res.status(201).json(graph);
+      });
     } catch (error) {
       return res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
     }
@@ -845,7 +877,7 @@ export function createAgentRouter() {
     const files = Array.isArray(req.files) ? req.files : [];
     if (!files.length) return res.status(400).json({ error: `${apiConfig.uploadFieldName} file is required` });
     try {
-      const { graph, evidenceCards } = await ingestCaptureFiles(caseId, files.map((file) => ({ pcapPath: file.path, originalName: file.originalname })));
+      const { graph, evidenceCards } = await withCaseRunLock(caseId, () => ingestCaptureFiles(caseId, files.map((file) => ({ pcapPath: file.path, originalName: file.originalname }))));
       return res.status(201).json(captureUploadResponse(graph, evidenceCards, files.length));
     } catch (error) {
       return res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
@@ -859,45 +891,51 @@ export function createAgentRouter() {
     const sourcePaths = rawPaths.filter((item: unknown): item is string => typeof item === "string" && /\.(pcap|pcapng|cap)$/i.test(item));
     if (!sourcePaths.length) return res.status(400).json({ error: "paths must be a non-empty array of .pcap/.pcapng/.cap file paths" });
     try {
-      const directory = capturesDirectory(caseId);
-      mkdirSync(directory, { recursive: true });
-      const entries = sourcePaths.map((sourcePath: string, index: number) => {
-        if (!existsSync(sourcePath)) throw new Error(`file not found: ${sourcePath}`);
-        const originalName = path.basename(sourcePath);
-        const destPath = path.join(directory, `${Date.now()}-${index}-${safePathPart(originalName)}`);
-        copyFileSync(sourcePath, destPath);
-        return { pcapPath: destPath, originalName };
+      const { graph, evidenceCards, fileCount } = await withCaseRunLock(caseId, async () => {
+        const directory = capturesDirectory(caseId);
+        mkdirSync(directory, { recursive: true });
+        const entries = sourcePaths.map((sourcePath: string, index: number) => {
+          if (!existsSync(sourcePath)) throw new Error(`file not found: ${sourcePath}`);
+          const originalName = path.basename(sourcePath);
+          const destPath = path.join(directory, `${Date.now()}-${index}-${safePathPart(originalName)}`);
+          copyFileSync(sourcePath, destPath);
+          return { pcapPath: destPath, originalName };
+        });
+        return { ...(await ingestCaptureFiles(caseId, entries)), fileCount: entries.length };
       });
-      const { graph, evidenceCards } = await ingestCaptureFiles(caseId, entries);
-      return res.status(201).json(captureUploadResponse(graph, evidenceCards, entries.length));
+      return res.status(201).json(captureUploadResponse(graph, evidenceCards, fileCount));
     } catch (error) {
       return res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
     }
   });
 
-  router.put("/cases/:caseId/mapping-hints", (req, res) => {
+  router.put("/cases/:caseId/mapping-hints", async (req, res) => {
     const parsed = MappingHintListSchema.safeParse(req.body?.mappingHints);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
     try {
-      const graph = loadGraph(String(req.params.caseId));
-      const nextGraph: CaseGraph = { ...graph, mappingHints: parsed.data };
-      writeCaseGraph(nextGraph);
-      cacheCase(graph.spec.caseId, nextGraph);
-      return res.json(nextGraph);
+      return await withCaseRunLock(String(req.params.caseId), () => {
+        const graph = loadGraph(String(req.params.caseId));
+        const nextGraph: CaseGraph = { ...graph, mappingHints: parsed.data };
+        writeCaseGraph(nextGraph);
+        cacheCase(graph.spec.caseId, nextGraph);
+        return res.json(nextGraph);
+      });
     } catch (error) {
       return res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
     }
   });
 
-  router.put("/cases/:caseId/time-offset-hints", (req, res) => {
+  router.put("/cases/:caseId/time-offset-hints", async (req, res) => {
     const parsed = TimeOffsetHintListSchema.safeParse(req.body?.timeOffsetHints);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
     try {
-      const graph = loadGraph(String(req.params.caseId));
-      const nextGraph: CaseGraph = { ...graph, timeOffsetHints: parsed.data };
-      writeCaseGraph(nextGraph);
-      cacheCase(graph.spec.caseId, nextGraph);
-      return res.json(nextGraph);
+      return await withCaseRunLock(String(req.params.caseId), () => {
+        const graph = loadGraph(String(req.params.caseId));
+        const nextGraph: CaseGraph = { ...graph, timeOffsetHints: parsed.data };
+        writeCaseGraph(nextGraph);
+        cacheCase(graph.spec.caseId, nextGraph);
+        return res.json(nextGraph);
+      });
     } catch (error) {
       return res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
     }
@@ -905,7 +943,7 @@ export function createAgentRouter() {
 
   router.post("/cases/:caseId/query-runs", async (req, res) => {
     try {
-      const result = await queryRunApiService.create(String(req.params.caseId), req.body || {});
+      const result = await withCaseRunLock(String(req.params.caseId), () => queryRunApiService.create(String(req.params.caseId), req.body || {}));
       if (!result.ok) return res.status(result.status).json({ error: result.error });
       return res.status(result.status || 200).json(result.data);
     } catch (error) {
@@ -923,10 +961,10 @@ export function createAgentRouter() {
     }
   });
 
-  router.post("/cases/:caseId/query-runs/:queryRunId/activate", (req, res) => {
+  router.post("/cases/:caseId/query-runs/:queryRunId/activate", async (req, res) => {
     try {
       const cardId = typeof req.body?.cardId === "string" ? req.body.cardId : "";
-      const result = queryRunApiService.activate(String(req.params.caseId), String(req.params.queryRunId), cardId);
+      const result = await withCaseRunLock(String(req.params.caseId), () => queryRunApiService.activate(String(req.params.caseId), String(req.params.queryRunId), cardId));
       if (!result.ok) return res.status(result.status).json({ error: result.error });
       return res.json(result.data);
     } catch (error) {
@@ -936,12 +974,12 @@ export function createAgentRouter() {
 
   router.post("/cases/:caseId/query-runs/:queryRunId/conversations/:conversationId/select", async (req, res) => {
     try {
-      const result = await queryRunApiService.select(
+      const result = await withCaseRunLock(String(req.params.caseId), () => queryRunApiService.select(
         String(req.params.caseId),
         String(req.params.queryRunId),
         String(req.params.conversationId),
         req.body?.openWireshark === true
-      );
+      ));
       if (!result.ok) return res.status(result.status).json({ error: result.error });
       return res.json(result.data);
     } catch (error) {
@@ -962,7 +1000,7 @@ export function createAgentRouter() {
   router.post("/cases/:caseId/query-runs/:queryRunId/open-wireshark", async (req, res) => {
     try {
       const conversationId = String(req.body?.conversationId || "");
-      const result = await queryRunApiService.openWireshark(String(req.params.caseId), String(req.params.queryRunId), conversationId);
+      const result = await withCaseRunLock(String(req.params.caseId), () => queryRunApiService.openWireshark(String(req.params.caseId), String(req.params.queryRunId), conversationId));
       if (!result.ok) return res.status(result.status).json({ error: result.error });
       return res.json(result.data);
     } catch (error) {
@@ -972,24 +1010,26 @@ export function createAgentRouter() {
 
   router.post("/cases/:caseId/evidence/open", async (req, res) => {
     try {
-      const graph = loadGraph(String(req.params.caseId));
-      const pcapFilename = String(req.body?.pcapFilename || "");
-      const displayFilter = String(req.body?.displayFilter || "");
-      const frameNumber = Number(req.body?.frameNumber);
-      const queryRunId = String(req.body?.queryRunId || "");
-      const cardId = String(req.body?.cardId || "");
-      if (!pcapFilename || !displayFilter) return res.status(400).json({ error: "pcapFilename and displayFilter are required" });
-      const capture = graph.captures.find((item) => item.pcapFilename === pcapFilename);
-      if (!capture?.pcapFilename) return res.status(404).json({ error: "capture file not found" });
-      const result = await evidenceOpenService.openEvidence(graph, {
-        pcapFilename: capture.pcapFilename,
-        displayFilter,
-        frameNumber: Number.isFinite(frameNumber) ? frameNumber : undefined,
-        queryRunId: queryRunId || undefined,
-        cardId: cardId || undefined
+      return await withCaseRunLock(String(req.params.caseId), async () => {
+        const graph = loadGraph(String(req.params.caseId));
+        const pcapFilename = String(req.body?.pcapFilename || "");
+        const displayFilter = String(req.body?.displayFilter || "");
+        const frameNumber = Number(req.body?.frameNumber);
+        const queryRunId = String(req.body?.queryRunId || "");
+        const cardId = String(req.body?.cardId || "");
+        if (!pcapFilename || !displayFilter) return res.status(400).json({ error: "pcapFilename and displayFilter are required" });
+        const capture = graph.captures.find((item) => item.pcapFilename === pcapFilename);
+        if (!capture?.pcapFilename) return res.status(404).json({ error: "capture file not found" });
+        const result = await evidenceOpenService.openEvidence(graph, {
+          pcapFilename: capture.pcapFilename,
+          displayFilter,
+          frameNumber: Number.isFinite(frameNumber) ? frameNumber : undefined,
+          queryRunId: queryRunId || undefined,
+          cardId: cardId || undefined
+        });
+        if (!result) return res.status(404).json({ error: "capture file not found" });
+        return res.json(result.wireshark);
       });
-      if (!result) return res.status(404).json({ error: "capture file not found" });
-      return res.json(result.wireshark);
     } catch (error) {
       return res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
     }
@@ -997,7 +1037,7 @@ export function createAgentRouter() {
 
   router.get("/cases/:caseId", async (req, res) => {
     try {
-      return res.json(await loadGraphWithInsights(String(req.params.caseId)));
+      return res.json(await withCaseRunLock(String(req.params.caseId), () => loadGraphWithInsights(String(req.params.caseId))));
     } catch {
       return res.status(404).json({ error: "case not found" });
     }

@@ -271,15 +271,63 @@ test("tcp_rst_direction: RST 风暴 (3+ RST 在 1s 内)", () => {
 
 // ── analyzeHandshakeRetry ───────────────────────────────────────────────
 
-test("tcp_handshake_retry: SYN 重传", () => {
+test("tcp_handshake_retry: 原始 SYN + 单个重传标记会统计 1 次", () => {
   const graph = makeGraph([
     packet({ srcPort: 50050, tcpFlags: ["SYN"], tcpSeq: 100, timestamp: 0 }),
-    packet({ srcPort: 50050, tcpFlags: ["SYN"], tcpSeq: 100, timestamp: 1 }),
-    packet({ srcPort: 50050, tcpFlags: ["SYN"], tcpSeq: 100, timestamp: 3 }),
+    packet({ srcPort: 50050, tcpFlags: ["SYN"], tcpSeq: 100, timestamp: 1, tcpAnalysis: { retransmission: true } }),
   ]);
   const insight = findInsight(graph, "tcp_handshake_retry");
   assert.ok(insight);
   assert.match(insight!.description, /SYN 重传/);
+  assert.equal(insight!.detail.retryCount, 1);
+  assert.equal(insight!.detail.missingBaseline, false);
+  assert.equal(insight!.packetIds.length, 2);
+});
+
+test("tcp_handshake_retry: 多个 SYN 重传只按 tshark 标记计数", () => {
+  const graph = makeGraph([
+    packet({ srcPort: 50052, tcpFlags: ["SYN"], tcpSeq: 200, timestamp: 0 }),
+    packet({ srcPort: 50052, tcpFlags: ["SYN"], tcpSeq: 200, timestamp: 1, tcpAnalysis: { retransmission: true } }),
+    packet({ srcPort: 50052, tcpFlags: ["SYN"], tcpSeq: 200, timestamp: 3, tcpAnalysis: { retransmission: true } }),
+    packet({ srcPort: 50052, tcpFlags: ["SYN"], tcpSeq: 200, timestamp: 7, tcpAnalysis: { fastRetransmission: true } }),
+  ]);
+  const insight = findInsight(graph, "tcp_handshake_retry");
+  assert.ok(insight);
+  assert.equal(insight!.detail.retryCount, 3);
+  assert.deepEqual(insight!.detail.intervalsMs, [1000, 2000, 4000]);
+});
+
+test("tcp_handshake_retry: 缺少原始 SYN 时单个重传标记仍可报告", () => {
+  const graph = makeGraph([
+    packet({ srcPort: 50053, tcpFlags: ["SYN"], tcpSeq: 300, timestamp: 1, tcpAnalysis: { retransmission: true } }),
+  ]);
+  const insight = findInsight(graph, "tcp_handshake_retry");
+  assert.ok(insight);
+  assert.equal(insight!.detail.retryCount, 1);
+  assert.equal(insight!.detail.missingBaseline, true);
+  assert.match(insight!.description, /至少重传 1 次/);
+});
+
+test("tcp_handshake_retry: SYN/ACK 重传使用相同统计口径", () => {
+  const graph = makeGraph([
+    packet({ srcPort: 50054, dstPort: 80, tcpFlags: ["SYN"], tcpSeq: 400, timestamp: 0 }),
+    packet({ srcIp: "10.0.0.2", srcPort: 80, dstIp: "10.0.0.1", dstPort: 50054, tcpFlags: ["SYN", "ACK"], tcpSeq: 900, timestamp: 0.1 }),
+    packet({ srcIp: "10.0.0.2", srcPort: 80, dstIp: "10.0.0.1", dstPort: 50054, tcpFlags: ["SYN", "ACK"], tcpSeq: 900, timestamp: 1.1, tcpAnalysis: { retransmission: true } }),
+  ]);
+  const insight = allInsights(graph, "tcp_handshake_retry").find((item) => item.description.includes("SYN/ACK"));
+  assert.ok(insight);
+  assert.equal(insight!.detail.retryCount, 1);
+  assert.equal(insight!.detail.direction, "server→client");
+});
+
+test("tcp_handshake_retry: 未被 tshark 标记的重复 SYN 不产生重传结论", () => {
+  const graph = makeGraph([
+    packet({ srcPort: 50055, tcpFlags: ["SYN"], tcpSeq: 500, timestamp: 0 }),
+    packet({ srcPort: 50055, tcpFlags: ["SYN"], tcpSeq: 500, timestamp: 1 }),
+    packet({ srcPort: 50055, tcpFlags: ["SYN"], tcpSeq: 500, timestamp: 3 }),
+  ]);
+  const insight = allInsights(graph, "tcp_handshake_retry").find((item) => item.description.includes("重传"));
+  assert.equal(insight, undefined);
 });
 
 test("tcp_handshake_retry: 同时打开 (双向 SYN)", () => {

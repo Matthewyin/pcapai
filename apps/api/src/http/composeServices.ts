@@ -8,7 +8,6 @@ import type { z } from "zod";
 import type { CaseGraph } from "../../../../packages/shared/src/index.js";
 import { runPcapTroubleshootingAgent } from "../agents/runtime.js";
 import { createCaseGraphTools } from "../agents/caseGraphTools.js";
-import { createRfcTools } from "../agents/rfcTools.js";
 import { findBypassPattern, incrementHitCount, learnFromAgentRun, loadLearnedPatterns } from "../services/patternLearner.js";
 import { apiConfig } from "../config.js";
 import {
@@ -279,7 +278,7 @@ export function composeServices(deps: ServiceDeps) {
       learnFromAgentRun(question, toolCalls, adapterIds).catch(() => {});
     },
     incrementHitCount,
-    createCaseGraphTools: (caseId) => [...createCaseGraphToolsFor(caseId), ...createRfcTools()]
+    createCaseGraphTools: (caseId) => createCaseGraphToolsFor(caseId)
   });
   const agentToolRegistryService = createAgentToolRegistryService({
     usageHelpAnswer,
@@ -299,7 +298,7 @@ export function composeServices(deps: ServiceDeps) {
     recordToolRun,
     runLlmExplain: async (graph, question) => {
       // leader 提示词依赖 get_case_memory/load_case_graph 等 case graph 工具，必须随调用注入
-      const answer = await runPcapTroubleshootingAgent({ graph, question, chatHistory: undefined, tools: [...createCaseGraphToolsFor(graph.spec.caseId), ...createRfcTools()] });
+      const answer = await runPcapTroubleshootingAgent({ graph, question, chatHistory: undefined, tools: createCaseGraphToolsFor(graph.spec.caseId) });
       return answer;
     }
   });
@@ -332,7 +331,7 @@ export function composeServices(deps: ServiceDeps) {
     recordErrorRun,
     updateRuntimeStatus: (patch) => Object.assign(agentRuntimeStatus, patch),
     adapterIds: protocolEventQueryService.adapterIds,
-    createAgentTools: (caseId, question) => [...createCaseGraphToolsFor(caseId), ...createRfcTools(), ...agentToolRegistryService.createSdkTools(caseId, question)],
+    createAgentTools: (caseId, question) => [...createCaseGraphToolsFor(caseId), ...agentToolRegistryService.createSdkTools(caseId, question)],
     learnFromAgentRun: (question, toolCalls, adapterIds) => {
       learnFromAgentRun(question, toolCalls, adapterIds).catch(() => {});
     },

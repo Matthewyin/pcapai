@@ -1,4 +1,5 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import {
   AnalysisRunSchema,
@@ -17,7 +18,13 @@ export function safePathPart(value: string) {
 }
 
 export function caseDirectory(caseId: string) {
-  return path.join(apiConfig.caseDataDir, safePathPart(caseId));
+  return path.join(caseDataDirectory(), safePathPart(caseId));
+}
+
+export function caseDataDirectory() {
+  return process.env.PCAPAI_CASE_DATA_DIR
+    ? path.resolve(process.env.PCAPAI_CASE_DATA_DIR)
+    : apiConfig.caseDataDir;
 }
 
 export function capturesDirectory(caseId: string) {
@@ -32,10 +39,21 @@ function graphPath(caseId: string) {
   return path.join(caseDirectory(caseId), "case.json");
 }
 
-export function writeCaseGraph(graph: CaseGraph) {
-  const directory = caseDirectory(graph.spec.caseId);
+function writeJsonAtomically(target: string, value: unknown): void {
+  const directory = path.dirname(target);
+  const temporary = path.join(directory, `.${path.basename(target)}-${process.pid}-${randomUUID()}.tmp`);
+  const content = JSON.stringify(value, null, 2);
   mkdirSync(directory, { recursive: true });
-  writeFileSync(graphPath(graph.spec.caseId), JSON.stringify(graph, null, 2));
+  try {
+    writeFileSync(temporary, content, "utf8");
+    renameSync(temporary, target);
+  } finally {
+    if (existsSync(temporary)) rmSync(temporary, { force: true });
+  }
+}
+
+export function writeCaseGraph(graph: CaseGraph) {
+  writeJsonAtomically(graphPath(graph.spec.caseId), graph);
 }
 
 export function readCaseGraph(caseId: string) {
@@ -43,8 +61,9 @@ export function readCaseGraph(caseId: string) {
 }
 
 export function listCaseSummaries() {
-  if (!existsSync(apiConfig.caseDataDir)) return [];
-  return readdirSync(apiConfig.caseDataDir)
+  const dataDirectory = caseDataDirectory();
+  if (!existsSync(dataDirectory)) return [];
+  return readdirSync(dataDirectory)
     .flatMap((caseId) => {
       try {
         const graph = readCaseGraph(caseId);
@@ -97,8 +116,7 @@ export function createEmptyCase(spec: CaseSpec) {
 export function writeAnalysisRunSnapshot(graph: CaseGraph, run: AnalysisRun) {
   const parsedRun = AnalysisRunSchema.parse(run);
   const directory = analysisRunsDirectory(graph.spec.caseId);
-  mkdirSync(directory, { recursive: true });
-  writeFileSync(path.join(directory, parsedRun.snapshotFilename || `${safePathPart(parsedRun.runId)}.json`), JSON.stringify(graph, null, 2));
+  writeJsonAtomically(path.join(directory, parsedRun.snapshotFilename || `${safePathPart(parsedRun.runId)}.json`), graph);
 }
 
 export function readAnalysisRunSnapshot(caseId: string, runId: string) {

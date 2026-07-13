@@ -1,5 +1,5 @@
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
-import { dirname } from "node:path";
+import path, { dirname } from "node:path";
 import { apiConfig } from "../config.js";
 
 export interface LearnedPattern {
@@ -8,13 +8,19 @@ export interface LearnedPattern {
   createdAt: string;
   exampleQuestions: string[];
   hitCount: number;
+  status?: "pending" | "approved" | "rejected" | "disabled";
+  reviewedAt?: string;
 }
 
 interface PatternStore {
   patterns: LearnedPattern[];
 }
 
-const PATTERNS_FILE = apiConfig.learnedPatternsPath;
+function patternsFile(): string {
+  return process.env.PCAPAI_LEARNED_PATTERNS_PATH
+    ? path.resolve(process.env.PCAPAI_LEARNED_PATTERNS_PATH)
+    : apiConfig.learnedPatternsPath;
+}
 
 // 学习是 fire-and-forget 的异步任务，串行化读改写避免并发互相覆盖
 let writeLock: Promise<void> = Promise.resolve();
@@ -27,20 +33,26 @@ function withWriteLock(task: () => void | Promise<void>): Promise<void> {
 
 function readStore(): PatternStore {
   try {
-    return JSON.parse(readFileSync(PATTERNS_FILE, "utf-8"));
+    return JSON.parse(readFileSync(patternsFile(), "utf-8"));
   } catch {
     return { patterns: [] };
   }
 }
 
 function writeStore(store: PatternStore) {
-  mkdirSync(dirname(PATTERNS_FILE), { recursive: true });
-  writeFileSync(PATTERNS_FILE, JSON.stringify(store, null, 2));
+  const target = patternsFile();
+  mkdirSync(dirname(target), { recursive: true });
+  writeFileSync(target, JSON.stringify(store, null, 2));
+}
+
+function isEffective(pattern: LearnedPattern): boolean {
+  return pattern.status === undefined || pattern.status === "approved";
 }
 
 export function loadLearnedPatterns(): { regex: RegExp; adapterId: string }[] {
   const store = readStore();
   return store.patterns
+    .filter(isEffective)
     .map((p) => {
       try {
         return { regex: new RegExp(p.regex, "i"), adapterId: p.adapterId };
@@ -52,12 +64,13 @@ export function loadLearnedPatterns(): { regex: RegExp; adapterId: string }[] {
 }
 
 export function listLearnedPatterns(): LearnedPattern[] {
-  return readStore().patterns;
+  return readStore().patterns.map((pattern) => ({ ...pattern, status: pattern.status ?? "approved" }));
 }
 
 // 直通车选择：命中次数达到阈值的学习模式可绕过 Chain Planner 直接走确定性路径
 export function selectBypassPattern(patterns: LearnedPattern[], question: string, minHits: number): LearnedPattern | null {
   for (const pattern of patterns) {
+    if (!isEffective(pattern)) continue;
     if (pattern.hitCount < minHits) continue;
     try {
       if (new RegExp(pattern.regex, "i").test(question)) return pattern;
@@ -70,6 +83,32 @@ export function selectBypassPattern(patterns: LearnedPattern[], question: string
 
 export function findBypassPattern(question: string, minHits: number): LearnedPattern | null {
   return selectBypassPattern(readStore().patterns, question, minHits);
+}
+
+function reviewLearnedPattern(
+  regex: string,
+  adapterId: string,
+  status: NonNullable<LearnedPattern["status"]>
+): LearnedPattern | null {
+  const store = readStore();
+  const pattern = store.patterns.find((item) => item.regex === regex && item.adapterId === adapterId);
+  if (!pattern) return null;
+  pattern.status = status;
+  pattern.reviewedAt = new Date().toISOString();
+  writeStore(store);
+  return { ...pattern };
+}
+
+export function approveLearnedPattern(regex: string, adapterId: string): LearnedPattern | null {
+  return reviewLearnedPattern(regex, adapterId, "approved");
+}
+
+export function rejectLearnedPattern(regex: string, adapterId: string): LearnedPattern | null {
+  return reviewLearnedPattern(regex, adapterId, "rejected");
+}
+
+export function setLearnedPatternEnabled(regex: string, adapterId: string, enabled: boolean): LearnedPattern | null {
+  return reviewLearnedPattern(regex, adapterId, enabled ? "approved" : "disabled");
 }
 
 export function deleteLearnedPattern(regex: string, adapterId: string): boolean {
@@ -155,7 +194,8 @@ ${existingPatterns ? `5. 已有的 learned patterns（不要重复或冲突）�
         adapterId: parsed.adapterId,
         createdAt: new Date().toISOString(),
         exampleQuestions: [question],
-        hitCount: 0
+        hitCount: 0,
+        status: "pending"
       });
       writeStore(freshStore);
     });

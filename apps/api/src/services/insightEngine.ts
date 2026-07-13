@@ -1147,61 +1147,69 @@ function analyzeHandshakeRetry(
   for (const conn of connections.values()) {
     const sorted = [...conn.packets].sort((a, b) => a.timestamp - b.timestamp);
 
-    // SYN retransmissions: multiple SYN with same src/dst/seq
-    // 口径对齐 tshark：只有 tcp.analysis.retransmission 标记的 SYN 才计入重传统计，
-    // 否则会出现「会话级报告 N 个重传、tshark filter 返回 0」的口径矛盾。
-    const syns = sorted.filter(p => {
-      const flags = p.tcpFlags.map(f => f.toUpperCase());
-      return flags.includes("SYN") && !flags.includes("ACK") && (p.tcpAnalysis?.retransmission || p.tcpAnalysis?.fastRetransmission);
-    });
-
-    if (syns.length >= 2) {
-      // Group by seq number
-      const bySeq = new Map<number, PacketSummary[]>();
-      for (const s of syns) {
-        if (s.tcpSeq == null) continue;
-        const arr = bySeq.get(s.tcpSeq) || [];
-        arr.push(s);
-        bySeq.set(s.tcpSeq, arr);
+    const isMarkedRetransmission = (packet: PacketSummary) => Boolean(
+      packet.tcpAnalysis?.retransmission || packet.tcpAnalysis?.fastRetransmission
+    );
+    const emitRetries = (
+      packets: PacketSummary[],
+      label: "SYN" | "SYN/ACK",
+      direction: "client→server" | "server→client",
+      scenario: string
+    ) => {
+      const bySeq = new Map<string, PacketSummary[]>();
+      for (const packet of packets) {
+        const key = String(packet.tcpSeq ?? "unknown");
+        bySeq.set(key, [...(bySeq.get(key) || []), packet]);
       }
-      for (const [, synGroup] of bySeq) {
-        if (synGroup.length < 2) continue;
-        const intervals = synGroup.slice(1).map((s, i) => s.timestamp - synGroup[i].timestamp);
+      for (const group of bySeq.values()) {
+        const retries = group.filter(isMarkedRetransmission);
+        if (!retries.length) continue;
+        const firstRetryAt = retries[0].timestamp;
+        const baseline = group.find((packet) => !isMarkedRetransmission(packet) && packet.timestamp <= firstRetryAt);
+        const observed = [...(baseline ? [baseline] : []), ...retries].sort((a, b) => a.timestamp - b.timestamp);
+        const intervals = observed.slice(1).map((packet, index) => packet.timestamp - observed[index].timestamp);
+        const first = observed[0];
+        const missingBaseline = !baseline;
         acc.push({
           insightId: insightId("hs-retry", idx++),
           type: "tcp_handshake_retry",
-          severity: synGroup.length >= 4 ? "warning" : "info",
-          packetIds: synGroup.map(p => p.packetId),
-          description: `SYN 重传 ${synGroup.length - 1} 次（${conn.srcIp}:${conn.srcPort} → ${conn.dstIp}:${conn.dstPort}，间隔 ${intervals.map(i => (i * 1000).toFixed(0) + "ms").join(", ")}）`,
+          severity: retries.length >= 3 ? "warning" : "info",
+          packetIds: observed.map((packet) => packet.packetId),
+          description: `${label} ${missingBaseline ? "至少" : ""}重传 ${retries.length} 次（${first.srcIp}:${first.srcPort} → ${first.dstIp}:${first.dstPort}${intervals.length ? `，间隔 ${intervals.map((interval) => `${(interval * 1000).toFixed(0)}ms`).join(", ")}` : ""}）`,
           detail: {
-            direction: "client→server", retryCount: synGroup.length - 1,
-            intervalsMs: intervals.map(i => i * 1000),
-            exponentialBackoff: checkExponentialBackoff(intervals),
-            seq: synGroup[0].tcpSeq
+            direction,
+            retryCount: retries.length,
+            missingBaseline,
+            intervalsMs: intervals.map((interval) => interval * 1000),
+            exponentialBackoff: intervals.length >= 2 && checkExponentialBackoff(intervals),
+            seq: first.tcpSeq
           },
-          scenario: "服务端未响应 SYN（SYN backlog 满、防火墙丢弃、路由问题）。指数退避说明是正常 TCP 栈行为。"
+          scenario
         });
       }
-    }
+    };
 
-    // SYN/ACK retransmissions（同样口径对齐 tshark）
-    const synacks = sorted.filter(p => {
-      const flags = p.tcpFlags.map(f => f.toUpperCase());
-      return flags.includes("SYN") && flags.includes("ACK") && (p.tcpAnalysis?.retransmission || p.tcpAnalysis?.fastRetransmission);
+    const syns = sorted.filter((packet) => {
+      const flags = packet.tcpFlags.map((flag) => flag.toUpperCase());
+      return flags.includes("SYN") && !flags.includes("ACK");
     });
+    emitRetries(
+      syns,
+      "SYN",
+      "client→server",
+      "服务端未响应 SYN（SYN backlog 满、防火墙丢弃、路由问题）。指数退避说明是正常 TCP 栈行为。"
+    );
 
-    if (synacks.length >= 2) {
-      const intervals = synacks.slice(1).map((s, i) => s.timestamp - synacks[i].timestamp);
-      acc.push({
-        insightId: insightId("hs-retry", idx++),
-        type: "tcp_handshake_retry",
-        severity: "info",
-        packetIds: synacks.map(p => p.packetId),
-        description: `SYN/ACK 重传 ${synacks.length - 1} 次（${conn.dstIp}:${conn.dstPort} → ${conn.srcIp}:${conn.srcPort}），客户端未完成握手`,
-        detail: { direction: "server→client", retryCount: synacks.length - 1, intervalsMs: intervals.map(i => i * 1000) },
-        scenario: "客户端收到 SYN/ACK 后未回复 ACK，可能是客户端掉线、SYN flood 攻击、或网络单向中断"
-      });
-    }
+    const synacks = sorted.filter((packet) => {
+      const flags = packet.tcpFlags.map((flag) => flag.toUpperCase());
+      return flags.includes("SYN") && flags.includes("ACK");
+    });
+    emitRetries(
+      synacks,
+      "SYN/ACK",
+      "server→client",
+      "客户端收到 SYN/ACK 后未回复 ACK，可能是客户端掉线、SYN flood 攻击、或网络单向中断"
+    );
 
     // Simultaneous open: both sides send SYN (rare)
     // 注意：这里用所有 SYN（不限于 tshark 重传标记），因为同时打开是连接行为判断，与重传无关

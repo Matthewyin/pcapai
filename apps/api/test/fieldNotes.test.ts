@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
-import test from "node:test";
-import { existsSync } from "node:fs";
+import test, { after } from "node:test";
+import { copyFileSync, existsSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { apiConfig } from "../src/config.js";
 import {
   extractPacketFeatures,
@@ -12,6 +14,7 @@ import {
   disputeFieldNote,
   createFieldNote,
   deleteFieldNote,
+  resetFieldNotesIndexCache,
   type PacketFeatures
 } from "../src/services/fieldNotesService.js";
 import type { CaseGraph, PacketSummary } from "../../packages/shared/src/index.js";
@@ -92,7 +95,17 @@ test("extractPacketFeatures: rawPackets 为空时回退到 packets", () => {
 // ── searchFieldNotes: 依赖已构建的 SQLite 库 ──
 // 库未构建时 skip（对齐 rfc-corpus.test.ts 不测 searchRfc 的风格）。
 
+const fieldNotesTestDir = mkdtempSync(path.join(tmpdir(), "pcapai-field-notes-test-"));
+const fieldNotesTestIndex = path.join(fieldNotesTestDir, "field-notes.db");
 const indexReady = existsSync(apiConfig.fieldNotes.indexPath);
+if (indexReady) copyFileSync(apiConfig.fieldNotes.indexPath, fieldNotesTestIndex);
+process.env.PCAPAI_FIELD_NOTES_INDEX_PATH = fieldNotesTestIndex;
+resetFieldNotesIndexCache();
+after(() => {
+  resetFieldNotesIndexCache();
+  delete process.env.PCAPAI_FIELD_NOTES_INDEX_PATH;
+  rmSync(fieldNotesTestDir, { recursive: true, force: true });
+});
 
 // 套件开始前清理上次可能的 test- 前缀残留，保证幂等
 if (indexReady) {
@@ -198,7 +211,7 @@ test("searchFieldNotes: 命中笔记的 candidateCause 带 skillIds", { skip: !i
 });
 
 // ── P8 沉淀闭环：写操作（verify/dispute/create/list/get）──
-// 用 test- 前缀 id 隔离，测完残留可接受（与 skills 测试同风格）
+// 所有写操作都落在临时数据库，不触碰 data/field-notes/field-notes.db。
 
 test("createFieldNote + getFieldNote + listAllFieldNotes", { skip: !indexReady }, () => {
   const result = createFieldNote({

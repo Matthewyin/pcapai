@@ -15,6 +15,15 @@ export type Skill = {
   filePath: string;             // 源文件绝对路径
 };
 
+export type CreateSkillInput = {
+  name: string;
+  description: string;
+  triggers?: string[];
+  toolsRequired?: string[];
+  body: string;
+  overwrite?: boolean;
+};
+
 // skill 名只允许小写字母、数字、横杠，防路径穿越
 const SKILL_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/;
 
@@ -59,14 +68,20 @@ function asStringArray(value: unknown): string[] | undefined {
 }
 
 function ensureSkillsDir(): string {
-  const dir = apiConfig.skills.dir;
+  const dir = skillsDir();
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
   return dir;
 }
 
+export function skillsDir(): string {
+  return process.env.PCAPAI_SKILLS_DIR
+    ? path.resolve(process.env.PCAPAI_SKILLS_DIR)
+    : apiConfig.skills.dir;
+}
+
 /** 所有 skills 目录（主目录 + extraDirs），后者优先级更高（用户可覆盖内置） */
 function allSkillDirs(): string[] {
-  return [apiConfig.skills.dir, ...apiConfig.skills.extraDirs].filter((d) => existsSync(d));
+  return [skillsDir(), ...apiConfig.skills.extraDirs].filter((d) => existsSync(d));
 }
 
 // 列出所有 skill（扫描所有目录，同名 skill 后面的目录覆盖前面的）
@@ -117,15 +132,8 @@ export function getSkill(name: string): Skill | null {
   return null;
 }
 
-// 创建 skill（Agent 自我进化用）。已存在则覆盖（带 overwrite 控制）。
-export function createSkill(input: {
-  name: string;
-  description: string;
-  triggers?: string[];
-  toolsRequired?: string[];
-  body: string;
-  overwrite?: boolean;
-}): { created: boolean; filePath: string; reason?: string } {
+// 创建正式 skill。仅供人工 API 或审批服务调用，Agent 只能提交提案。
+export function createSkill(input: CreateSkillInput): { created: boolean; filePath: string; reason?: string } {
   if (!isValidSkillName(input.name)) {
     return { created: false, filePath: "", reason: `skill 名非法（只允许小写字母、数字、横杠）：${input.name}` };
   }
@@ -152,7 +160,7 @@ export function createSkill(input: {
 // 删除 skill。不存在视为已删除（幂等）。P8 沉淀闭环 + 测试清理用。
 export function deleteSkill(name: string): { deleted: boolean; filePath: string } {
   if (!isValidSkillName(name)) return { deleted: false, filePath: "" };
-  const filePath = path.join(apiConfig.skills.dir, `${name}.md`);
+  const filePath = path.join(skillsDir(), `${name}.md`);
   if (!existsSync(filePath)) return { deleted: true, filePath };
   unlinkSync(filePath);
   return { deleted: true, filePath };

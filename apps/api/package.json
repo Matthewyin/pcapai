@@ -7,7 +7,7 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc -p tsconfig.json",
     "check": "tsc -p tsconfig.json --noEmit",
-    "test": "NODE_ENV=test tsx --test test/*.test.ts",
+    "test": "node scripts/runTests.mjs",
     "rag:build": "tsx scripts/buildRfcIndex.ts",
     "fieldnotes:build": "tsx scripts/buildFieldNotesIndex.ts",
     "eval": "tsx scripts/evalAgent.ts",

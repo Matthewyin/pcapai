@@ -1,7 +1,7 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { z } from "zod";
 import { ConversationSchema, PacketSummarySchema } from "../../../../packages/shared/src/index.js";
-import { createClient } from "./mcpRegistry.js";
+import { createClient, resetClient as resetMcpClient } from "./mcpRegistry.js";
 
 const BuildDisplayFilterResultSchema = z.object({ displayFilter: z.string() });
 const CaptureTimeRangeResultSchema = z.object({
@@ -116,24 +116,8 @@ function firstTextContent(result: unknown) {
   return firstText.text;
 }
 
-// 常驻 MCP 连接单例：确定性查询路径复用同一个子进程，传输层故障时重置重连
-let clientPromise: Promise<Client> | null = null;
-
 function getClient(): Promise<Client> {
-  if (!clientPromise) {
-    // 从注册表获取 client（替代硬编码 transport）
-    clientPromise = createClient("tshark-query");
-    clientPromise.catch(() => {
-      clientPromise = null;
-    });
-  }
-  return clientPromise;
-}
-
-function resetClient() {
-  const previous = clientPromise;
-  clientPromise = null;
-  previous?.then((client) => client.close()).catch(() => {});
+  return createClient("tshark-query");
 }
 
 async function callTsharkQueryTool<T>(toolName: string, args: Record<string, unknown>, schema: z.ZodType<T>) {
@@ -142,7 +126,7 @@ async function callTsharkQueryTool<T>(toolName: string, args: Record<string, unk
   try {
     result = await client.callTool({ name: toolName, arguments: args });
   } catch (error) {
-    resetClient();
+    await resetMcpClient("tshark-query");
     throw error;
   }
   const text = firstTextContent(result);

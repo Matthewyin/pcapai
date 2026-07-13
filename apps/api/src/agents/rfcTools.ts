@@ -14,9 +14,20 @@ function cleanOptionalString(value: string | null | undefined): string | undefin
   return trimmed;
 }
 
+export type RfcSectionAuditRecord = {
+  rfcDocId: number;
+  requestedSection?: string;
+  returnedSection?: string;
+  success: boolean;
+};
+
+type RfcToolsOptions = {
+  onSectionRead?: (record: RfcSectionAuditRecord) => void;
+};
+
 // RFC 知识库工具：search_rfc 定位条文，get_rfc_section 精读原文。
 // 设计原则：每次调用一击命中（BM25 排序 + 摘要），不要求模型迭代检索。
-export function createRfcTools(): Tool[] {
+export function createRfcTools(options: RfcToolsOptions = {}): Tool[] {
   return [
     tool({
       name: "search_rfc",
@@ -53,9 +64,18 @@ export function createRfcTools(): Tool[] {
         section: z.string().nullable().optional()
       }),
       execute: ({ rfcNumber, section }) => {
+        const requestedSection = cleanOptionalString(section);
         try {
-          return JSON.stringify(getRfcSection(rfcNumber, cleanOptionalString(section)));
+          const result = getRfcSection(rfcNumber, requestedSection);
+          options.onSectionRead?.({
+            rfcDocId: result.docId,
+            requestedSection,
+            returnedSection: result.section,
+            success: Boolean(result.section && result.body)
+          });
+          return JSON.stringify(result);
         } catch (error) {
+          options.onSectionRead?.({ rfcDocId: rfcNumber, requestedSection, success: false });
           return errorText(error);
         }
       }

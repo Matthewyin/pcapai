@@ -4,7 +4,8 @@ import type { CaseGraph, CaseMemory, QueryRun } from "../../../../packages/share
 import { DataPathHopSchema, NetworkDeviceSchema } from "../../../../packages/shared/src/index.js";
 import { buildCaseReportMarkdown } from "../http/reportBuilder.js";
 import { extractPacketFeatures, searchFieldNotes, type FieldNoteHit } from "../services/fieldNotesService.js";
-import { listSkills, getSkill, createSkill } from "../services/skillsService.js";
+import { listSkills, getSkill } from "../services/skillsService.js";
+import { createSkillProposal } from "../services/skillProposalsService.js";
 import { apiConfig } from "../config.js";
 
 // case graph 只读/记忆工具：原 case-graph MCP 的进程内实现。
@@ -333,24 +334,23 @@ export function createCaseGraphTools(input: CaseGraphToolsInput): Tool[] {
       }
     }),
     tool({
-      name: "create_skill",
-      description: "把验证有效的排障操作流程固化为新技能（自我进化）。当你执行了一套行之有效的步骤且可复用时调用。技能名用 kebab-case（如 verify-mtu-blackhole）。",
+      name: "propose_skill",
+      description: "把验证有效的排障操作流程提交为待人工审批的技能提案。该工具不会直接写入全局 Skills；用户批准后才生效。技能名用 kebab-case（如 verify-mtu-blackhole）。",
       parameters: z.object({
         name: z.string().describe("技能名，kebab-case，如 verify-tcp-options"),
         description: z.string().describe("一句话说明用途"),
         triggers: z.array(z.string()).optional().describe("触发场景描述列表"),
         toolsRequired: z.array(z.string()).optional().describe("依赖的工具名列表"),
-        body: z.string().describe("正文：适用场景、执行步骤、判定标准，markdown 格式"),
-        overwrite: z.boolean().optional().describe("已存在时是否覆盖，默认 false")
+        body: z.string().describe("正文：适用场景、执行步骤、判定标准，markdown 格式")
       }),
-      execute: async ({ name, description, triggers, toolsRequired, body, overwrite }) => {
+      execute: async ({ name, description, triggers, toolsRequired, body }) => {
         try {
-          const result = createSkill({ name, description, triggers, toolsRequired, body, overwrite });
+          const result = createSkillProposal({ name, description, triggers, toolsRequired, body }, "agent");
           return result.created
-            ? `技能 ${name} 已${overwrite ? "更新" : "创建"}：${result.filePath}`
-            : `技能 ${name} 未创建：${result.reason}`;
+            ? `技能提案 ${name} 已提交，提案 ID：${result.proposal?.proposalId}。等待用户在设置页批准后生效。`
+            : `技能提案 ${name} 未提交：${result.reason}`;
         } catch (error) {
-          return error instanceof Error ? `技能创建失败：${error.message}` : "技能创建失败。";
+          return error instanceof Error ? `技能提案提交失败：${error.message}` : "技能提案提交失败。";
         }
       }
     }),

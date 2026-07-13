@@ -52,6 +52,30 @@ export type ServerStatus = {
   error?: string;
 };
 
+type AgentServer = MCPServerStdio | MCPServerSSE | MCPServerStreamableHttp;
+type AgentServerConnector = (config: McpServerConfig) => Promise<AgentServer>;
+type ClientConnector = (config: McpServerConfig) => Promise<Client>;
+
+function resolveServerConfig(config: McpServerConfig): McpServerConfig {
+  return {
+    ...config,
+    command: config.command ? resolvePathVars(config.command) : undefined,
+    args: config.args?.map(resolvePathVars),
+    url: config.url ? resolvePathVars(config.url) : undefined
+  };
+}
+
+export function mcpConfigFingerprint(config: McpServerConfig): string {
+  const env = Object.fromEntries(Object.entries(config.env || {}).sort(([left], [right]) => left.localeCompare(right)));
+  return JSON.stringify({
+    type: config.type,
+    command: config.command || "",
+    args: config.args || [],
+    env,
+    url: config.url || ""
+  });
+}
+
 /** 注册表文件路径（userData/mcp-registries.json） */
 function registryPath(): string {
   const userDataDir = process.env.PCAPAI_USERDATA_DIR;
@@ -59,8 +83,8 @@ function registryPath(): string {
   return path.join(userDataDir, "mcp-registries.json");
 }
 
-/** 读取注册表（userData JSON 优先，fallback 到 apiConfig.mcpServers） */
-export function loadServers(): McpServerConfig[] {
+/** 读取未展开路径变量的原始注册表，供 CRUD 持久化使用。 */
+function loadRawServers(): McpServerConfig[] {
   const regPath = registryPath();
   if (regPath && existsSync(regPath)) {
     try {
@@ -70,8 +94,12 @@ export function loadServers(): McpServerConfig[] {
       // JSON 损坏，fallback
     }
   }
-  // fallback: apiConfig.mcpServers（已含环境变量覆盖 + 路径替换）
   return apiConfig.mcpServers;
+}
+
+/** 读取注册表（userData JSON 优先，fallback 到 apiConfig.mcpServers） */
+export function loadServers(): McpServerConfig[] {
+  return loadRawServers().map(resolveServerConfig);
 }
 
 /** 保存注册表到 userData */
@@ -94,34 +122,65 @@ export function findServer(id: string): McpServerConfig | undefined {
 
 // ===== Agent runtime 工厂：创建 MCPServer 实例 =====
 
-const agentServerCache = new Map<string, { server: MCPServerStdio | MCPServerSSE | MCPServerStreamableHttp; config: McpServerConfig }>();
+const agentServerCache = new Map<string, { server: AgentServer; fingerprint: string }>();
+const agentServerInFlight = new Map<string, { promise: Promise<AgentServer>; fingerprint: string }>();
 
 /**
  * 为 Agent runtime 创建所有 enabled server 的 MCPServer 实例。
  * 带缓存：同一 server 复用连接，避免每次 Agent 运行都重新 spawn。
  * 失败的 server 跳过（不阻断其他 server）。
  */
-export async function createAgentServers(): Promise<Array<MCPServerStdio | MCPServerSSE | MCPServerStreamableHttp>> {
+export async function createAgentServers(): Promise<AgentServer[]> {
   const enabled = getEnabledServers();
-  const result: Array<MCPServerStdio | MCPServerSSE | MCPServerStreamableHttp> = [];
+  const enabledIds = new Set(enabled.map((config) => config.id));
+  const staleIds = new Set([
+    ...[...agentServerCache.keys()].filter((id) => !enabledIds.has(id)),
+    ...[...agentServerInFlight.keys()].filter((id) => !enabledIds.has(id))
+  ]);
+  await Promise.all([...staleIds].map((id) => resetAgentServers(id)));
+
+  const result: AgentServer[] = [];
   for (const config of enabled) {
     try {
-      const cached = agentServerCache.get(config.id);
-      if (cached && cached.config === config) {
-        result.push(cached.server);
-        continue;
-      }
-      // 创建新实例
-      const server = createAgentServer(config);
-      await connectAgentServer(server, config);
-      agentServerCache.set(config.id, { server, config });
-      result.push(server);
+      result.push(await getOrCreateAgentServer(config));
     } catch (error) {
       console.error(`[mcpRegistry] server ${config.id} 连接失败:`, error instanceof Error ? error.message : String(error));
       // 跳过失败的 server，不阻断其他 server
     }
   }
   return result;
+}
+
+async function getOrCreateAgentServer(config: McpServerConfig): Promise<AgentServer> {
+  const fingerprint = mcpConfigFingerprint(config);
+  const cached = agentServerCache.get(config.id);
+  if (cached?.fingerprint === fingerprint) return cached.server;
+
+  const pending = agentServerInFlight.get(config.id);
+  if (pending?.fingerprint === fingerprint) return pending.promise;
+  if (cached || pending) await resetAgentServers(config.id);
+
+  let trackedPromise: Promise<AgentServer>;
+  trackedPromise = agentServerConnector(config).then(
+    async (server) => {
+      const current = agentServerInFlight.get(config.id);
+      if (current?.promise !== trackedPromise) {
+        await server.close().catch(() => {});
+        throw new Error(`MCP server ${config.id} 初始化已取消`);
+      }
+      agentServerInFlight.delete(config.id);
+      agentServerCache.set(config.id, { server, fingerprint });
+      return server;
+    },
+    (error) => {
+      if (agentServerInFlight.get(config.id)?.promise === trackedPromise) {
+        agentServerInFlight.delete(config.id);
+      }
+      throw error;
+    }
+  );
+  agentServerInFlight.set(config.id, { promise: trackedPromise, fingerprint });
+  return trackedPromise;
 }
 
 function createAgentServer(config: McpServerConfig): MCPServerStdio | MCPServerSSE | MCPServerStreamableHttp {
@@ -147,57 +206,88 @@ function createAgentServer(config: McpServerConfig): MCPServerStdio | MCPServerS
   return new MCPServerStreamableHttp({ ...common, url: config.url || "" });
 }
 
-async function connectAgentServer(
-  server: MCPServerStdio | MCPServerSSE | MCPServerStreamableHttp,
-  config: McpServerConfig
-): Promise<void> {
-  // 本地 server 带重试（spawn 冷启动可能偶发失败）
-  if (config.type === "local") {
-    const maxAttempts = 3;
-    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-      try {
-        await server.connect();
-        return;
-      } catch (error) {
-        if (attempt >= maxAttempts) throw error;
-        try { await server.close(); } catch { /* ignore */ }
-        await new Promise((r) => setTimeout(r, 400 * attempt));
+async function connectNewAgentServer(config: McpServerConfig): Promise<AgentServer> {
+  const maxAttempts = config.type === "local" ? 3 : 1;
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const server = createAgentServer(config);
+    try {
+      await server.connect();
+      return server;
+    } catch (error) {
+      lastError = error;
+      await server.close().catch(() => {});
+      if (attempt < maxAttempts) {
+        await new Promise((resolve) => setTimeout(resolve, 400 * attempt));
       }
     }
-  } else {
-    await server.connect();
   }
+  throw lastError;
 }
 
-/** 重置所有缓存的 Agent server（配置变更后重连） */
-export function resetAgentServers(): void {
-  agentServerCache.clear();
+let agentServerConnector: AgentServerConnector = connectNewAgentServer;
+
+/** 关闭并重置 Agent server；不传 id 时关闭全部。 */
+export async function resetAgentServers(serverId?: string): Promise<void> {
+  const ids = serverId
+    ? [serverId]
+    : [...new Set([...agentServerCache.keys(), ...agentServerInFlight.keys()])];
+  const servers = new Set<AgentServer>();
+  const pending: Array<Promise<AgentServer>> = [];
+  for (const id of ids) {
+    const cached = agentServerCache.get(id);
+    if (cached) servers.add(cached.server);
+    const inFlight = agentServerInFlight.get(id);
+    if (inFlight) pending.push(inFlight.promise);
+    agentServerCache.delete(id);
+    agentServerInFlight.delete(id);
+  }
+  const settled = await Promise.allSettled(pending);
+  for (const item of settled) {
+    if (item.status === "fulfilled") servers.add(item.value);
+  }
+  await Promise.allSettled([...servers].map((server) => server.close()));
 }
 
 // ===== 确定性路径工厂：创建原生 MCP Client =====
 
-const clientCache = new Map<string, Promise<Client>>();
+const clientCache = new Map<string, { promise: Promise<Client>; fingerprint: string }>();
 
 /**
  * 为确定性路径（tsharkQueryClient 等）创建原生 MCP Client。
  * 按 server ID 从注册表查找配置，创建对应 transport 的 Client。
  * 带缓存：同一 server 复用 Client 单例。
  */
-export function createClient(serverId: string): Promise<Client> {
+export async function createClient(serverId: string): Promise<Client> {
+  const config = findServer(serverId);
+  if (!config) throw new Error(`MCP server "${serverId}" 未在注册表中找到。请在设置页检查 MCP 配置。`);
+  if (!config.enabled) throw new Error(`MCP server "${serverId}" 已禁用。`);
+  const fingerprint = mcpConfigFingerprint(config);
   const cached = clientCache.get(serverId);
-  if (cached) return cached;
-  const promise = (async () => {
-    const config = findServer(serverId);
-    if (!config) throw new Error(`MCP server "${serverId}" 未在注册表中找到。请在设置页检查 MCP 配置。`);
-    if (!config.enabled) throw new Error(`MCP server "${serverId}" 已禁用。`);
-    const client = new Client({ name: `pcapai-${serverId}`, version: "0.1.0" });
-    const transport = createClientTransport(config);
-    await client.connect(transport);
-    return client;
-  })();
-  clientCache.set(serverId, promise);
-  return promise;
+  if (cached?.fingerprint === fingerprint) return cached.promise;
+  if (cached) await resetClient(serverId);
+
+  let trackedPromise: Promise<Client>;
+  trackedPromise = clientConnector(config).catch((error) => {
+    if (clientCache.get(serverId)?.promise === trackedPromise) clientCache.delete(serverId);
+    throw error;
+  });
+  clientCache.set(serverId, { promise: trackedPromise, fingerprint });
+  return trackedPromise;
 }
+
+async function connectNewClient(config: McpServerConfig): Promise<Client> {
+  const client = new Client({ name: `pcapai-${config.id}`, version: "0.1.0" });
+  try {
+    await client.connect(createClientTransport(config));
+    return client;
+  } catch (error) {
+    await client.close().catch(() => {});
+    throw error;
+  }
+}
+
+let clientConnector: ClientConnector = connectNewClient;
 
 function createClientTransport(config: McpServerConfig): StdioClientTransport | SSEClientTransport | StreamableHTTPClientTransport {
   const cwd = process.env.PCAPAI_ROOT || process.cwd();
@@ -220,13 +310,25 @@ function createClientTransport(config: McpServerConfig): StdioClientTransport | 
   return new StreamableHTTPClientTransport(new URL(config.url || ""));
 }
 
-/** 重置 Client 缓存（配置变更后重连） */
-export function resetClient(serverId?: string): void {
-  if (serverId) {
-    clientCache.delete(serverId);
-  } else {
-    clientCache.clear();
+/** 关闭并重置确定性 Client；不传 id 时关闭全部。 */
+export async function resetClient(serverId?: string): Promise<void> {
+  const ids = serverId ? [serverId] : [...clientCache.keys()];
+  const promises: Array<Promise<Client>> = [];
+  for (const id of ids) {
+    const cached = clientCache.get(id);
+    if (cached) promises.push(cached.promise);
+    clientCache.delete(id);
   }
+  const settled = await Promise.allSettled(promises);
+  const clients = new Set<Client>();
+  for (const item of settled) {
+    if (item.status === "fulfilled") clients.add(item.value);
+  }
+  await Promise.allSettled([...clients].map((client) => client.close()));
+}
+
+export async function closeMcpResources(): Promise<void> {
+  await Promise.all([resetAgentServers(), resetClient()]);
 }
 
 // ===== 状态查询 + CRUD（供 API 路由 + 设置页） =====
@@ -240,8 +342,7 @@ export async function listStatus(): Promise<ServerStatus[]> {
       }
       try {
         // 主动连接获取真实状态 + 工具列表
-        const server = createAgentServer(s);
-        await connectAgentServer(server, s);
+        const server = await connectNewAgentServer(s);
         let toolNames: string[] = [];
         try {
           const tools = await server.listTools();
@@ -269,8 +370,8 @@ export async function listStatus(): Promise<ServerStatus[]> {
 }
 
 /** 新增/更新 server（upsert by id） */
-export function upsertServer(config: McpServerConfig): McpServerConfig[] {
-  const servers = loadServers();
+export async function upsertServer(config: McpServerConfig): Promise<McpServerConfig[]> {
+  const servers = loadRawServers();
   const idx = servers.findIndex((s) => s.id === config.id);
   if (idx >= 0) {
     servers[idx] = config;
@@ -278,34 +379,49 @@ export function upsertServer(config: McpServerConfig): McpServerConfig[] {
     servers.push(config);
   }
   saveServers(servers);
-  resetAgentServers();
-  resetClient(config.id);
+  await Promise.all([resetAgentServers(config.id), resetClient(config.id)]);
   return servers;
 }
 
 /** 删除 server（内置 server 不可删，只能禁用） */
-export function removeServer(id: string): { removed: boolean; reason?: string } {
-  const servers = loadServers();
+export async function removeServer(id: string): Promise<{ removed: boolean; reason?: string }> {
+  const servers = loadRawServers();
   const target = servers.find((s) => s.id === id);
   if (!target) return { removed: false, reason: "not found" };
   if (target.builtIn) return { removed: false, reason: "built-in server 不可删除，只能禁用" };
   const filtered = servers.filter((s) => s.id !== id);
   saveServers(filtered);
-  resetAgentServers();
-  resetClient(id);
+  await Promise.all([resetAgentServers(id), resetClient(id)]);
   return { removed: true };
 }
 
 /** 切换 server 启用/禁用 */
-export function toggleServer(id: string): McpServerConfig | undefined {
-  const servers = loadServers();
+export async function toggleServer(id: string): Promise<McpServerConfig | undefined> {
+  const servers = loadRawServers();
   const idx = servers.findIndex((s) => s.id === id);
   if (idx < 0) return undefined;
   servers[idx].enabled = !servers[idx].enabled;
   saveServers(servers);
-  if (!servers[idx].enabled) {
-    resetAgentServers();
-    resetClient(id);
-  }
+  await Promise.all([resetAgentServers(id), resetClient(id)]);
   return servers[idx];
 }
+
+export const mcpRegistryTestHooks = {
+  setAgentServerConnector(connector: AgentServerConnector) {
+    agentServerConnector = connector;
+  },
+  setClientConnector(connector: ClientConnector) {
+    clientConnector = connector;
+  },
+  restoreConnectors() {
+    agentServerConnector = connectNewAgentServer;
+    clientConnector = connectNewClient;
+  },
+  cacheSizes() {
+    return {
+      agentServers: agentServerCache.size,
+      agentInFlight: agentServerInFlight.size,
+      clients: clientCache.size
+    };
+  }
+};

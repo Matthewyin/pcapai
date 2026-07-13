@@ -1,10 +1,18 @@
 import assert from "node:assert/strict";
-import test from "node:test";
-import { existsSync } from "node:fs";
+import test, { after } from "node:test";
+import { cpSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { listSkills, getSkill, createSkill, deleteSkill, isValidSkillName, skillsIndexStatus } from "../src/services/skillsService.js";
+import { apiConfig } from "../src/config.js";
 
-// 用真实 data/skills（含 2 个种子），测试创建的用 test- 前缀，在开头和结尾彻底清理。
-// 不依赖 env 切换目录（apiConfig 在模块加载时定值，测试中改 env 无效）。
+const skillsTestDir = mkdtempSync(path.join(tmpdir(), "pcapai-skills-test-"));
+cpSync(apiConfig.skills.dir, skillsTestDir, { recursive: true });
+process.env.PCAPAI_SKILLS_DIR = skillsTestDir;
+after(() => {
+  delete process.env.PCAPAI_SKILLS_DIR;
+  rmSync(skillsTestDir, { recursive: true, force: true });
+});
 
 const createdNames: string[] = [];
 function registerForCleanup(name: string) { createdNames.push(name); }
@@ -68,7 +76,7 @@ test("listSkills: 列出所有 skill 的摘要", () => {
   registerForCleanup("test-skill-alpha");
   registerForCleanup("test-skill-beta");
   const list = listSkills();
-  // 至少含种子 + 测试创建的
+  // 至少含复制到临时目录的种子 + 测试创建项
   const names = list.map((s) => s.name);
   assert.ok(names.includes("test-skill-alpha"));
   assert.ok(names.includes("test-skill-beta"));

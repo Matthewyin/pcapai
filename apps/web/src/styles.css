@@ -4037,6 +4037,12 @@ pre {
 
 .skillItem { align-items: center; display: flex; gap: 12px; }
 
+.skillReviewStatus { color: var(--warning); display: block; font-size: 11px; margin-top: 4px; }
+
+.skillReviewActions { align-items: center; display: flex; gap: 6px; }
+
+.skillReviewActions button { min-height: 28px; padding: 4px 10px; white-space: nowrap; }
+
 .skillToggle {
   border-radius: 12px;
   font-size: 11px;

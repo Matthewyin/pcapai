@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { createClient } from "./mcpRegistry.js";
+import { createClient, resetClient } from "./mcpRegistry.js";
 
 const OpenWiresharkResultSchema = z.object({
   opened: z.boolean(),
@@ -26,7 +26,13 @@ function firstTextContent(result: unknown) {
 export async function openInWiresharkWithMcp(input: { pcapPath: string; displayFilter: string; frameNumber?: number }) {
   // 从注册表获取 client（替代硬编码 transport）
   const client = await createClient("evidence-opener");
-  const result = await client.callTool({ name: "open_in_wireshark", arguments: input });
+  let result: Awaited<ReturnType<typeof client.callTool>>;
+  try {
+    result = await client.callTool({ name: "open_in_wireshark", arguments: input });
+  } catch (error) {
+    await resetClient("evidence-opener");
+    throw error;
+  }
   const text = firstTextContent(result);
   try {
     return OpenWiresharkResultSchema.parse(JSON.parse(text));

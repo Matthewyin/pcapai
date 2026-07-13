@@ -43,6 +43,12 @@ export function activeRfcTier(): RfcTier {
   return activeTier;
 }
 
+export function resetRfcIndexCache(): void {
+  db?.close();
+  db = null;
+  activeTier = "none";
+}
+
 export class RfcIndexMissingError extends Error {
   constructor() {
     super(

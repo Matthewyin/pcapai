@@ -4,13 +4,14 @@
  * 自包含组件：内部 fetch /api/rag/status + /api/rag/download/* 管理下载。
  * 显示双层库状态（完整库 / 精简库 / 无）+ 下载进度条 + 开始/取消/删除按钮。
  *
- * 双层库设计（handoff 第 3 步）：
- *   - 精简库（~20MB,118 篇高频 RFC）：Mac app 内置,开箱即用
- *   - 完整库（~750MB,9770 篇）：GitHub Release 静默下载,断点续传
+ * 双层库设计：
+ *   - 精简库：桌面应用内置，开箱即用
+ *   - 完整库：后台下载并支持断点续传
  *   - rfcRagService 优先完整库 → 降级精简库
  */
 import React from "react";
 import { CheckCircle, Download, Loader2, Trash2, XCircle } from "lucide-react";
+import { rfcDownloadView, type RfcDownloadState } from "./knowledgeUiState";
 
 type RagStatus = {
   built: boolean;
@@ -23,7 +24,8 @@ type RagStatus = {
 };
 
 type DownloadStatus = {
-  state: "idle" | "downloading" | "paused" | "completed" | "failed";
+  taskId?: string;
+  state: RfcDownloadState;
   downloadedBytes: number;
   totalBytes: number;
   bytesPerSecond: number;
@@ -65,9 +67,9 @@ export function RfcLibraryPanel() {
     void refresh();
   }, [refresh]);
 
-  // 下载中时轮询进度
+  // 后台任务运行时轮询进度
   React.useEffect(() => {
-    if (download?.state !== "downloading") return;
+    if (!download || !rfcDownloadView(download.state).shouldPoll) return;
     const timer = setInterval(refresh, 1500);
     return () => clearInterval(timer);
   }, [download?.state, refresh]);
@@ -107,6 +109,7 @@ export function RfcLibraryPanel() {
 
   const tier = ragStatus?.tier;
   const isDownloading = download?.state === "downloading";
+  const isValidating = download?.state === "validating";
   const progressPercent =
     download && download.totalBytes > 0
       ? Math.min(100, (download.downloadedBytes / download.totalBytes) * 100)
@@ -150,8 +153,7 @@ export function RfcLibraryPanel() {
         <div className="rfcDownloadSection">
           <h3>完整库下载</h3>
           <p className="rfcDownloadHint">
-            完整库含全部 {ragStatus?.docCount && tier === "full" ? ragStatus.docCount : 9770} 篇 RFC（~750MB）。
-            支持断点续传，下载后 Agent 可引用任意 RFC 章节。
+            完整库覆盖完整 RFC 索引。任务在后台运行，支持取消和断点续传；校验通过后才会替换当前库。
           </p>
 
           {isDownloading ? (
@@ -170,6 +172,8 @@ export function RfcLibraryPanel() {
                 </button>
               </div>
             </>
+          ) : isValidating ? (
+            <p className="status"><Loader2 size={14} className="spin" /> 下载完成，正在校验 SQLite 与索引元数据…</p>
           ) : download.state === "completed" ? (
             <p className="downloadDone">
               <CheckCircle size={14} /> 下载完成。当前使用完整库。
@@ -195,7 +199,7 @@ export function RfcLibraryPanel() {
             <p className="rfcAlreadyFull">完整库已就绪，无需下载。</p>
           ) : (
             <button onClick={() => void handleStart()} disabled={loading} className="primary">
-              <Download size={14} /> 下载完整库（~750MB）
+              <Download size={14} /> 下载完整库
             </button>
           )}
         </div>

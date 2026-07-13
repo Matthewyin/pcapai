@@ -37,6 +37,7 @@ export class SqliteSession implements Session {
   private readonly stmtDeleteLast: Database.Statement;
   private readonly stmtCount: Database.Statement;
   private readonly stmtClear: Database.Statement;
+  private closed = false;
 
   constructor(deps: SessionDeps) {
     this.sessionId = deps.sessionId || randomUUID();
@@ -109,6 +110,8 @@ export class SqliteSession implements Session {
   }
 
   close(): void {
+    if (this.closed) return;
     this.db.close();
+    this.closed = true;
   }
 }

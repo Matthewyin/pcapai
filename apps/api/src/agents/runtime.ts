@@ -7,6 +7,8 @@ import { apiConfig } from "../config.js";
 import { depthToProviderData } from "../http/llmSettings.js";
 import { createAgentServers, resetAgentServers } from "../mcp/mcpRegistry.js";
 import { SqliteSession } from "./sqliteSession.js";
+import { createRfcTools, type RfcSectionAuditRecord } from "./rfcTools.js";
+import { collectPacketIdsFromToolOutput, validateAgentAnswerGrounding } from "./agentAnswerGrounding.js";
 
 // 排障方法论：从 docs/agent-methodology.md 加载，开发期可改文档不必改代码。
 // 启动时读一次缓存。文件不存在则用内置精简版兜底。
@@ -600,6 +602,17 @@ function extractUsage(result: any, model?: string): { inputTokens: number; outpu
   }
 }
 
+export async function withManagedSession<T>(
+  session: Pick<SqliteSession, "close"> | undefined,
+  task: () => Promise<T>
+): Promise<T> {
+  try {
+    return await task();
+  } finally {
+    session?.close();
+  }
+}
+
 export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<AgentAnswerWithToolCalls> {
   const { llm, runner } = snapshotLlmRunner(input.thinkingDepth, input.reasoningDepth);
   input.onTrace?.(`Agent 使用模型：${llm.model}，端点：${llm.baseURL}`);
@@ -609,7 +622,11 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
   const serverCount = mcpServers.length;
   input.onTrace?.(`MCP 已就绪（${serverCount} 个 server）；case graph 工具以进程内方式提供。`);
 
-  const localTools = input.tools || [];
+  const rfcAudit: RfcSectionAuditRecord[] = [];
+  const localTools = [
+    ...(input.tools || []).filter((candidate) => candidate.name !== "search_rfc" && candidate.name !== "get_rfc_section"),
+    ...createRfcTools({ onSectionRead: (record) => rfcAudit.push(record) })
+  ];
   // 动态生成工具名列表，放进 prompt 让 LLM 看到精确名称（减少拼写幻觉）
   const localToolNames = localTools.map((t) => t.name).filter(Boolean);
   const agentToolInstruction = localTools.length
@@ -807,6 +824,7 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
   // 始终走 stream 模式：实时透传工具事件（有 onTrace 时），并持续收集工具输出，
   // 供回合超限时的强制收口使用；最终 JSON 答案仍在完成后解析
   const collectedToolResults: Array<{ name: string; output: string }> = [];
+  const toolPacketIds = new Set<string>();
   let lastToolName = "tool";
   async function runLeaderAgent(contextMessage: string, session?: SqliteSession) {
     // 每次 run 独立收集工具结果：followup 收尾会再调一次本函数，不清空会导致两轮工具输出混入，
@@ -838,7 +856,9 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
           lastToolName = item.rawItem.name;
           input.onTrace?.(`正在调用工具：${item.rawItem.name}`);
         } else if (item.type === "tool_call_output_item") {
-          const output = String(item.output ?? item.rawItem?.output ?? "");
+          const rawOutput = item.output ?? item.rawItem?.output ?? "";
+          collectPacketIdsFromToolOutput(rawOutput, toolPacketIds);
+          const output = String(rawOutput);
           if (output) collectedToolResults.push({ name: lastToolName, output: output.slice(0, 2400) });
         } else if (item.type === "handoff_call_item") {
           input.onTrace?.("Leader 正在移交给专家 Agent。");
@@ -874,7 +894,8 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
         { maxTurns: 2 }
       );
       const closerUsage = extractUsage(result, llm.model);
-      return { ...parseAgentOutput(result.finalOutput), toolCalls, ...(closerUsage ? { usage: closerUsage } : {}) };
+      const answer = validateAgentAnswerGrounding(parseAgentOutput(result.finalOutput), input.graph, rfcAudit, toolPacketIds);
+      return { ...answer, toolCalls, ...(closerUsage ? { usage: closerUsage } : {}) };
     } catch {
       // 收口器自身失败（如再次超 turn）时退化为纯文本，保证永远返回一个 AgentAnswer
       return {
@@ -927,7 +948,7 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
     const memoryToolNames = new Set([
       "update_case_memory", "get_case_memory",
       "update_network_topology", "get_network_topology",
-      "export_report", "create_skill", "search_field_notes", "get_skill"
+      "export_report", "propose_skill", "search_field_notes", "get_skill"
     ]);
     // function_call_result 上没有 name 字段，需通过 callId 反查同 session 内 function_call.rawItem.name
     const callIdToName = new Map<string, string>();
@@ -1160,11 +1181,12 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
     }
   }
 
+  const session = input.sessionDir ? new SqliteSession({ baseDir: input.sessionDir, sessionId: input.graph.spec.caseId }) : undefined;
+  return withManagedSession(session, async () => {
   try {
     input.onTrace?.("开始运行 OpenAI Agents SDK，等待模型选择专家并调用 case-graph 工具。");
     // session：有 sessionDir 时启用跨轮持久化记忆，SDK 自动 prepend 历史并持久化新轮。
     // 此时 contextMessage 只传当前问题（历史由 session 管），不重复拼 chatHistory 避免双重计入。
-    const session = input.sessionDir ? new SqliteSession({ baseDir: input.sessionDir, sessionId: input.graph.spec.caseId }) : undefined;
     if (session) {
       // 清理 session 中可能存在的不完整 tool_call 对（上一轮中断/收口导致）。
       // DeepSeek 等模型严格要求 function_call 后面紧跟 function_call_result，
@@ -1242,7 +1264,7 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
       }
     }
     input.onTrace?.("Agents SDK 运行完成，正在归一化模型输出为 AgentAnswer。");
-    const answer = parseAgentOutput(finalOutput);
+    const answer = validateAgentAnswerGrounding(parseAgentOutput(finalOutput), input.graph, rfcAudit, toolPacketIds);
     if (usage) {
       input.onTrace?.(`本轮 token：输入 ${usage.inputTokens}，输出 ${usage.outputTokens}，共 ${usage.totalTokens}。`);
     }
@@ -1262,7 +1284,8 @@ export async function runPcapTroubleshootingAgent(input: RuntimeInput): Promise<
       return closeOutAnswer();
     }
     // 会话失败可能源于 MCP 连接断开，重置单例让下一次请求重新拉起
-    resetAgentServers();
+    await resetAgentServers();
     throw error;
   }
+  });
 }

@@ -1,90 +1,56 @@
-/**
- * rfcDownloadService — 完整 RFC 库静默下载（阶段 3a 双层库上层）。
- *
- * 设计：
- *   - 下载源：GitHub Release 资产直链（config.api.rag.download.url）
- *   - 目标：userData 目录（Electron 注入 PCAPAI_USERDATA_DIR；开发环境降级到 workspace data/）
- *   - 断点续传：HTTP Range 请求，已下载字节记录在 .part 文件
- *   - 进度回调：供 SSE 推送（设置页显示进度条）
- *   - 校验：下载完成后打开 db 验证 meta 表，失败则删除
- *
- * 注意：本服务不直接触发下载（避免 API 启动时阻塞），由设置页用户主动触发或
- * Electron 后台调度调用。API 只暴露 start/status/cancel 三个方法。
- */
-import { createWriteStream, existsSync, statSync, mkdirSync, renameSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync } from "node:fs";
+import { open } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
+import Database from "better-sqlite3";
 import { apiConfig } from "../config.js";
+import { resetRfcIndexCache } from "./rfcRagService.js";
 
 export type DownloadStatus = {
-  state: "idle" | "downloading" | "paused" | "completed" | "failed";
-  /** 已下载字节 */
+  taskId?: string;
+  state: "idle" | "downloading" | "validating" | "paused" | "completed" | "failed";
   downloadedBytes: number;
-  /** 总字节（从 Content-Length 获取，未知则为 0） */
   totalBytes: number;
-  /** 下载速度（字节/秒） */
   bytesPerSecond: number;
-  /** 错误信息（state=failed 时） */
   error?: string;
-  /** 目标文件路径 */
   targetPath: string;
-  /** 开始时间戳 */
   startedAt?: number;
+  completedAt?: number;
 };
 
-let currentStatus: DownloadStatus = {
-  state: "idle",
-  downloadedBytes: 0,
-  totalBytes: 0,
-  bytesPerSecond: 0,
-  targetPath: resolveDownloadPath()
-};
+type ValidationResult = { valid: true } | { valid: false; error: string };
 
+function resolveDownloadPath(): string {
+  return process.env.PCAPAI_RAG_INDEX_PATH
+    ? path.resolve(process.env.PCAPAI_RAG_INDEX_PATH)
+    : apiConfig.rag.indexPath;
+}
+
+let currentStatus: DownloadStatus = idleStatus();
 let abortController: AbortController | null = null;
+let currentTask: Promise<void> | null = null;
+let activeGeneration = 0;
 let speedSampler: ReturnType<typeof setInterval> | null = null;
 
-/**
- * 解析下载目标路径：
- *   - Electron 注入 PCAPAI_USERDATA_DIR → ${userData}/rfc.db
- *   - 开发环境 → workspace data/rfc-index/rfc.db（与 apiConfig.rag.indexPath 一致）
- */
-function resolveDownloadPath(): string {
-  const userDataDir = process.env.PCAPAI_USERDATA_DIR;
-  if (userDataDir) {
-    return path.join(userDataDir, apiConfig.rag.download.targetFilename);
-  }
-  return apiConfig.rag.indexPath;
-}
-
-export function getDownloadStatus(): DownloadStatus {
-  return { ...currentStatus };
-}
-
-/**
- * 启动完整库下载（断点续传）。已在下载中则返回当前状态不重复启动。
- * 返回最新状态。下载在后台进行，调用方通过 getDownloadStatus() 轮询或订阅 SSE。
- */
-export async function startDownload(): Promise<DownloadStatus> {
-  if (currentStatus.state === "downloading") return getDownloadStatus();
-
-  const targetPath = resolveDownloadPath();
-  const partPath = `${targetPath}.part`;
-  mkdirSync(path.dirname(targetPath), { recursive: true });
-
-  // 断点续传：读取 .part 文件已下载字节数
-  const resumeFrom = existsSync(partPath) ? statSync(partPath).size : 0;
-
-  abortController = new AbortController();
-  currentStatus = {
-    state: "downloading",
-    downloadedBytes: resumeFrom,
+function idleStatus(): DownloadStatus {
+  return {
+    state: "idle",
+    downloadedBytes: 0,
     totalBytes: 0,
     bytesPerSecond: 0,
-    targetPath,
-    startedAt: Date.now()
+    targetPath: resolveDownloadPath()
   };
+}
 
+function stopSpeedSampler(): void {
+  if (speedSampler) clearInterval(speedSampler);
+  speedSampler = null;
+}
+
+function startSpeedSampler(resumeFrom: number): void {
   let lastSampleTime = Date.now();
   let lastSampleBytes = resumeFrom;
+  stopSpeedSampler();
   speedSampler = setInterval(() => {
     const now = Date.now();
     const elapsed = (now - lastSampleTime) / 1000;
@@ -94,105 +60,189 @@ export async function startDownload(): Promise<DownloadStatus> {
       lastSampleBytes = currentStatus.downloadedBytes;
     }
   }, 1000);
+}
 
+export function validateDownloadedRfcDb(filePath: string): ValidationResult {
+  let database: Database.Database | null = null;
   try {
-    const headers: Record<string, string> = {};
-    if (resumeFrom > 0) headers.Range = `bytes=${resumeFrom}-`;
-
-    const response = await fetch(apiConfig.rag.download.url, {
-      signal: abortController.signal,
-      headers
-    });
-
-    if (!response.ok && response.status !== 206) {
-      throw new Error(`下载源返回 ${response.status} ${response.statusText}`);
+    database = new Database(filePath, { readonly: true, fileMustExist: true });
+    const quickCheck = database.pragma("quick_check") as Array<{ quick_check?: string }>;
+    if (!quickCheck.length || quickCheck.some((row) => row.quick_check !== "ok")) {
+      return { valid: false, error: "SQLite quick_check 未通过" };
     }
-
-    const contentLength = Number(response.headers.get("content-length") || 0);
-    // 206 Partial Content 时 content-length 是剩余大小，需加上 resumeFrom
-    const isPartial = response.status === 206;
-    currentStatus.totalBytes = isPartial ? resumeFrom + contentLength : contentLength;
-
-    if (!response.body) throw new Error("下载响应没有 body 流");
-
-    const writer = createWriteStream(partPath, resumeFrom > 0 && isPartial ? { flags: "a" } : { flags: "w" });
-    const reader = response.body.getReader();
-
-    // eslint-disable-next-line no-constant-condition
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      if (value) {
-        writer.write(value);
-        currentStatus.downloadedBytes += value.length;
-      }
+    const tables = new Set(
+      (database.prepare("SELECT name FROM sqlite_master WHERE type IN ('table', 'view')").all() as Array<{ name: string }>).map((row) => row.name)
+    );
+    for (const required of ["meta", "docs", "sections", "sections_fts"]) {
+      if (!tables.has(required)) return { valid: false, error: `RFC 索引缺少 ${required} 表` };
     }
-    writer.end();
-    await new Promise<void>((resolve, reject) => {
-      writer.on("finish", resolve);
-      writer.on("error", reject);
-    });
-
-    // 下载完成：.part → 目标文件
-    renameSync(partPath, targetPath);
-    currentStatus.state = "completed";
-
-    // 清理 speed sampler
-    if (speedSampler) {
-      clearInterval(speedSampler);
-      speedSampler = null;
+    const meta = Object.fromEntries(
+      (database.prepare("SELECT key, value FROM meta").all() as Array<{ key: string; value: string }>).map((row) => [row.key, row.value])
+    );
+    const docCount = Number(meta.docCount);
+    const sectionCount = Number(meta.sectionCount);
+    if (!meta.builtAt || !Number.isFinite(Date.parse(meta.builtAt)) || docCount <= 0 || sectionCount <= 0) {
+      return { valid: false, error: "RFC 索引 meta 信息不完整" };
     }
-
-    return getDownloadStatus();
+    const actualDocCount = Number((database.prepare("SELECT COUNT(*) AS count FROM docs").get() as { count: number }).count);
+    const actualSectionCount = Number((database.prepare("SELECT COUNT(*) AS count FROM sections").get() as { count: number }).count);
+    if (actualDocCount !== docCount || actualSectionCount !== sectionCount) {
+      return { valid: false, error: "RFC 索引 meta 计数与实际数据不一致" };
+    }
+    return { valid: true };
   } catch (error) {
-    currentStatus.state = "failed";
-    currentStatus.error = error instanceof Error ? error.message : String(error);
-    // 失败时保留 .part 文件供断点续传（除非用户取消）
-    if (currentStatus.error.includes("aborted")) {
-      currentStatus.state = "paused";
-      delete currentStatus.error;
-    }
-    if (speedSampler) {
-      clearInterval(speedSampler);
-      speedSampler = null;
-    }
-    return getDownloadStatus();
+    return { valid: false, error: error instanceof Error ? error.message : String(error) };
+  } finally {
+    database?.close();
   }
 }
 
-/**
- * 取消下载（保留 .part 文件供下次续传）。
- */
-export function cancelDownload(): DownloadStatus {
-  if (abortController) {
-    abortController.abort();
-    abortController = null;
+export function getDownloadStatus(): DownloadStatus {
+  const targetPath = resolveDownloadPath();
+  if (currentStatus.targetPath !== targetPath && !currentTask) currentStatus = idleStatus();
+  return { ...currentStatus };
+}
+
+function totalBytesFrom(response: Response, resumeFrom: number): number {
+  const contentRange = response.headers.get("content-range");
+  const rangeTotal = contentRange?.match(/\/([0-9]+)$/)?.[1];
+  if (rangeTotal) return Number(rangeTotal);
+  const contentLength = Number(response.headers.get("content-length") || 0);
+  return response.status === 206 ? resumeFrom + contentLength : contentLength;
+}
+
+async function runDownload(generation: number, controller: AbortController): Promise<void> {
+  const targetPath = currentStatus.targetPath;
+  const partPath = `${targetPath}.part`;
+  let resumeFrom = existsSync(partPath) ? statSync(partPath).size : 0;
+  try {
+    const headers: Record<string, string> = {};
+    if (resumeFrom > 0) headers.Range = `bytes=${resumeFrom}-`;
+    const response = await fetch(apiConfig.rag.download.url, { signal: controller.signal, headers });
+    if (!response.ok) throw new Error(`下载源返回 ${response.status} ${response.statusText}`);
+    if (!response.body) throw new Error("下载响应没有 body 流");
+
+    if (resumeFrom > 0 && response.status === 206) {
+      const rangeStart = Number(response.headers.get("content-range")?.match(/^bytes\s+(\d+)-/i)?.[1]);
+      if (!Number.isFinite(rangeStart) || rangeStart !== resumeFrom) {
+        throw new Error("下载源返回的断点位置与本地文件不一致");
+      }
+    } else if (response.status !== 206) {
+      resumeFrom = 0;
+      currentStatus.downloadedBytes = 0;
+    }
+    currentStatus.totalBytes = totalBytesFrom(response, resumeFrom);
+    startSpeedSampler(resumeFrom);
+
+    const file = await open(partPath, resumeFrom > 0 && response.status === 206 ? "a" : "w");
+    try {
+      const reader = response.body.getReader();
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (value?.length) {
+          await file.write(value);
+          currentStatus.downloadedBytes += value.length;
+        }
+      }
+    } finally {
+      await file.close();
+    }
+
+    if (generation !== activeGeneration || controller.signal.aborted) return;
+    currentStatus.state = "validating";
+    currentStatus.bytesPerSecond = 0;
+    stopSpeedSampler();
+    const validation = validateDownloadedRfcDb(partPath);
+    if (!validation.valid) {
+      rmSync(partPath, { force: true });
+      throw new Error(`RFC 索引校验失败：${validation.error}`);
+    }
+
+    resetRfcIndexCache();
+    renameSync(partPath, targetPath);
+    currentStatus.state = "completed";
+    currentStatus.completedAt = Date.now();
+  } catch (error) {
+    if (generation !== activeGeneration) return;
+    if (controller.signal.aborted) {
+      currentStatus.state = "paused";
+      delete currentStatus.error;
+    } else {
+      currentStatus.state = "failed";
+      currentStatus.error = error instanceof Error ? error.message : String(error);
+    }
+  } finally {
+    if (generation === activeGeneration) {
+      stopSpeedSampler();
+      abortController = null;
+    }
   }
-  if (currentStatus.state === "downloading") {
+}
+
+export function startDownload(): DownloadStatus {
+  if (currentTask) return getDownloadStatus();
+  const targetPath = resolveDownloadPath();
+  const partPath = `${targetPath}.part`;
+  mkdirSync(path.dirname(targetPath), { recursive: true });
+  const resumeFrom = existsSync(partPath) ? statSync(partPath).size : 0;
+  const controller = new AbortController();
+  const generation = ++activeGeneration;
+  abortController = controller;
+  currentStatus = {
+    taskId: randomUUID(),
+    state: "downloading",
+    downloadedBytes: resumeFrom,
+    totalBytes: 0,
+    bytesPerSecond: 0,
+    targetPath,
+    startedAt: Date.now()
+  };
+  currentTask = Promise.resolve()
+    .then(() => runDownload(generation, controller))
+    .finally(() => { currentTask = null; });
+  return getDownloadStatus();
+}
+
+export function cancelDownload(): DownloadStatus {
+  abortController?.abort();
+  if (currentStatus.state === "downloading" || currentStatus.state === "validating") {
     currentStatus.state = "paused";
+    currentStatus.bytesPerSecond = 0;
   }
   return getDownloadStatus();
 }
 
-/**
- * 删除已下载的完整库（回退到精简库）。
- */
 export function deleteDownloadedDb(): { deleted: boolean; path: string } {
   const targetPath = resolveDownloadPath();
-  const partPath = `${targetPath}.part`;
+  activeGeneration += 1;
+  abortController?.abort();
+  abortController = null;
+  stopSpeedSampler();
   let deleted = false;
-  for (const p of [targetPath, partPath]) {
-    if (existsSync(p)) {
-      rmSync(p, { force: true });
-      deleted = true;
-    }
+  for (const candidate of [targetPath, `${targetPath}.part`]) {
+    if (!existsSync(candidate)) continue;
+    rmSync(candidate, { force: true });
+    deleted = true;
   }
-  currentStatus = {
-    state: "idle",
-    downloadedBytes: 0,
-    totalBytes: 0,
-    bytesPerSecond: 0,
-    targetPath
-  };
+  resetRfcIndexCache();
+  currentStatus = idleStatus();
   return { deleted, path: targetPath };
 }
+
+export const rfcDownloadTestHooks = {
+  waitForIdle: async () => { await currentTask; },
+  reset: async () => {
+    abortController?.abort();
+    activeGeneration += 1;
+    await currentTask;
+    currentTask = null;
+    abortController = null;
+    stopSpeedSampler();
+    currentStatus = idleStatus();
+  },
+  readPart: () => {
+    const partPath = `${resolveDownloadPath()}.part`;
+    return existsSync(partPath) ? readFileSync(partPath) : null;
+  }
+};
