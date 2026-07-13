@@ -30,3 +30,8 @@ pcapAI 首个公开版本，提供 macOS 桌面应用和本地开发模式。
 - 类型检查通过。
 - 199 项自动化测试通过。
 - Web、API、MCP 和 Electron 构建通过。
+
+### 已知限制
+
+- `v0.1.0` 未使用 Apple Developer 证书签名和公证，首次打开需要在 Finder 中右键选择“打开”。
+- 当前使用 Electron 默认应用图标。

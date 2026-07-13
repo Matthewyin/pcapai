@@ -28,6 +28,8 @@ npm run dev
 
 首次发布提供 Apple Silicon（arm64）和 Intel（x64）DMG，可从 [GitHub Releases](https://github.com/Matthewyin/pcapai/releases) 获取。应用在本机运行，pcap、案例、模型配置和下载的 RFC 库不会上传到项目服务器；模型请求是否离开本机取决于你配置的 OpenAI 兼容服务。
 
+`v0.1.0` 尚未使用 Apple Developer 证书签名和公证。首次打开若被 Gatekeeper 阻止，请在 Finder 中右键应用并选择“打开”，确认后即可运行。
+
 从源码打包：
 
 ```bash
