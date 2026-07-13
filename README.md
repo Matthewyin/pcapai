@@ -1,127 +1,118 @@
 # pcapAI
 
-Agent-first packet troubleshooting chat workbench. Upload pcap files, ask questions in natural language, get deterministic evidence cards with one-click Wireshark drill-down.
+pcapAI 是一个 Agent-first 的本地抓包排障工作台。用户上传 pcap 后可在聊天中提问；系统用 tshark 提取确定性事实，形成 QueryRun、证据卡、根因与 Wireshark 过滤器。
 
-## How it works
+## 当前主流程
 
+```text
+上传 pcap + 用户提问
+  → Leader Agent 作为聊天第一入口
+  → 先检索 Field Notes / Skills
+  → 按需调用 pcapai_ 确定性工具或 tshark-query MCP
+  → 读取 RFC 原文章节验证协议结论
+  → 输出可回溯的证据、根因和后续建议
 ```
-User uploads pcap + asks question
-  → Chain Planner classifies intent, produces single-step or multi-step plan
-  → Deterministic protocol adapters run tshark queries (TCP/DNS/TLS/HTTP/ICMP/UDP)
-  → Tiered routing: structured direct (adapterId / learned bypass) → hardcoded regex → learned patterns → agent with tshark-query MCP
-  → Evidence cards shown in new browser tab, text analysis in chat bubble
-  → Agent explains findings and suggests follow-up queries
-  → User clicks any card → local Wireshark opens with the exact filter
-```
 
-Chain Planner generates 1–5 step plans dynamically. Each step uses one of 12 intents. Steps can bind parameters from prior results via JSON path expressions. No scenario is hard-coded — plans derive from the case graph.
+Leader 可交接给 Hypothesis、Path、Protocol 三个专家 Agent。Chain Planner、协议 adapters 和 learned patterns 仍保留为 Agent 工具或专家直达能力，但不在聊天入口前拦截用户问题。
 
-Protocol adapters self-improve: when no regex matches, the agent handles the query via tshark-query MCP and LLM generates a new regex pattern for future routing.
-
-## Quick start
+## 快速开始
 
 ```bash
 npm install
-npm run dev          # starts API (port 30022) + web (port 30023)
+npm run dev
 ```
 
-Open `http://127.0.0.1:30023`. Default config lives in `config/defaults.json`, overridable via `PCAPAI_*` env vars.
+默认打开 `http://127.0.0.1:30023`。运行参数集中在 `config/defaults.json`，可用 `PCAPAI_*` 环境变量覆盖。
 
-To enable LLM-powered agent and chain planner:
+### macOS 桌面版
+
+首次发布提供 Apple Silicon（arm64）和 Intel（x64）DMG，可从 [GitHub Releases](https://github.com/Matthewyin/pcapai/releases) 获取。应用在本机运行，pcap、案例、模型配置和下载的 RFC 库不会上传到项目服务器；模型请求是否离开本机取决于你配置的 OpenAI 兼容服务。
+
+从源码打包：
 
 ```bash
-cp .env.example .env
-# edit PCAPAI_LLM_API_KEY in .env
+npm run app:build
+npm run pack -w apps/desktop
 ```
 
-Without an API key, the system falls back to local pattern matching for intent classification and skips the agent conversation path. Deterministic protocol adapters always work.
+使用聊天 Agent 前，在“设置 → 模型配置”中填写 OpenAI 兼容的 Base URL、API Key 和模型名称。也可以复制 `.env.example` 为 `.env` 后配置 `PCAPAI_LLM_API_KEY`。
 
-## Architecture
+### 无 API Key 时的能力边界
 
+- 可以新建/管理案例、上传 pcap、维护映射提示和时间偏移。
+- 可以使用直接的 QueryRun、TCP stream、报告、RFC/Skills/Field Notes 管理接口及本地确定性数据能力。
+- 聊天入口 `/api/cases/:caseId/agent` 与 `/agent/stream` 不会启动 Planner、Agent 或自动确定性执行器，而是明确返回 `llm_key_required`，提示先配置模型。
+- 不会进行 Agent 访谈、开放式归因、RFC 语义检索编排或自动学习。
+
+## 核心边界
+
+### 证据与 RFC
+
+- 包事实由 tshark-query 或 `pcapai_` 确定性工具产生，LLM 不负责猜测包事实。
+- `rfcVerified=true` 只有在本轮真实调用 `get_rfc_section`、文档与章节匹配，且根因引用的包 ID 确实存在于 CaseGraph 或本轮工具输出时才保留。
+- 伪造 RFC 引用、章节错配、缺少包证据都会降级为 `rfcVerified=false`，并标记“经验推测，无已验证 RFC 依据”。
+
+### 知识写入审批
+
+- Agent 只能通过 `propose_skill` 提交 Skill 提案，不能直接写全局 Skill 文件。
+- 用户在设置页批准后提案才生效；覆盖已有 Skill 必须再次显式确认。
+- Agent 自动生成的 learned pattern 先进入 `pending`，批准后才参与确定性路由；可禁用、拒绝或删除。
+
+### 持久化与并发
+
+- CaseGraph 写入使用同目录临时文件 + 原子 rename，失败时保留旧文件。
+- 所有同 case 的读改写共用 per-case 锁；同一 case 串行，不同 case 可并行。
+- SQLite Session 在正常结束、异常和回合预算耗尽收口时都会关闭。
+- MCP Agent server 与 Client 按连接配置指纹复用；配置变化、禁用、删除、重置和进程退出都会关闭旧连接。
+
+### RFC 完整库下载
+
+- `POST /api/rag/download/start` 立即返回后台任务状态，不等待下载完成。
+- 支持状态轮询、重复启动去重、取消、Range 断点续传和删除。
+- 下载完成后先执行 SQLite `quick_check`、表结构、meta 与实际计数校验；只有校验通过才原子替换当前完整库，失败不会破坏现有库。
+
+## 目录
+
+```text
+apps/web               React 19 工作台
+apps/api               Express API、Agent runtime、确定性服务
+apps/desktop           Electron 桌面壳
+mcp/tshark-query       tshark/capinfos 查询 MCP
+mcp/evidence-opener    Wireshark 打开器 MCP
+packages/shared        Zod schemas 与共享 TypeScript 类型
+config/defaults.json   集中运行配置
+data/skills            内置 Skills 种子
+data/field-notes       Field Notes 种子与索引
 ```
-apps/web         React 19 single-file workbench — chat, evidence cards, settings
-apps/api         Express API + chain planner + deterministic adapters + agent runtime
-mcp/tshark-query capinfos + tshark queries (conversations, packets, protocols, stats)
-mcp/evidence-opener  opens local Wireshark with pcap path + display filter
-mcp/case-graph   read-only MCP for agents — loads case graph from temp file
-packages/shared  Zod schemas + TypeScript types for the full domain model
-```
 
-### Request pipeline
+## 主要能力
 
-```
-POST /agent/stream
-  planChain()         → single-step or multi-step AnalysisChainPlan
-  executeChain()      → runs steps sequentially, binds params between steps
-  per step:
-    deterministic?    → protocol adapter tiered routing:
-                         structured direct (params.adapterId / learned bypass) → hardcoded regex → learned patterns → agent fallback
-    open-ended?       → leader agent hands off to Hypothesis/Path/Protocol subagents
-  aggregate result    → AgentAnswer with evidence cards, checks, suggested queries
-```
+- TCP：连接生命周期、RST、重传、Zero Window、握手、单向流、连接健康矩阵。
+- DNS/TLS/HTTP/ICMP/UDP：协议事件、事务匹配和异常检查。
+- 跨协议关联：DNS → TCP、TLS SNI → TCP、HTTP Host → TCP，以及 HTTP 跨连接代理关联。
+- Insight Engine：29 个确定性分析器，覆盖 TCP、HTTP、TLS、DNS、ICMP、UDP、QUIC、NTP、SSH、NAT 与 L7 代理启发式。
+- 证据卡：绑定 pcap、frame、display filter，可跳转本地 Wireshark。
+- 三层知识：Skills（方法论）→ Field Notes（案例）→ packet facts（数据），RFC 作为规范边界。
 
-### Deterministic protocol adapters
-
-| Adapter | Triggers on | Checks produced |
-|---------|-------------|-----------------|
-| TCP | RST, retransmission, zero-window, SYN, one-way traffic | Session pair health |
-| TCP (health matrix) | "全景/全部连接/所有连接/正常/连接清单/健康状况" queries | Full conversation enumeration with per-connection classification (normal vs. handshake-failed/RST/retransmission-burst/zero-window/one-way) |
-| DNS | DNS queries, NXDOMAIN, SERVFAIL | Rcode distribution, unanswered queries |
-| TLS | ClientHello, ServerHello, alerts, SNI | Handshake status, SNI distribution, version mix |
-| HTTP | Status codes, request/response pairing | Status distribution, latency outliers, host distribution |
-| ICMP | Unreachable, TTL exceeded, fragmentation | Error event summary |
-| UDP | Flow aggregation by endpoint pair | Flow distribution |
-
-Each adapter builds evidence cards and L7-to-TCP protocol correlations without LLM involvement. HTTP adapter also produces cross-connection correlations (`http_to_http`) to identify proxy/LB scenarios where the same request appears on two independent TCP connections.
-
-### Protocol adapter self-improvement
-
-When no hardcoded regex matches a question:
-1. Check learned patterns from `data/learned_patterns.json`
-2. If still no match, fall back to agent (with tshark-query MCP access)
-3. After agent handles the query, LLM generates a new regex pattern + target adapterId
-4. Pattern is validated and persisted for future deterministic routing
-
-No hardcoded tool→adapter mapping — LLM determines both regex and adapterId.
-
-### Agent architecture
-
-Leader agent with 3 handoff subagents (Hypothesis, Path, Protocol), all sharing case-graph MCP and tshark-query MCP. Agents can query raw packet data via tshark-query tools but never parse pcap files or execute shell commands. They can suggest follow-up queries via `suggest_next_query`, but the user decides whether to execute them. On turn-budget exhaustion, a no-tool closer agent synthesizes a final answer from collected tool results.
-
-## Commands
+## 常用命令
 
 ```bash
-npm run dev                # API + web
-npm run dev -w apps/api    # API only
-npm run dev -w apps/web    # web only
-npm run build              # build all workspaces
-npm run check              # type-check all workspaces
-npm run test               # run tests (apps/api + mcp/tshark-query)
+npm run dev
+npm run check
+npm run test
+npm run build
+npm run app:build
 ```
 
-## Documentation
+API 测试启动器会先检测 `better-sqlite3` 的 Node ABI；若当前 Node 与桌面依赖不匹配，会自动切换到项目自带的 Electron Node 运行测试，不会重编译或破坏桌面依赖。Field Notes、Skills、Session、CaseGraph 与下载测试均写系统临时目录，不修改真实 `data/`。
 
-- [Design document](docs/design.md) — scope, data model, analysis principles, self-improvement
-- [Architecture](docs/architecture.md) — QueryRun pipeline, agent boundaries, tiered adapter routing
+## 文档
 
-## Tech stack
+- [架构说明](docs/architecture.md)
+- [产品设计](docs/design.md)
+- [Agent 排障方法论](docs/agent-methodology.md)
+- [更新记录](CHANGELOG.md)
 
-- TypeScript, React 19, Express, Vite
-- OpenAI Agents SDK (pluggable LLM endpoint via config)
-- MCP (Model Context Protocol) over stdio
-- tshark / Wireshark for packet analysis
-- npm workspaces monorepo
+## 技术栈
 
-## Insight Engine
-
-29 deterministic analyzers run on each case graph, reporting all detected patterns without threshold filtering:
-
-- **TCP (12)**: lifecycle, ACK gap, timing, window trend, RST direction, handshake retry, delayed ACK, flood, segment anomaly, keepalive, throughput, TCP options
-- **ICMP (2)**: echo pairing, advanced (Unreachable/PMTU/Traceroute)
-- **HTTP (4)**: status chain, header anomaly, timing, advanced
-- **TLS (2)**: handshake, advanced (version/cipher/cert/resumption)
-- **DNS (2)**: anomaly, advanced (burst/AXFR/TTL/CNAME)
-- **Cross-protocol**: DNS→TCP→TLS→HTTP waterfall
-- **UDP (1)**: multi-port/burst/one-way
-- **QUIC, NTP, SSH**: connection/handshake/stratum/message distribution
-- **NAT/L7 proxy (2)**: L7 proxy detection (Via/XFF headers, SSL offload, TCP connection split), NAT heuristic (multi-target connections, ISN jumps, orphan SYN)
+TypeScript、React 19、Express、Vite、Electron、OpenAI Agents SDK、MCP、tshark/Wireshark、SQLite/FTS5。

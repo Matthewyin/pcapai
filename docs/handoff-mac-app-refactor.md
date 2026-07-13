@@ -1,5 +1,7 @@
 # pcapAI Mac app 重构 — 会话交接文档
 
+> 历史交接快照：测试数量、阶段状态和文件结构记录的是 2026-06-21 当时情况。当前状态以根目录 [`README.md`](../README.md)、[`AGENTS.md`](../AGENTS.md) 和 [`architecture.md`](architecture.md) 为准。
+>
 > 用途：跨会话接力。新会话读此文档 + 相关代码即可恢复上下文继续工作。
 > 最后更新：2026-06-21（阶段 1d shared 页面抽离完成）
 

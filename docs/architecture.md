@@ -4,7 +4,7 @@
 
 pcapAI 是 Agent SDK-first 本地浏览器工作台，用于离线分析网络故障。**Agent 是唯一大脑（第一入口）**，用户上传 pcap 并提问后，直接进入 Leader Agent。Agent 操作**三层知识体系**完成排障：
 
-- **Skills 层（方法论）** `data/skills/*.md` — 可复用排障 SOP，Agent 可用 `create_skill` 自我进化
+- **Skills 层（方法论）** `data/skills/*.md` — 可复用排障 SOP，Agent 只能用 `propose_skill` 提交待审批提案
 - **实战知识库（案例）** `data/field-notes/` — 现象→真因→RFC 的沉淀，带飞轮权重（verifiedCount/disputedCount）
 - **抓包事实（数据）** tshark-query MCP — 原始包数据
 
@@ -132,7 +132,7 @@ flowchart TB
 ### `apps/api` — Express API + Agent Runtime
 
 #### HTTP 层 (`src/http/`)
-- **routes.ts** — REST 端点 + SSE 流式 agent 回答。对话入口只负责加载 case、校验请求、激活 LLM profile、写 SSE；`/agent` 和 `/agent/stream` 用 per-case 锁（`withCaseRunLock`）串行化并发 agent run。
+- **routes.ts** — REST 端点 + SSE 流式 agent 回答。所有 CaseGraph 读改写入口共用 per-case 锁（`withCaseRunLock`）：同 case 串行、不同 case 并行。
 - **composeServices.ts** — 服务装配层：组装 13 个 service + 2 个 answer builder + 6 个协议 adapter（TCP 含 7 个子 adapter）。从 routes.ts 抽离，接收 `loadGraph`/`cacheCase`/`agentRuntimeStatus` 共享状态，返回所有 service 实例和 helper（`formatBeijingTime`、`buildAgentQuestion`、`syncMemoryFromQueryRuns`、`updateMemory`）。
 - **caseStore.ts** — case 持久化：`data/cases/:caseId/case.json`
 - **capturePreprocess.ts** — 通过 `editcap -s` 裁剪 payload
@@ -166,10 +166,10 @@ flowchart TB
     - **ProtocolAgent** — 协议级行为分析，可直接调用 tshark-query MCP 查询原始包数据
     - Leader 自行处理诊断访谈追问和报告格式化（不 handoff）
   - **AnswerCloserAgent** — 回合预算耗尽时的收口器：无工具，基于已收集的工具结果输出最终结论；自身失败时退化为纯文本（try/catch 兜底）
-  - **结论分层 rootCauses**（P6）：每个根因带 `rfcVerified`（经 get_rfc_section 回读 RFC）或明确标注"经验推测"
+  - **结论分层 rootCauses**（P6）：只有本轮成功读取匹配 RFC 章节且引用包 ID 真实存在时才保留 `rfcVerified=true`；其余自动降级为“经验推测”
   - **工具名容错**（P7 后追加）：MiniMax 等模型可能拼错 `pcapai_` 前缀，SDK 抛 "Tool not found" 时带纠正提示最多重试 3 次
   - **SqliteSession**（P5）：实现 SDK `Session` 接口，跨轮持久化到 `data/cases/:id/session-*.db`；应用层压缩（条目超阈值时聚合早期工具调用为摘要，SDK 原生 compaction 依赖 OpenAI Responses API，第三方模型不支持）
-  - tshark-query MCP 为常驻单例（`tsharkQueryMcpRuntime.ts`），跨会话复用，connect 带重试
+  - MCP 连接由 `mcpRegistry.ts` 按稳定配置指纹复用；配置变化、禁用/删除、失败重置和进程退出都会关闭旧连接
   - **outputSchema 兼容探针**（`outputSchemaProbe.ts`）：检测当前 LLM 是否支持 SDK outputType（structured output），不支持则保留手写 JSON 解析 fallback
 
 #### Planner 层 (`src/services/`)
@@ -189,7 +189,7 @@ flowchart TB
   - `routes.ts` 只负责把 service result 转成 HTTP status 和 JSON
 - **patternLearner.ts** — protocol adapter 自改进模块：
   - `loadLearnedPatterns()` — 从 `data/learned_patterns.json` 加载 learned regex→adapterId 对
-  - `learnFromAgentRun()` — agent fallback 后，用 LLM 生成 regex + adapterId；验证后持久化
+  - `learnFromAgentRun()` — Agent 高置信回答后生成 regex + adapterId 候选；以 `pending` 持久化，人工批准前不参与路由
   - 无硬编码 tool→adapter 映射，LLM 从问题上下文和 adapter 列表决定路由
 
 #### 三层知识体系（P1-P4 + P8）
@@ -198,8 +198,8 @@ Agent 的核心知识资产，按抽象层级分三层：
 
 - **Skills 层（方法论，`src/services/skillsService.ts`）**
   - 可复用排障 SOP，markdown + frontmatter（name/description/triggers/tools_required）格式，借鉴 Claude skills
-  - `list_skills` / `get_skill` / `create_skill` / `delete_skill` 注册为 Agent 工具
-  - Agent 用 `create_skill` 自我进化：把验证有效的操作流程固化为新 SOP
+  - `list_skills` / `get_skill` / `propose_skill` 注册为 Agent 工具
+  - Agent 提交的流程先进入待审批提案；用户批准后才写入 Skill，覆盖已有 Skill 需要二次确认
   - 种子：`verify-tcp-options`、`analyze-retransmission-pattern`
 
 - **实战知识库（案例，`src/services/fieldNotesService.ts`）**
@@ -227,7 +227,7 @@ Agent 的核心知识资产，按抽象层级分三层：
 - **icmp.ts** — ICMP Unreachable/TTL Exceeded/Fragmentation
 - **udp.ts** — UDP 流聚合
 - 共享逻辑在 `builders.ts`：packet pair 分组、evidence card 创建、L7→TCP protocol correlations（DNS→TCP、TLS SNI→TCP、HTTP Host→TCP、ICMP→TCP）以及 HTTP 跨连接关联（`http_to_http`，用于七层代理/SSL 卸载场景）
-- `types.ts` 中 `runProtocolAdapter()` 实现分层路由：hardcoded regex → learned patterns → null（由调用方 fallback 到 agent）；`protocolEventQueryService.ts` 的 `adapterIdFromParams()` 优先认 `params.adapterId`（结构化直通 / learned bypass）
+- `types.ts` 中 `runProtocolAdapter()` 实现分层路由：hardcoded regex → 已批准 learned patterns → null（由调用方 fallback 到 agent）；`protocolEventQueryService.ts` 的 `adapterIdFromParams()` 优先认 `params.adapterId`（结构化直通）
 - **`conversationHealth.ts`**（`src/services/`）— 纯函数 `classifyConversationHealth`：单条会话六维健康分类（handshake/rst/trafficDirection/retransmission/zeroWindow/closeState），`buildQueryDiagnosis` 和连接健康全景 adapter 共用同一套判定口径
 
 #### Insight Engine (`src/services/insightEngine.ts`)
@@ -278,7 +278,7 @@ Zod schema + TypeScript 类型，定义完整领域模型：
 
 ### MCP 服务器
 
-三个基于 stdio 的 MCP 服务器（`@modelcontextprotocol/sdk`），由 API 和 Agent Runtime 通过 `MCPServerStdio` 连接：
+两个基于 stdio 的 MCP 服务器（`@modelcontextprotocol/sdk`），由 API 和 Agent Runtime 通过注册表连接：
 
 #### `mcp/tshark-query` — tshark 查询引擎（19 个工具）
 被两个调用方使用：
@@ -291,10 +291,7 @@ Zod schema + TypeScript 类型，定义完整领域模型：
 仅被 API 层（`evidenceOpenerClient.ts`）调用。用 pcap 路径 + display filter 打开本地 Wireshark。不分析数据包。
 - 工具：`open_in_wireshark`
 
-#### `mcp/case-graph` — Agent 的 case graph 工具层（20 个工具）
-仅被 Agent Runtime 调用。从临时 JSON 文件（`PCAPAI_CASE_GRAPH_PATH`）读取 case graph。大多数工具只读；`update_network_topology` 写入临时快照，不直接修改持久化文件。
-
-工具：`load_case_graph`、`get_case_statistics`、`get_query_runs`、`get_query_run`、`get_active_query_run`、`get_conversation`、`get_query_diagnosis`、`get_path_diagnosis`、`get_protocol_correlations`、`get_evidence_cards`、`get_finding`、`get_evidence`、`get_session_link`、`get_packet_detail`、`explain_path`、`get_network_topology`、`update_network_topology`、`suggest_next_query`、`get_insights`、`export_report`
+CaseGraph 工具不再是独立 MCP 进程。`src/agents/caseGraphTools.ts` 将它们作为进程内 SDK function tools 注入 Agent，直接从 `caseStore` 读取当前 graph；memory、topology 等写操作在 case 级共享锁内持久化。
 
 ## 查询管线
 
@@ -304,35 +301,20 @@ Zod schema + TypeScript 类型，定义完整领域模型：
 用户问题
   ↓
 1. loadGraphWithInsights() — 懒运行 Insight Engine
-   （withCaseRunLock 串行化同 case 的并发 agent run）
+   （withCaseRunLock 串行化同 case 的所有读改写）
   ↓
-2. routes.ts 进入 AgentRuntimeService
+2. 若无 LLM Key，立即返回 llm_key_required
   ↓
-2b. learned bypass: 若命中高置信学习模式，跳过 Chain Planner，
-    直接执行 { adapterId } 指向的 adapter
+3. AgentRuntimeService 直接进入 Leader Agent
   ↓
-3. Chain Planner 分类 → AnalysisChainPlan
+4. Leader Agent 读取进程内 CaseGraph / Field Notes / Skills
   ↓
-4a. Chain path (planKind=chain):
-    executeChain → 逐步执行
-    每步后 reloadGraph 刷新 case graph
-    支持 paramsFrom 参数绑定
-    无 llm_explain 步骤 → 自动追加 LLM 综合解读
+5. 按需调用 pcapai_ 确定性工具或 tshark-query MCP
   ↓
-4b. Single tool path:
-    AgentToolRegistry 执行 `pcapai_` 工具
-    → protocol adapter 分层路由:
-      结构化直通 (params.adapterId) → tshark 查询
-      hardcoded regex match → tshark 查询
-      learned pattern match → tshark 查询
-      无匹配 → agent fallback (case-graph + tshark-query MCP)
-    → evidenceCards + checks + protocolCorrelations
-    → 写入 QueryRun
+6. 开放问题可交接给 Hypothesis / Path / Protocol Agent
   ↓
-4c. Agent path (llm_explain intent):
-    Leader Agent → handoff → subagent
-    → 通过 case-graph MCP + tshark-query MCP
-    → 诊断结论 + suggestedQueries
+7. 运行时核验 RFC 调用记录和 evidencePacketIds
+   → 结构化结论 + suggestedQueries
 ```
 
 普通 `POST /api/cases/:caseId/agent` 与流式接口共用 `AgentRuntimeService`，只是不通过 SSE 输出中间事件。
@@ -350,11 +332,11 @@ Zod schema + TypeScript 类型，定义完整领域模型：
 
 ## Protocol Adapter 自改进
 
-Protocol adapter 路由采用分层 fallback：
+Protocol adapter 路由是 Agent 工具和专家直达通道，采用分层 fallback：
 
-1. **结构化直通 / learned bypass** — `params.adapterId` 直接路由到目标 adapter，跳过 regex 推断。高置信学习模式（`hitCount >= learnedBypassMinHits`）通过 `tryLearnedBypass` 短路 Chain Planner，直接传 `{ adapterId }` 执行
+1. **结构化直通 / learned bypass** — `params.adapterId` 直接路由到目标 adapter，跳过 regex 推断；这条路径不拦截主聊天入口
 2. **Hardcoded regex** — 每个 adapter 有内置的 match 函数
-3. **Learned patterns** — `data/learned_patterns.json` 存储 `{regex, adapterId}` 对，由 LLM 在 agent fallback 后生成
+3. **Learned patterns** — LLM 生成的规则先以 `pending` 保存；仅人工批准的规则参与匹配，并可禁用、拒绝或删除
 4. **Agent fallback** — leader agent 通过 tshark-query MCP 处理查询；成功后 `patternLearner` 用 LLM 生成新 regex pattern
 
 学习模块（`src/services/patternLearner.ts`）无硬编码 tool→adapter 映射。LLM 从问题上下文和可用 adapter 列表决定 regex 和 adapterId。
@@ -382,21 +364,20 @@ Protocol adapter 路由采用分层 fallback：
 
 链式执行中每步完成后 `reloadGraph()` 刷新 case graph，后续步骤可读到前序步骤写入的 QueryRun。
 
-### 自动综合
+### 专家直达分析链的自动综合
 
-当分析链无 `llm_explain` 步骤但配置了 LLM key 时，`AgentRuntimeService` 自动追加 LLM 综合解读：读取 QueryRun 的 evidenceCards 和 checks，产出诊断结论。
+当显式调用专家直达分析链、链中无 `llm_explain` 步骤且配置了 LLM key 时，`AgentRuntimeService` 可追加 LLM 综合解读。这是保留能力，不属于主聊天入口。
 
 ## 数据持久化
 
 - Case 数据：`data/cases/:caseId/case.json`（JSON 文件）
 - 内存缓存：`Map<string, CaseGraph>` 缓存最近加载的 graph
-- Agent 临时文件：`PCAPAI_CASE_GRAPH_PATH` 指向的 temp JSON 文件
 - LLM profiles：`.env` 中 `PCAPAI_LLM_PROFILE_*` 条目
-- Learned patterns：`data/learned_patterns.json`（regex→adapterId 对，由 LLM 生成）
+- Learned patterns：`data/learned_patterns.json`（带审批状态的 regex→adapterId 候选）
 
 ## Agent 边界
 
-Leader Agent 通过 case-graph MCP 读取 case graph，通过 tshark-query MCP 查询原始包数据。Agent 不自行解析 pcap 文件，不执行 shell；真正的 tshark 调用发生在 `tshark-query` MCP 内。`case-graph` MCP 中除 `update_network_topology` 会写临时快照外，其余工具按只读证据访问使用。
+Leader Agent 通过进程内 SDK tools 读取当前 CaseGraph，通过 tshark-query MCP 查询原始包数据。Agent 不自行解析 pcap 文件，不执行 shell；真正的 tshark 调用发生在 `tshark-query` MCP 内。CaseGraph 写操作和其他同 case 读改写共用 case 级锁，并通过同目录临时文件原子替换持久化。
 
 如果没有 QueryRun 或没有选中通讯对，Agent 必须追问查询条件，不能给确定断点结论。
 

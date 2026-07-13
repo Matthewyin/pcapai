@@ -1,5 +1,7 @@
 # pcapAI 全量方案(Roadmap v2)
 
+> 历史设计稿：主要目标已经实现，文中的待审状态、旧工具名和实施步骤不代表当前行为。当前架构以 [`architecture.md`](architecture.md) 和根目录 [`AGENTS.md`](../AGENTS.md) 为准。
+>
 > 状态:设计完成,待审。审完按阶段实现,每阶段独立验证。
 > 关联:`docs/design-field-notes.md`(实战库 v0,已实现)、`docs/design-field-notes-roadmap.md`(旧版,本文替代)、`apps/api/src/agents/runtime.ts`(现有 Agent)
 

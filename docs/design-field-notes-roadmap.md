@@ -1,5 +1,7 @@
 # 实战知识库 + Agent 重构 全量方案(Roadmap)
 
+> 历史设计稿：用于保留演进过程，不代表当前运行链路。当前架构以 [`architecture.md`](architecture.md) 和根目录 [`AGENTS.md`](../AGENTS.md) 为准。
+>
 > 状态:设计完成,待你确认后分阶段实现
 > 关联:`docs/design-field-notes.md`(v0 已实现)、`apps/api/src/agents/runtime.ts`(现有 Agent)
 
